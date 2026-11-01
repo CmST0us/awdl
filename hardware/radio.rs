@@ -3,30 +3,15 @@ use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use std::path::Path;
 
-#[path = "../../../hardware/be200/radio.rs"]
+#[path = "catalog.rs"]
+mod catalog;
+pub use catalog::Hardware as Backend;
+#[path = "be200/radio.rs"]
 mod be200;
-#[path = "../../../hardware/rtl8852be/radio.rs"]
+#[path = "rtl8852be/radio.rs"]
 mod rtl8852be;
 
-#[derive(Clone, Copy, Debug)]
-pub enum Backend {
-    Be200,
-    Rtl8852be,
-}
 impl Backend {
-    pub fn detect(vendor: &str, device: &str) -> Option<Self> {
-        match (vendor, device) {
-            ("0x8086", "0x272b") => Some(Self::Be200),
-            ("0x10ec", "0xb852") => Some(Self::Rtl8852be),
-            _ => None,
-        }
-    }
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Be200 => "be200",
-            Self::Rtl8852be => "rtl8852be",
-        }
-    }
     pub fn driver(self) -> &'static str {
         match self {
             Self::Be200 => "nl80211",
@@ -69,7 +54,7 @@ impl Backend {
         )
         .with_context(|| format!("解析无线策略 {}", path.display()))?;
         ensure!(
-            profile.hardware == self.name(),
+            Self::from_name(&profile.hardware) == Some(self),
             "radio_profile 与实际硬件不匹配"
         );
         // 当前两个后端使用 2.4 GHz 发现信道，数据频率单独协商。

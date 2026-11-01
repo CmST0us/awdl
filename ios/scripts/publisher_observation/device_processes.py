@@ -1,8 +1,9 @@
 """Match processes to the installed bundle paths owned by this project."""
+from app_identity import APP_BUNDLE, RUNNER_BUNDLE
 from urllib.parse import unquote, urlparse
 
-BUNDLES = {'com.eric3u.rtl8852be.AwareLabRTL',
-           'com.eric3u.rtl8852be.AwareLabRTLUITests.xctrunner'}
+BUNDLES = {APP_BUNDLE,
+           RUNNER_BUNDLE}
 
 
 def owned_processes(processes, apps):

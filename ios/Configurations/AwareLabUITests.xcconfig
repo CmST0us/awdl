@@ -1,0 +1,4 @@
+// 诊断测试的既有安装身份，重新构建后生效；保留对应 Runner 的系统授权。
+PRODUCT_BUNDLE_IDENTIFIER = com.eric3u.rtl8852be.AwareLabRTLUITests
+// 使用构建环境指定的开发团队自动签名。
+CODE_SIGN_STYLE = Automatic

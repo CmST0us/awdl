@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Physical-device tests, bounded subprocesses, USB records, and raw evidence."""
+from app_identity import APP_BUNDLE
 import argparse, datetime, json, os, pathlib, re, shutil, signal, subprocess, time, plistlib, sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from collector_health import DEFAULT_TIMEOUT_SECONDS, wait_for_collector
 from pin_safety import redact_pin, xcresult_contains
-from service_contract import SERVICE
+from service_contract import SERVICE, TARGET_NAME
 p = argparse.ArgumentParser()
 p.add_argument('--run-id', required=True)
 p.add_argument('--profile', choices=('g1','m4','m4gate','m5'), default='g1')
@@ -31,7 +32,7 @@ if a.pin is not None and a.profile != 'm5':
 if a.profile == 'm5' and a.pin and not a.only:
     a.only = 'AwareLabUITests/M5PairingTests/testStageAPairing'
 a.only = a.only or {'m4gate':'AwareLabUITests/M4DiscoveryTests/testGateObservation','m4':'AwareLabUITests/M4DiscoveryTests/testTargetDiscovery','m5':'AwareLabUITests/M5PairingTests/testAccessoryPickerObservation'}.get(a.profile, 'AwareLabUITests/DiscoveryTests/testDiscoveryProbe')
-a.target_name = a.target_name or ('ROCK5B-M5' if a.profile == 'm5' else 'ROCK5B-M4')
+a.target_name = a.target_name or TARGET_NAME
 stage_a = a.profile == 'm5' and 'testStageAPairing' in a.only
 if stage_a and a.pin is None:
     p.error('--pin is required for the M5 Stage A pairing test')
@@ -150,6 +151,9 @@ try:
     template = next(products.glob('AwareLab_*.xctestrun'))
     spec = plistlib.loads(template.read_bytes())
     injected_env = {'AWARE_BATCH_ID':a.run_id,'AWARE_REPEAT_COUNT':str(a.repeat),'AWARE_RUN_TIMEOUT':str(a.timeout)}
+    for key in ('AWARE_VENDOR_NAME', 'AWARE_MODEL_NAME', 'AWARE_DISPLAY_ITEM_NAME'):
+        if key in os.environ:
+            injected_env[key] = os.environ[key]
     if approval:
         injected_env['AWARE_LONG_WAIT_APPROVED'] = approval
     if a.profile in ('m4', 'm4gate'):
@@ -160,7 +164,7 @@ try:
         injected_env.update({'AWARE_GATE_COUNT':str(a.repeat),'AWARE_GATE_TIMEOUT':str(a.target_timeout)})
         if a.gate_ttl:
             injected_env['AWARE_GATE_TTL'] = '1'
-    for target in ['AwareLabTests', 'AwareLabUITests']:
+    for target in ['AwareLabUITests']:
         spec[target]['EnvironmentVariables'].update(injected_env)
     if a.pin is not None:
         spec['AwareLabUITests']['EnvironmentVariables']['AWARE_M5_PIN'] = a.pin
@@ -178,7 +182,7 @@ try:
         injected = None
     if rc and not stage_a:
         run(['xcrun','devicectl','device','capture','screenshot','--device',udid,'--destination',str(out/'failure.png')],'screenshot')
-    export_rc = run(['xcrun','devicectl','device','copy','from','--device',udid,'--domain-type','appDataContainer','--domain-identifier','com.eric3u.rtl8852be.AwareLabRTL','--source','Documents/Runs','--destination',str(out/'app-runs')],'export')
+    export_rc = run(['xcrun','devicectl','device','copy','from','--device',udid,'--domain-type','appDataContainer','--domain-identifier',APP_BUNDLE,'--source','Documents/Runs','--destination',str(out/'app-runs')],'export')
     run(['xcrun','xcresulttool','export','attachments','--path',str(out/'tests.xcresult'),'--output-path',str(out/'attachments')],'attachments')
     cleanup_device()
     if a.profile == 'm5':

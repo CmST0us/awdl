@@ -46,6 +46,7 @@ wifi-aware/
 │       └── fileserver.service
 ├── hardware/
 │   ├── be200/
+│   │   ├── build.rs                     # 驱动及固件构建、安装配方
 │   │   ├── radio.toml                   # 已验证的 BE200 无线运行策略
 │   │   └── driver/
 │   │       ├── source.json
@@ -53,6 +54,8 @@ wifi-aware/
 │   │       ├── be200.conf               # 通用模块参数
 │   │       └── be200-cn.conf            # 明确选择的地区 / 平台参数
 │   └── rtl8852be/
+│       ├── build.rs
+│       ├── build.toml                   # 硬件专用编译工具默认值
 │       ├── radio.toml
 │       ├── driver/                     # 来源、补丁及模块配置输入
 │       └── firmware/
@@ -282,7 +285,9 @@ io_timeout = 60
 </plist>
 ```
 
-bundle ID、显示名和签名设置放在 `ios/Configurations/*.xcconfig`，由既有安装身份的 scheme 选择。两个客户端 bundle 与诊断 App 的身份分别保留。服务名来自共用契约，不在每个 scheme 中另写。
+bundle ID、显示名和签名设置放在 `ios/Configurations/*.xcconfig`，由既有安装身份的 scheme 选择；诊断 App 和测试 Runner 也从各自的 xcconfig 取得身份。构建脚本读取 scheme 的 Archive 配置，分别生成对应安装产物。两个客户端 bundle 与诊断 App 的身份分别保留。服务名来自共用契约，不在每个 scheme 中另写。
+
+AwareLab 的默认厂商、型号和配对目标名来自 `config/wifiawared.toml` 的 `identity`，写入生成的应用及测试资源。诊断实际部署时，`AWARE_VENDOR_NAME`、`AWARE_MODEL_NAME`、`AWARE_TARGET_NAME` 可指定对应设备的展示信息，`AWARE_DISPLAY_ITEM_NAME` 可覆盖系统配对卡片显示名；省略时显示配置中的型号。诊断覆盖不修改 Linux 配对身份或持久配置。
 
 256 KiB 读写块、分片分配算法和 HTTP 缓冲布局保留在文件应用实现中。两端缓冲块无需相同，HTTP 定义的是字节流及范围。单次单连接／多连接选择仍由 App 操作决定。
 
@@ -292,7 +297,7 @@ bundle ID、显示名和签名设置放在 `ios/Configurations/*.xcconfig`，由
 
 固定源码版本、依赖锁、补丁顺序和固件补丁参数保留现有文件：`source.json`、`Cargo.lock`、`series`、Kconfig 与固件 JSON。它们属于产物定义，随代码审阅和版本化。
 
-`config/build.toml` 拥有并行度和 C / MIPS 编译器等通用默认值。`mips_compiler` 使用包含 MIPS16 后端的 Clang 21，`U2_CC` 和 `--mips-cc` 可覆盖。
+`config/build.toml` 拥有并行度和通用 C 编译器默认值。选定硬件后加载 `hardware/<name>/build.toml`；RTL 的 `mips_compiler` 使用包含 MIPS16 后端的 Clang 21，`U2_CC` 和 `--mips-cc` 可覆盖。
 
 `platforms/rock5b/build.toml` 拥有板级选择，如目标 ARM64 和 RTL 的 `CONFIG_PLATFORM_ARM_ROCKCHIP=y`。BE200 和 RTL 的驱动功能选择仍在各自硬件目录。RTL 构建配方中的硬编码 `ARCH=arm64` 和 ROCKCHIP 选项改从选定平台取得。
 
@@ -320,7 +325,7 @@ jobs = 4
 
 `kernel_release` 在构建目标与运行主机不同时显式给出；目标原生构建可以使用本机内核发行号。本机绝对路径不进入平台默认配置。
 
-构建参数按字段使用：显式命令参数 → 对应的既有环境变量 → 本机构建文件 → 平台默认值。现有 `CARGO_BUILD_TARGET`、`KERNEL_RELEASE`、`KLIB_BUILD` / `KSRC`、`CC`、`U2_CC`、`ARCH`、`CROSS_COMPILE`、`JOBS` 和 `DESTDIR` 映射到唯一内部字段。后续各构建步骤只读解析后的目标，不各自再解释一遍环境。
+构建参数按字段使用：显式命令参数 → 对应的既有环境变量 → 本机构建文件 → 平台默认值 → 硬件默认值 → 公共默认值。现有 `CARGO_BUILD_TARGET`、`KERNEL_RELEASE`、`KLIB_BUILD` / `KSRC`、`CC`、`U2_CC`、`ARCH`、`CROSS_COMPILE`、`JOBS` 和 `DESTDIR` 映射到唯一内部字段。后续各构建步骤只读解析后的目标，不各自再解释一遍环境。
 
 ### 地区与设备安装选择
 

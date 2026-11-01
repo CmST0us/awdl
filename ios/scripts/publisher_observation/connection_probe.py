@@ -3,6 +3,8 @@
 import json
 import os
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import plistlib
 import queue
 import signal
@@ -10,7 +12,7 @@ import subprocess
 import threading
 import time
 
-from control import cleanup_ipad, destination_spec
+from device_control import cleanup_ipad, destination_spec
 from device_lease import DeviceLease
 from subscription_probe import close_streams
 

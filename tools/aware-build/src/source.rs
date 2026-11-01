@@ -1,5 +1,5 @@
 use crate::{copy, run};
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::{
     fs,
@@ -71,41 +71,29 @@ pub fn files(directory: &Path) -> Result<Vec<PathBuf>> {
 }
 pub fn prepare(
     root: &Path,
-    component: &str,
+    directory: &Path,
     output: &Path,
     archive: Option<&Path>,
+    extra_patches: &[PathBuf],
 ) -> Result<PathBuf> {
-    ensure!(
-        ["hostap", "be200", "rtl8852be"].contains(&component),
-        "未知源码组件 {component}"
-    );
-    if component == "rtl8852be" {
-        let mut cmd = Command::new("python3");
-        cmd.arg(root.join("hardware/rtl8852be/driver/prepare.py"))
-            .arg("--out")
-            .arg(output);
-        if let Some(archive) = archive {
-            cmd.arg("--archive").arg(archive);
-        }
-        run(&mut cmd)?;
-        return Ok(output.to_path_buf());
-    }
-    let directory = if component == "hostap" {
-        root.join("components/hostap")
-    } else {
-        root.join("hardware/be200/driver")
-    };
     let manifest = directory.join("source.json");
     let spec: Source = serde_json::from_slice(&fs::read(&manifest)?)?;
-    let mut inputs = vec![
-        PathBuf::from("source.json"),
-        PathBuf::from("patches/series"),
-    ];
-    inputs.extend(
-        series(&directory.join("patches/series"))?
-            .into_iter()
-            .map(|name| Path::new("patches").join(name)),
-    );
+    let patch_directories: Vec<_> = std::iter::once(directory.join("patches"))
+        .chain(extra_patches.iter().cloned())
+        .collect();
+    let mut inputs = vec![manifest.clone()];
+    for patches in &patch_directories {
+        inputs.push(patches.join("series"));
+        inputs.extend(
+            series(&patches.join("series"))?
+                .into_iter()
+                .map(|name| patches.join(name)),
+        );
+    }
+    let mut inputs: Vec<_> = inputs
+        .into_iter()
+        .map(|p| p.strip_prefix(root).map(Path::to_owned))
+        .collect::<std::result::Result<_, _>>()?;
     inputs.sort();
     let build = root.join(".build");
     fs::create_dir_all(&build)?;
@@ -117,7 +105,7 @@ pub fn prepare(
     if inputs == previous
         && inputs
             .iter()
-            .all(|p| fs::read(directory.join(p)).ok() == fs::read(recorded.join(p)).ok())
+            .all(|p| fs::read(root.join(p)).ok() == fs::read(recorded.join(p)).ok())
     {
         println!("{}", output.display());
         return Ok(output.to_path_buf());
@@ -140,11 +128,13 @@ pub fn prepare(
         let patches = source.join(spec.packaging_series.context("缺少 packaging_series")?);
         apply(&source, patches.parent().context("补丁目录无效")?)?;
     }
-    apply(&source, &directory.join("patches"))?;
+    for patches in &patch_directories {
+        apply(&source, patches)?;
+    }
     copy(&manifest, &source.join("source.json"), 0o644)?;
     for input in inputs {
         copy(
-            &directory.join(&input),
+            &root.join(&input),
             &source.join(".project-inputs").join(input),
             0o644,
         )?;

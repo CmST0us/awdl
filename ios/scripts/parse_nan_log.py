@@ -19,8 +19,8 @@ from pathlib import Path
 SCHEMA = "awarelab.nan-log-summary"
 SCHEMA_VERSION = 1
 PARSER_VERSION = "1.1.0"
-from service_contract import SERVICE as DEFAULT_SERVICE
-DEFAULT_TARGET = "ROCK5B-M4"
+from service_contract import SERVICE as DEFAULT_SERVICE, TARGET_NAME
+DEFAULT_TARGET = TARGET_NAME
 WINDOW_TOLERANCE_SECONDS = 2.0
 MAX_MESSAGE_CHARS = 500
 

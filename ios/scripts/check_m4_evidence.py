@@ -17,7 +17,7 @@ SCHEMA = "awarelab.m4-validation"
 SCHEMA_VERSION = 1
 APP_ACTIONS = ["launch", "m4_target_expected", "capability_check",
                "discovery_requested", "discovery_container_closed"]
-from service_contract import SERVICE
+from service_contract import SERVICE, TARGET_NAME
 
 
 def _load_attachments(artifact_dir):
@@ -131,7 +131,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact-dir", required=True)
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--target-name", default="ROCK5B-M4")
+    parser.add_argument("--target-name", default=TARGET_NAME)
     parser.add_argument("--repeat", type=int, choices=range(1, 11), default=1)
     parser.add_argument("--service", default=SERVICE)
     args = parser.parse_args(argv)

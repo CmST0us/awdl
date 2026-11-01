@@ -1,0 +1,3 @@
+# RTL8852BE 构建默认值；本机配置、环境变量及命令行可覆盖。
+# U2 固件补丁的 C 编译器，使用 Clang 21 并包含 MIPS16 后端。
+mips_compiler = "clang"

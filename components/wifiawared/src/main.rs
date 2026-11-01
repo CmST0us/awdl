@@ -1,4 +1,5 @@
 mod api;
+#[path = "../../../hardware/radio.rs"]
 mod backend;
 mod configuration;
 mod control;

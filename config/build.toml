@@ -3,5 +3,3 @@
 c_compiler = "cc"
 # 最大并行编译任务数，正整数。
 jobs = 4
-# U2 固件补丁的 C 编译器，使用 Clang 21 并包含 MIPS16 后端。
-mips_compiler = "clang"

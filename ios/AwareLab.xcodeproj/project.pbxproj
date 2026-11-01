@@ -51,6 +51,7 @@
 		FC8C021B2FC02A732BA13302 /* TestConfiguration.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TestConfiguration.swift; sourceTree = "<group>"; };
 		FDA3943EDA811991F31753D4 /* NativeDataConnection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NativeDataConnection.swift; sourceTree = "<group>"; };
 		FEA13388EC50795AD3AF4508 /* AwareLab-Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; name = "AwareLab-Info.plist"; path = "../.build/config/ios/AwareLab-Info.plist"; sourceTree = "<group>"; };
+		F10000000000000000000005 /* AwareLabUITests.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Configurations/AwareLabUITests.xcconfig; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -104,6 +105,7 @@
 				D54105971947B03342F9E71A /* AwareLabTests */,
 				4373EB207A52B6645F65675C /* AwareLabUITests */,
 				424497BAB6BBECAA211668A7 /* AwareLab.xcconfig */,
+				F10000000000000000000005 /* AwareLabUITests.xcconfig */,
 				FEA13388EC50795AD3AF4508 /* AwareLab-Info.plist */,
 			);
 			sourceTree = "<group>";
@@ -243,6 +245,8 @@
 			);
 			inputPaths = (
 				"$(SRCROOT)/../config/fileserver-discovery.toml",
+				"$(SRCROOT)/../config/wifiawared.toml",
+				"$(SRCROOT)/Configurations/AwareClient.xcconfig",
 				"$(SRCROOT)/AwareLab/Info.plist",
 			);
 			name = "Service contract";
@@ -381,14 +385,13 @@
 		};
 		80DF7FDA424B1FDEF114B4B1 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F10000000000000000000005 /* AwareLabUITests.xcconfig */;
 			buildSettings = {
 				CLANG_ENABLE_OBJC_WEAK = NO;
-				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.eric3u.rtl8852be.AwareLabRTLUITests;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -452,14 +455,13 @@
 		};
 		C182FDB73DD71A3C1B9C1D66 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F10000000000000000000005 /* AwareLabUITests.xcconfig */;
 			buildSettings = {
 				CLANG_ENABLE_OBJC_WEAK = NO;
-				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.eric3u.rtl8852be.AwareLabRTLUITests;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";

@@ -20,7 +20,7 @@ from pin_safety import pin_hits
 
 SCHEMA = "awarelab.m5-validation"
 SCHEMA_VERSION = 1
-from service_contract import SERVICE
+from service_contract import SERVICE, TARGET_NAME
 DIRECTION = "NAN-PAIRING-DUAL"
 APP_ACTIONS = ["launch", "m5_target_expected", "capability_check"]
 ACCESSORY_STATES = {"unauthorized", "awaitingAuthorization", "authorized", "unknown"}
@@ -455,7 +455,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact-dir", required=True)
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--target-name", default="ROCK5B-M5")
+    parser.add_argument("--target-name", default=TARGET_NAME)
     parser.add_argument("--repeat", type=int, choices=range(1, 11), default=1)
     parser.add_argument("--service", default=SERVICE)
     args = parser.parse_args(argv)

@@ -15,10 +15,10 @@ struct RunConfiguration: Codable {
         let seconds = Double(env["AWARE_DISCOVERY_TIMEOUT"] ?? "5") ?? 5
         let timeoutCeiling = 30.0
         let mode = env["AWARE_MODE"] == "m4" ? "m4" : env["AWARE_MODE"] == "m5" ? "m5" : "g1"
-        let defaultTarget = mode == "m5" ? "ROCK5B-M5" : "ROCK5B-M4"
+        let defaultTarget = Bundle.main.object(forInfoDictionaryKey: "AwarePairingName") as! String
         let direction = mode == "m4" ? "NAN-DISCOVERY-DUAL" : mode == "m5" ? "NAN-PAIRING-DUAL" : "IOS-XCUITEST-G1"
         let requestedTarget = env["AWARE_TARGET_NAME"] ?? defaultTarget
-        let targetSafe = !requestedTarget.isEmpty && requestedTarget.count <= 64 && requestedTarget.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == ".") }
+        let targetSafe = !requestedTarget.isEmpty && requestedTarget.count <= 64 && !requestedTarget.contains(where: { $0.isNewline })
         return .init(runID: safe ? requested : UUID().uuidString, experimentID: env["AWARE_EXPERIMENT_ID"] ?? "manual", directionID: direction, discoveryTimeout: seconds.isFinite ? min(max(seconds, 2), timeoutCeiling) : 5, mode: mode, targetName: targetSafe ? requestedTarget : defaultTarget)
     }
 }
@@ -44,7 +44,7 @@ final class RunRecorder {
     let directory: URL
     private let queue = DispatchQueue(label: "AwareLab.records", qos: .utility)
     private var sequence = 0
-    private let logger = Logger(subsystem: "com.eric3u.rtl8852be.AwareLabRTL", category: "run")
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "run")
     private let version: String
     var appVersion: String { version }
     var automaticConnection: Bool {

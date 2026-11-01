@@ -83,8 +83,7 @@ wifi-aware/
 │   ├── common/                    # aware-common：D-Bus 类型与系统支持
 │   ├── wifiawared/
 │   │   ├── src/                   # Manager、Service、配对、会话、公共 Radio
-│   │   │   ├── radio.rs           # 公共异步无线生命周期
-│   │   │   └── backend.rs         # 内部后端选择及接入契约
+│   │   │   └── radio.rs           # 公共异步无线生命周期
 │   │   ├── Cargo.toml
 │   │   └── wifiawared.service
 │   ├── hostap/
@@ -94,20 +93,28 @@ wifi-aware/
 │   │   └── LICENSE.hostap
 │   └── fileserver/                 # Rust / Hyper 文件应用及 systemd 单元
 ├── hardware/
+│   ├── catalog.rs                 # 硬件名称及 PCI 匹配，运行与安装共用
+│   ├── radio.rs                   # 后端接入、无线策略与能力约束
+│   ├── build.rs                   # 硬件构建和安装入口
 │   ├── be200/
-│   │   ├── radio.rs               # 设备匹配、接口接管与能力约束
+│   │   ├── build.rs               # 驱动构建、固件与安装清单
+│   │   ├── radio.rs               # 接口接管与能力约束
 │   │   ├── radio.toml             # 已验证的 NAN 启动和时隙策略
 │   │   ├── driver/                # backport 来源、补丁、配置、安装规则
 │   │   ├── firmware/              # c108、PNVM、来源与授权
 │   │   └── README.md              # 能力、构建与已知限制
 │   └── rtl8852be/
+│       ├── build.rs
+│       ├── build.toml
 │       ├── radio.rs
 │       ├── radio.toml
 │       ├── hostap/                # rtl_nan、vendor netlink、NMI/NDI、调度
 │       ├── driver/                # Radxa 基线、补丁、唯一 UAPI 头文件
 │       ├── firmware/              # U2 基线、补丁、构建工具与交付镜像
+│       ├── diagnostics/           # 驱动事件与硬件回收观测
 │       └── README.md
 ├── platforms/
+│   ├── install.rs                 # 板级系统安装入口
 │   └── rock5b/                    # build.toml、usbmoded 关机配置
 ├── ios/
 │   ├── AwareClient/               # 一份通用应用源码
@@ -127,7 +134,7 @@ wifi-aware/
 
 文件服务的组件目录为 `components/fileserver`，Cargo package 和可执行文件均为 `fileserver`，systemd 单元为 `fileserver.service`。
 
-Rust `Publisher` 通过公共 `Radio` 操作无线设备；文件服务与 App 使用公开协议。`hardware/*/radio.rs` 作为 `wifiawared` 内部模块编入，通过 `backend.rs` 接入；RTL 的 C 适配编入独立 hostap 进程，通过 hostap 原生驱动接口使用内核 UAPI。两进程沿用 Unix 控制套接字通信。`common` 保持公共类型和系统支持职责。
+Rust `Publisher` 通过公共 `Radio` 操作无线设备；文件服务与 App 使用公开协议。`hardware/*/radio.rs` 作为 `wifiawared` 内部模块编入，通过 `hardware/radio.rs` 接入；RTL 的 C 适配编入独立 hostap 进程，通过 hostap 原生驱动接口使用内核 UAPI。两进程沿用 Unix 控制套接字通信。`common` 保持公共类型和系统支持职责。
 
 ## 两个明确的硬件边界
 
@@ -135,7 +142,7 @@ Rust `Publisher` 通过公共 `Radio` 操作无线设备；文件服务与 App �
 
 公共 Rust `Radio` 负责设备枚举、进程管理、控制套接字、日志、事件等待、NAN 启动流程、NDI 地址配置和资源所有权。
 
-后端使用 Rust 枚举选择，两种实现静态编入同一个 `wifiawared`。接口为仓库内部接口，与公共代码一起构建。后端提供设备匹配、启动接口准备、引导接口退出方式、运行接口判定及硬件能力约束。NAN 启动值和本地时隙策略从对应 `radio.toml` 读取。
+后端使用 `hardware/catalog.rs` 的 Rust 枚举选择，PCI 匹配由守护进程与安装器共用。两种实现静态编入同一个 `wifiawared`。接口为仓库内部接口，与公共代码一起构建。后端提供设备匹配、启动接口准备、引导接口退出方式、运行接口判定及硬件能力约束。NAN 启动值和本地时隙策略从对应 `radio.toml` 读取。
 
 | 项目 | BE200 | RTL8852BE |
 | --- | --- | --- |
@@ -206,7 +213,7 @@ D-Bus 命名空间由公共组件拥有，版本号表示协议主版本。硬�
 
 ### 一份协议栈
 
-hostap 2.12 的来源清单、配置、授权和补丁统一放入 `components/hostap`。公共序列纳入现有 `0001`–`0009`，并整合 RTL 的对端能力事件、缓存认证本地日程和 NDC 实际信道覆盖修复。RTL 驱动注册属于该协议栈的构建接入，私有实现仍在硬件目录。
+hostap 2.12 的来源清单、配置、授权和补丁统一放入 `components/hostap`。公共序列管理协议补丁，硬件目录分别管理驱动注册补丁及编译片段。构建工具按公共序列、硬件序列的顺序准备同一份源码，源码输入记录同时覆盖两类补丁。
 
 准备源码默认使用固定上游来源；支持显式提供已有归档。第三方展开源码、下载包和编译产物进入 `.build`，依赖版本保持固定。来源或补丁变化直接比较现有输入内容，决定是否重建。
 
@@ -224,7 +231,7 @@ scripts/install-fileserver.sh
 scripts/install-driver.sh be200|rtl8852be
 ```
 
-公共用户态构建不选择芯片，同一架构的产物包含两个后端。驱动构建和安装显式选择硬件，继续接受目标内核、工具链和 `DESTDIR`。
+公共用户态构建不选择芯片，同一架构的产物包含两个后端。驱动构建和安装显式选择硬件，继续接受目标内核、工具链和 `DESTDIR`。公共工具处理参数优先级、模块版本及签名检查、文件安装和系统重载；`hardware/*/build.rs` 拥有具体编译命令、模块与固件清单、地区选项及旧文件清理。板级系统安装规则位于 `platforms/install.rs`。
 
 板级构建选项由 `platforms/<name>/build.toml` 拥有，本机工具链和 headers 路径由 `config/local/build.toml` 拥有；aware-build 统一解析目标后交给硬件配方。地区相关模块参数来自 `config/local/install.toml`。本机配置长期保留，构建清理只处理可重建产物。
 
@@ -257,7 +264,7 @@ AwareClient 使用一份 Swift 源码、一套服务名发现规则和一个项�
 
 ## 新增网卡
 
-新增 `hardware/<name>`，提供设备匹配和无线启动差异、驱动来源与补丁、固件及安装配方。能够满足现有 hostap nl80211 契约的设备直接复用该后端；使用私有 UAPI 的设备实现 hostap 原生驱动接口。
+新增 `hardware/<name>`，提供无线启动差异、驱动来源与补丁、固件及安装配方，并在 `hardware/catalog.rs` 注册名称和 PCI 标识。`hardware/radio.rs` 与 `hardware/build.rs` 分别接入运行后端和构建安装配方。能够满足现有 hostap nl80211 契约的设备直接复用该后端；使用私有 UAPI 的设备实现 hostap 原生驱动接口。
 
 接入要求是可用的 NAN 发现、配对与安全 NDP、持久 NDI、站点和密钥生命周期、真实完成事件及可回收的停止流程。只支持发现的网卡可以如实记录其能力，不能作为完整数据后端交付。
 

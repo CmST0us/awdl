@@ -1,4 +1,7 @@
-use crate::{output, run};
+use crate::{
+    hardware::{self, Hardware, Install},
+    output,
+};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 use std::{
@@ -13,37 +16,16 @@ pub struct Build {
     pub platform: Option<String>,
     pub rust_target: Option<String>,
     pub kernel_arch: Option<String>,
-    pub rtl_platform: Option<String>,
     pub kernel_headers: Option<PathBuf>,
     pub kernel_release: Option<String>,
     pub c_compiler: String,
-    pub mips_compiler: String,
     pub cross_compile: Option<String>,
     pub jobs: usize,
 }
-#[derive(Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Install {
-    pub hardware: Option<String>,
-    pub platform: Option<String>,
-    pub pci: String,
-    pub rtl8852be: Rtl,
-    pub be200: Intel,
-}
-#[derive(Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Rtl {
-    pub country: Option<String>,
-}
-#[derive(Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Intel {
-    pub platform_cn: bool,
-}
-
 pub struct Settings {
     pub build: Build,
     pub install: Install,
+    pub hardware_build: hardware::BuildOptions,
     pub target: String,
     pub host: String,
     pub dest: PathBuf,
@@ -73,12 +55,11 @@ impl Settings {
         let mut explicit_pci = false;
         let mut args = args.iter();
         while let Some(arg) = args.next() {
-            if ["be200", "rtl8852be"].contains(&arg.as_str()) {
+            if Hardware::from_name(arg).is_some() {
                 install.hardware = Some(arg.clone());
                 continue;
             }
-            if arg == "--cn" {
-                install.be200.platform_cn = true;
+            if install.flag(arg) {
                 continue;
             }
             let (key, inline) = arg
@@ -91,13 +72,15 @@ impl Settings {
             let value = inline
                 .or_else(|| args.next().cloned())
                 .with_context(|| format!("{key} 缺少参数"))?;
+            if install.option(key, &value) {
+                continue;
+            }
             let field = match key {
                 "--platform" => "platform",
                 "--target" => "rust_target",
                 "--kernel-release" => "kernel_release",
                 "--headers" => "kernel_headers",
                 "--cc" => "c_compiler",
-                "--mips-cc" => "mips_compiler",
                 "--cross-compile" => "cross_compile",
                 "--kernel-arch" => "kernel_arch",
                 "--jobs" => "jobs",
@@ -110,10 +93,6 @@ impl Settings {
                     explicit_pci = true;
                     continue;
                 }
-                "--country" => {
-                    install.rtl8852be.country = Some(value);
-                    continue;
-                }
                 "--destdir" => {
                     dest = PathBuf::from(value);
                     continue;
@@ -122,7 +101,7 @@ impl Settings {
                     archive = Some(PathBuf::from(value).canonicalize()?);
                     continue;
                 }
-                _ => bail!("未知参数 {key}"),
+                _ => hardware::build_field(key).with_context(|| format!("未知参数 {key}"))?,
             };
             cli.insert(
                 field.into(),
@@ -139,11 +118,13 @@ impl Settings {
             ("KSRC", "kernel_headers"),
             ("KLIB_BUILD", "kernel_headers"),
             ("CC", "c_compiler"),
-            ("U2_CC", "mips_compiler"),
             ("CROSS_COMPILE", "cross_compile"),
             ("ARCH", "kernel_arch"),
             ("JOBS", "jobs"),
-        ] {
+        ]
+        .into_iter()
+        .chain(hardware::BUILD_ENV.iter().copied())
+        {
             if let Ok(value) = env::var(var) {
                 local.insert(
                     field.into(),
@@ -157,6 +138,16 @@ impl Settings {
         }
         local.extend(cli);
         let mut defaults = table(&root.join("config/build.toml"))?;
+        if let Some(name) = &install.hardware {
+            if let Some(hardware) = Hardware::from_name(name) {
+                defaults.extend(table(
+                    &root
+                        .join("hardware")
+                        .join(hardware.name())
+                        .join("build.toml"),
+                )?);
+            }
+        }
         if let Some(platform) = local
             .get("platform")
             .and_then(|v| v.as_str())
@@ -167,6 +158,7 @@ impl Settings {
             defaults.extend(table(&path)?);
         }
         defaults.extend(local);
+        let hardware_build = hardware::BuildOptions::take(&mut defaults)?;
         let build: Build = toml::Value::Table(defaults).try_into()?;
         ensure!(build.jobs > 0, "jobs 必须为正整数");
         if let Some(path) = &build.kernel_headers {
@@ -185,6 +177,7 @@ impl Settings {
         Ok(Self {
             build,
             install,
+            hardware_build,
             target,
             host,
             dest,
@@ -193,16 +186,13 @@ impl Settings {
             explicit_pci,
         })
     }
-    pub fn hardware(&self) -> Result<&str> {
-        let hardware =
-            self.install.hardware.as_deref().context(
-                "请指定 be200 或 rtl8852be，或设置 config/local/install.toml 的 hardware",
-            )?;
-        ensure!(
-            ["be200", "rtl8852be"].contains(&hardware),
-            "未知硬件 {hardware}"
-        );
-        Ok(hardware)
+    pub fn hardware(&self) -> Result<Hardware> {
+        let name = self
+            .install
+            .hardware
+            .as_deref()
+            .context("请指定硬件或设置 config/local/install.toml 的 hardware")?;
+        Hardware::from_name(name).with_context(|| format!("未知硬件 {name}"))
     }
     pub fn linux(&self) -> Result<()> {
         ensure!(
@@ -228,7 +218,7 @@ impl Settings {
         Ok(self
             .user_dir(root)
             .join("drivers")
-            .join(self.hardware()?)
+            .join(self.hardware()?.name())
             .join(self.kernel()?))
     }
     pub fn c_make(&self, directory: &Path) -> Command {
@@ -246,12 +236,8 @@ impl Settings {
         self.linux()?;
         let hardware = self.hardware()?;
         let destination = self.driver_dir(root)?;
-        let source = crate::source::prepare(
-            root,
-            hardware,
-            &destination.join("source"),
-            self.archive.as_deref(),
-        )?;
+        let source =
+            hardware.prepare(root, &destination.join("source"), self.archive.as_deref())?;
         let kernel = self.kernel()?;
         let headers = self
             .build
@@ -282,52 +268,6 @@ impl Settings {
         if let Some(prefix) = &self.build.cross_compile {
             command.arg(format!("CROSS_COMPILE={prefix}"));
         }
-        if hardware == "be200" {
-            crate::copy(
-                &root.join("hardware/be200/driver/be200.defconfig"),
-                &source.join("defconfig"),
-                0o644,
-            )?;
-            command
-                .arg(format!("KLIB=/lib/modules/{kernel}"))
-                .arg(format!("KLIB_BUILD={}", headers.display()));
-            let mut configure = Command::new("make");
-            configure.args(command.get_args()).arg("usedefconfig");
-            run(&mut configure)?;
-            run(command.arg("modules"))?;
-        } else {
-            let firmware = destination.join("firmware");
-            if firmware.exists() {
-                fs::remove_dir_all(&firmware)?;
-            }
-            run(Command::new("python3")
-                .current_dir(root)
-                .env("U2_CC", &self.build.mips_compiler)
-                .arg(root.join("hardware/rtl8852be/firmware/tools/build_nan.py"))
-                .arg("--output")
-                .arg(&firmware)
-                .arg("--array")
-                .arg(source.join("phl/hal_g6/mac/fw_ax/rtl8852b/hal8852b_fw.c")))?;
-            command.arg(format!("KSRC={}", headers.display()));
-            let platform = self
-                .build
-                .rtl_platform
-                .as_deref()
-                .context("RTL 驱动需要平台配置，例如 --platform rock5b")?;
-            command.arg(format!("{platform}=y")).args([
-                "CONFIG_WIFI_MONITOR=n",
-                "CONFIG_RTW_IPCAM_APPLICATION=n",
-                "CONFIG_RTL8852B=y",
-                "CONFIG_RTL8852BP=n",
-                "modules",
-            ]);
-            run(&mut command)?;
-            run(Command::new("python3")
-                .arg(root.join("hardware/rtl8852be/firmware/tools/u2fw.py"))
-                .arg("verify")
-                .arg(source.join("8852be.ko"))
-                .arg(firmware.join("candidate.bin")))?;
-        }
-        Ok(())
+        hardware.build(root, self, &source, &headers, &kernel, &mut command)
     }
 }

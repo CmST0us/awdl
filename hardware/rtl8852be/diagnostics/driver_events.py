@@ -27,7 +27,7 @@ class DriverTrace:
         cookie=start.get('cookie')
         submit=self.submits.get(cookie,{})
         done=self.completions.get(cookie,{})
-        return submit.get('result')==0 and submit.get('len')==195 and submit.get('channel')==6 and done.get('len')==195 and done.get('txsts')==0
+        return submit.get('result')==0 and submit.get('len',0)>0 and submit.get('channel')==start['channel'] and done.get('len')==submit['len'] and done.get('txsts')==0
 
     @property
     def clean(self):

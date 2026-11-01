@@ -5,6 +5,8 @@ import json
 import os
 import plistlib
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import queue
 import re
 import signal
@@ -12,7 +14,7 @@ import subprocess
 import threading
 import time
 
-from control import cleanup_ipad, close_collector, destination_spec
+from device_control import cleanup_ipad, close_collector, destination_spec
 from gate import BUNDLE, SERVICE, epoch
 
 DAEMON='/usr/libexec/deviceaccessd'

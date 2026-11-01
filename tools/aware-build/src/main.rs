@@ -1,6 +1,10 @@
+#[path = "../../../hardware/build.rs"]
+mod hardware;
 mod install;
 mod ios;
 mod licenses;
+#[path = "../../../platforms/install.rs"]
+mod platform;
 mod settings;
 mod source;
 
@@ -84,8 +88,13 @@ fn save_tool(root: &Path, host: &str) -> Result<()> {
 }
 fn execute(root: &Path, action: &str, args: &[String]) -> Result<()> {
     if ["--help", "-h", "help"].contains(&action) {
+        let hardware = hardware::Hardware::ALL
+            .iter()
+            .map(|hardware| hardware.name())
+            .collect::<Vec<_>>()
+            .join("|");
         println!(
-            "用法: scripts/aware-build <命令> [参数]\nprepare-source hostap|be200|rtl8852be\nbuild-hostap | build-publisher | build-fileserver | build-ios\nbuild-driver be200|rtl8852be\ninstall-driver be200|rtl8852be | install-publisher | install-fileserver | install-platform\ngenerate-ios-config\n构建: --platform --target --kernel-release --headers --cc --mips-cc --cross-compile --kernel-arch --jobs --archive\n安装: --hardware --pci --country --cn --destdir\n配置: config/local/build.toml、config/local/install.toml"
+            "用法: scripts/aware-build <命令> [参数]\nprepare-source hostap|{hardware}\nbuild-hostap | build-publisher | build-fileserver | build-ios\nbuild-driver {hardware}\ninstall-driver {hardware} | install-publisher | install-fileserver | install-platform\ngenerate-ios-config\n构建: --platform --target --kernel-release --headers --cc --mips-cc --cross-compile --kernel-arch --jobs --archive\n安装: --hardware --pci --country --cn --destdir\n配置: config/local/build.toml、config/local/install.toml"
         );
         return Ok(());
     }
@@ -103,18 +112,17 @@ fn execute(root: &Path, action: &str, args: &[String]) -> Result<()> {
             } else {
                 cfg.driver_dir(root)?.join("source")
             };
-            source::prepare(root, component, &directory, cfg.archive.as_deref())?;
+            hardware::prepare(root, component, &directory, cfg.archive.as_deref())?;
         }
         "build-driver" => cfg.build_driver(root)?,
         "build-hostap" => {
             cfg.linux()?;
-            let source = source::prepare(
+            let source = hardware::prepare(
                 root,
                 "hostap",
                 &cfg.user_dir(root).join("hostap"),
                 cfg.archive.as_deref(),
             )?;
-            let adapter = cfg.user_dir(root).join("rtl-hostap");
             let build = source.join("wpa_supplicant");
             let toolchain_path = cfg.user_dir(root).join("hostap-toolchain.txt");
             let toolchain = format!(
@@ -124,24 +132,20 @@ fn execute(root: &Path, action: &str, args: &[String]) -> Result<()> {
             );
             if fs::read_to_string(&toolchain_path).ok().as_deref() != Some(&toolchain) {
                 run(cfg.c_make(&build).arg("clean"))?;
-                if adapter.exists() {
-                    fs::remove_dir_all(&adapter)?;
-                }
+                hardware::clean_hostap(root, &cfg)?;
             }
-            run(cfg
-                .c_make(&root.join("hardware/rtl8852be/hostap/hostap"))
-                .arg(format!("UP={}", source.display()))
-                .arg(format!("BUILD={}", adapter.display())))?;
-            let config = root.join("components/hostap/hostap.config");
-            if fs::read(&config)? != fs::read(build.join(".config")).unwrap_or_default() {
-                copy(&config, &build.join(".config"), 0o644)?;
+            let driver_args = hardware::build_hostap(root, &cfg, &source)?;
+            let config = format!(
+                "{}\n{}",
+                fs::read_to_string(root.join("components/hostap/hostap.config"))?,
+                hardware::hostap_config(root)?
+            );
+            if fs::read_to_string(build.join(".config")).ok().as_deref() != Some(&config) {
+                fs::write(build.join(".config"), config)?;
             }
             run(cfg
                 .c_make(&build)
-                .arg(format!(
-                    "RTL_NAN_LIB={}",
-                    adapter.join("libwa-rtl-nan.a").display()
-                ))
+                .args(driver_args)
                 .args(["wpa_supplicant", "wpa_cli"]))?;
             fs::write(toolchain_path, toolchain)?;
         }
@@ -150,15 +154,31 @@ fn execute(root: &Path, action: &str, args: &[String]) -> Result<()> {
         "generate-ios-config" | "build-ios" => {
             ios::generate(root)?;
             if action == "build-ios" {
+                let scheme = cfg
+                    .rest
+                    .first()
+                    .map(String::as_str)
+                    .unwrap_or("AwareClient");
+                let project = root.join("ios/AwareClient.xcodeproj");
+                let configuration = output(
+                    Command::new("xmllint")
+                        .args([
+                            "--xpath",
+                            "string(/Scheme/ArchiveAction/@buildConfiguration)",
+                        ])
+                        .arg(
+                            project
+                                .join("xcshareddata/xcschemes")
+                                .join(format!("{scheme}.xcscheme")),
+                        ),
+                )?;
+                ensure!(!configuration.is_empty(), "scheme 缺少 Archive 构建配置");
                 run(Command::new("xcodebuild")
                     .arg("-project")
-                    .arg(root.join("ios/AwareClient.xcodeproj"))
+                    .arg(&project)
                     .args([
                         "-scheme",
-                        cfg.rest
-                            .first()
-                            .map(String::as_str)
-                            .unwrap_or("AwareClient"),
+                        scheme,
                         "-destination",
                         "generic/platform=iOS",
                         "-derivedDataPath",
@@ -166,7 +186,7 @@ fn execute(root: &Path, action: &str, args: &[String]) -> Result<()> {
                     .arg(root.join(".build/ios"))
                     .args([
                         "-configuration",
-                        "Release",
+                        &configuration,
                         "CODE_SIGNING_ALLOWED=NO",
                         "build",
                     ]))?;
@@ -175,7 +195,7 @@ fn execute(root: &Path, action: &str, args: &[String]) -> Result<()> {
         "install-driver" => install::driver(root, &cfg)?,
         "install-publisher" => install::service(root, &cfg, true)?,
         "install-fileserver" => install::service(root, &cfg, false)?,
-        "install-platform" => install::platform(root, &cfg)?,
+        "install-platform" => platform::install(root, &cfg)?,
         _ => bail!("未知命令 {action}"),
     }
     if action.starts_with("build-") {

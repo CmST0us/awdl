@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Install this project's App and Runner while holding the shared device lease."""
+from app_identity import APP_BUNDLE
 import argparse
 import datetime
 import json
@@ -30,7 +31,7 @@ with DeviceLease(udid, run_id):
     if args.launch:
         with (out / 'launch.log').open('w') as log:
             subprocess.run(['xcrun', 'devicectl', 'device', 'process', 'launch', '--device', udid,
-                            'com.eric3u.rtl8852be.AwareLabRTL', '--timeout', '5',
+                            APP_BUNDLE, '--timeout', '5',
                             '--json-output', str(out / 'launch.json')],
                            stdout=log, stderr=subprocess.STDOUT, timeout=5, check=True)
 print(out)

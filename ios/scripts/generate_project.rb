@@ -8,10 +8,15 @@ ui = project.new_target(:ui_test_bundle, 'AwareLabUITests', :ios, '26.0')
   group = project.main_group.new_group(target.name, target.name)
   Dir[File.join(root, target.name, '*.swift')].sort.each { |p| target.add_file_references([group.new_file(File.basename(p))]) }
   target.build_configurations.each do |c|
-    c.build_settings.merge!({'SWIFT_VERSION'=>'5.0', 'TARGETED_DEVICE_FAMILY'=>'1,2', 'CODE_SIGN_STYLE'=>'Automatic', 'PRODUCT_BUNDLE_IDENTIFIER'=>"com.eric3u.rtl8852be.#{target.name.sub("AwareLab", "AwareLabRTL")}", 'GENERATE_INFOPLIST_FILE'=>'YES', 'MARKETING_VERSION'=>'0.1.0', 'CURRENT_PROJECT_VERSION'=>'1', 'IPHONEOS_DEPLOYMENT_TARGET'=>'26.0'})
+    c.build_settings.merge!({'SWIFT_VERSION'=>'5.0', 'TARGETED_DEVICE_FAMILY'=>'1,2', 'CODE_SIGN_STYLE'=>'Automatic', 'GENERATE_INFOPLIST_FILE'=>'YES', 'MARKETING_VERSION'=>'0.1.0', 'CURRENT_PROJECT_VERSION'=>'1', 'IPHONEOS_DEPLOYMENT_TARGET'=>'26.0'})
   end
 end
 identity = project.main_group.new_file('Configurations/AwareLab.xcconfig')
+test_identity = project.main_group.new_file('Configurations/AwareLabUITests.xcconfig')
+ui.build_configurations.each do |c|
+  c.base_configuration_reference = test_identity
+  c.build_settings.delete('CODE_SIGN_STYLE')
+end
 app.build_configurations.each do |c|
   c.base_configuration_reference = identity
   c.build_settings.delete('PRODUCT_BUNDLE_IDENTIFIER')
@@ -23,7 +28,7 @@ ui.resources_build_phase.add_file_reference(project.main_group.new_file('../.bui
 ui.build_configurations.each { |c| c.build_settings['TEST_TARGET_NAME']='AwareLab' }
 phase = app.new_shell_script_build_phase('Service contract')
 phase.shell_script = 'PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export PATH; "$SRCROOT/../scripts/aware-build" generate-ios-config'
-phase.input_paths = ['$(SRCROOT)/../config/fileserver-discovery.toml', '$(SRCROOT)/AwareLab/Info.plist']
+phase.input_paths = ['$(SRCROOT)/../config/fileserver-discovery.toml', '$(SRCROOT)/../config/wifiawared.toml', '$(SRCROOT)/Configurations/AwareClient.xcconfig', '$(SRCROOT)/AwareLab/Info.plist']
 phase.output_paths = ['$(SRCROOT)/../.build/config/ios/AwareLab-Info.plist']
 app.build_phases.delete(phase)
 app.build_phases.unshift(phase)

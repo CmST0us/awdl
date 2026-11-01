@@ -1,4 +1,10 @@
-use crate::{copy, output, run, settings::Settings, source::files};
+use crate::{
+    copy,
+    hardware::{self, Hardware},
+    output, run,
+    settings::Settings,
+    source::files,
+};
 use anyhow::{Context, Result, bail, ensure};
 use std::{env, fs, path::Path, process::Command};
 use toml_edit::{DocumentMut, Item, value};
@@ -50,10 +56,7 @@ fn selected_pci(cfg: &Settings, config: &DocumentMut, live: bool) -> Result<Stri
         let entry = entry?;
         let vendor = fs::read_to_string(entry.path().join("vendor"))?;
         let device = fs::read_to_string(entry.path().join("device"))?;
-        if matches!(
-            (vendor.trim(), device.trim()),
-            ("0x8086", "0x272b") | ("0x10ec", "0xb852")
-        ) {
+        if Hardware::detect(vendor.trim(), device.trim()).is_some() {
             devices.push(entry.file_name().to_string_lossy().into_owned());
         }
     }
@@ -152,11 +155,13 @@ pub fn service(root: &Path, cfg: &Settings, publisher: bool) -> Result<()> {
             dest.join("usr/local/share/licenses/wifiawared/hostap.txt"),
             0o644,
         ));
-        for hardware in ["be200", "rtl8852be"] {
+        for hardware in Hardware::ALL {
             planned.push((
-                root.join("hardware").join(hardware).join("radio.toml"),
+                root.join("hardware")
+                    .join(hardware.name())
+                    .join("radio.toml"),
                 dest.join("usr/local/share/wifi-aware/hardware")
-                    .join(hardware)
+                    .join(hardware.name())
                     .join("radio.toml"),
                 0o644,
             ));
@@ -234,11 +239,7 @@ pub fn service(root: &Path, cfg: &Settings, publisher: bool) -> Result<()> {
         copy(&source, &target, mode)?;
     }
     if publisher {
-        for obsolete in [
-            "etc/dbus-1/system.d/org.be200.WiFiAware1.conf",
-            "etc/systemd/system/wifiawared.service.d/rtl.conf",
-            "etc/NetworkManager/conf.d/91-wifiawared-rtl.conf",
-        ] {
+        for obsolete in hardware::OBSOLETE_USERSPACE_FILES {
             remove(&dest.join(obsolete))?;
         }
     } else {
@@ -317,19 +318,7 @@ pub fn driver(root: &Path, cfg: &Settings) -> Result<()> {
     }
     require_program("modinfo")?;
     let artifacts = files(&cfg.driver_dir(root)?.join("source"))?;
-    let names: &[&str] = if hardware == "be200" {
-        &[
-            "cfg80211",
-            "mac80211",
-            "iwlwifi",
-            "iwldvm",
-            "iwlmvm",
-            "iwlmld",
-            "iwlwifi-compat",
-        ]
-    } else {
-        &["8852be"]
-    };
+    let names = hardware.modules();
     let mut modules = vec![];
     for name in names {
         let file = artifacts
@@ -352,116 +341,22 @@ pub fn driver(root: &Path, cfg: &Settings) -> Result<()> {
         }
         modules.push(file);
     }
-    let directory = root.join("hardware").join(hardware);
-    let mut firmware = vec![];
-    if hardware == "be200" {
-        firmware = files(&directory.join("firmware"))?
-            .into_iter()
-            .filter(|p| p.extension().is_some_and(|e| e == "ucode" || e == "pnvm"))
-            .collect();
-        ensure!(firmware.len() == 2, "BE200 需要 c108 与 PNVM");
-    } else {
-        let country = cfg
-            .install
-            .rtl8852be
-            .country
-            .as_deref()
-            .context("RTL 安装需要明确 country 或 --country")?;
-        ensure!(
-            country.len() == 2 && country.bytes().all(|b| b.is_ascii_uppercase()),
-            "country 必须为两个大写字母"
-        );
-        let text = fs::read_to_string(directory.join("driver/rtl8852be.conf"))?
-            .replace("@COUNTRY@", country);
-        write(
-            &root
-                .join(".build/config")
-                .join(&cfg.target)
-                .join("rtl8852be.conf"),
-            &text,
-        )?;
-        run(Command::new("python3")
-            .arg(directory.join("firmware/tools/u2fw.py"))
-            .arg("verify")
-            .arg(modules[0])
-            .arg(cfg.driver_dir(root)?.join("firmware/candidate.bin")))?;
-    }
+    let planned = hardware.installation(root, cfg, &modules)?;
     let updates = dest.join("lib/modules").join(&kernel).join("updates");
     for file in modules {
         copy(file, &updates.join(file.file_name().unwrap()), 0o644)?;
     }
-    if hardware == "be200" {
-        remove(&updates.join("compat.ko"))?;
-        for file in firmware {
-            copy(
-                &file,
-                &dest.join("lib/firmware").join(file.file_name().unwrap()),
-                0o644,
-            )?;
-        }
-        copy(
-            &directory.join("driver/be200.conf"),
-            &dest.join("etc/modprobe.d/be200.conf"),
-            0o644,
-        )?;
-        if cfg.install.be200.platform_cn {
-            copy(
-                &directory.join("driver/be200-cn.conf"),
-                &dest.join("etc/modprobe.d/be200-cn.conf"),
-                0o644,
-            )?;
-        } else {
-            remove(&dest.join("etc/modprobe.d/be200-cn.conf"))?;
-        }
-        copy(
-            &directory.join("firmware/LICENCE.iwlwifi_firmware"),
-            &dest.join("usr/local/share/licenses/wifi-aware/be200/LICENCE.iwlwifi_firmware"),
-            0o644,
-        )?;
-        copy(
-            &directory.join("driver/COPYING"),
-            &dest.join("usr/local/share/licenses/wifi-aware/be200/COPYING"),
-            0o644,
-        )?;
-    } else {
-        copy(
-            &root
-                .join(".build/config")
-                .join(&cfg.target)
-                .join("rtl8852be.conf"),
-            &dest.join("etc/modprobe.d/rtl8852be.conf"),
-            0o644,
-        )?;
-        copy(
-            &directory.join("driver/UPSTREAM-LICENSE"),
-            &dest.join("usr/local/share/licenses/wifi-aware/rtl8852be/UPSTREAM-LICENSE"),
-            0o644,
-        )?;
+    for (source, target) in planned {
+        copy(&source, &target, 0o644)?;
+    }
+    for obsolete in hardware.obsolete(cfg, &updates) {
+        remove(&obsolete)?;
     }
     if live {
         run(Command::new("depmod").args(["-a", &kernel]))?;
         if initramfs {
             run(Command::new("update-initramfs").args(["-u", "-k", &kernel]))?;
         }
-    }
-    Ok(())
-}
-pub fn platform(root: &Path, cfg: &Settings) -> Result<()> {
-    let name = cfg
-        .build
-        .platform
-        .as_deref()
-        .or(cfg.install.platform.as_deref())
-        .context("请明确 --platform")?;
-    ensure!(name == "rock5b", "未知平台 {name}");
-    copy(
-        &root.join("platforms/rock5b/usbmoded-shutdown.conf"),
-        &cfg.dest
-            .join("etc/systemd/system/usbmoded.service.d/shutdown.conf"),
-        0o644,
-    )?;
-    if cfg.dest == Path::new("/") {
-        run(Command::new("systemctl").arg("daemon-reload"))?;
     }
     Ok(())
 }

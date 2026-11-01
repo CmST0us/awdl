@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Read one cached pairing snapshot using installed artifacts in a bounded window."""
+from app_identity import APP_BUNDLE, RUNNER_BUNDLE
 import argparse
 import json
 import os
@@ -14,8 +15,8 @@ def destination_spec(template, destination, run_id):
     doc=plistlib.loads(Path(template).read_bytes())
     target=doc['AwareLabUITests']
     for key in ('TestBundlePath','TestHostPath','UITargetAppPath'):target.pop(key,None)
-    target.update(UseDestinationArtifacts=True,TestHostBundleIdentifier='com.eric3u.rtl8852be.AwareLabRTLUITests.xctrunner',
-                  TestBundleDestinationRelativePath='__TESTHOST__/PlugIns/AwareLabUITests.xctest',UITargetAppBundleIdentifier='com.eric3u.rtl8852be.AwareLabRTL')
+    target.update(UseDestinationArtifacts=True,TestHostBundleIdentifier=RUNNER_BUNDLE,
+                  TestBundleDestinationRelativePath='__TESTHOST__/PlugIns/AwareLabUITests.xctest',UITargetAppBundleIdentifier=APP_BUNDLE)
     target.setdefault('EnvironmentVariables',{}).update(AWARE_BATCH_ID=run_id)
     doc={k:v for k,v in doc.items() if k in ('AwareLabUITests','__xctestrun_metadata__')}
     Path(destination).write_bytes(plistlib.dumps(doc))
@@ -37,7 +38,7 @@ def cleanup_ipad(udid, out, deadline, record):
         return owned_processes(rows, apps)
     try:
         app_path=out/'cleanup-apps.json'
-        run('cleanup-apps',['info','apps','--search','AwareLabRTL','--json-output',str(app_path)])
+        run('cleanup-apps',['info','apps','--search',APP_BUNDLE,'--json-output',str(app_path)])
         apps=json.loads(app_path.read_text())['result']['apps']
         active=processes('cleanup-list')
         if not active:return True
@@ -159,7 +160,7 @@ def run(args):
         for handle in handles:handle.close()
         device_elapsed=time.monotonic()-start
         capture=capture_result(out,collector.poll() if collector else None,capture_alive,collector_forced)
-        summary=dict(run_id=run_id,elapsed_seconds=device_elapsed,active_seconds=args.active_seconds,total_budget_seconds=args.active_seconds+3,development_connection=connected,collector=capture,commands=commands,device_and_install_match=identity,snapshot_rc=test_rc,error=error,ipad_clean=clean,device_released=clean,rock_operations=0,picker_requests=0,wireless_attempts=0)
+        summary=dict(run_id=run_id,elapsed_seconds=device_elapsed,active_seconds=args.active_seconds,total_budget_seconds=args.active_seconds+3,development_connection=connected,collector=capture,commands=commands,device_and_install_match=identity,snapshot_rc=test_rc,error=error,ipad_clean=clean,device_released=clean,board_operations=0,picker_requests=0,wireless_attempts=0)
         (out/'summary.json').write_text(json.dumps(summary,indent=2)+'\n')
     print(json.dumps(summary))
     return 0 if test_rc==0 and clean and connected and capture['usable'] else 1

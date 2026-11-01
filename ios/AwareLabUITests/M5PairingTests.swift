@@ -13,9 +13,9 @@ final class M5PairingTests: XCTestCase {
     }
 
     private let service = TestConfiguration.service
-    private let displayItemName = "ROCK 5B"
-    private let vendorName = "Radxa"
-    private let modelName = "ROCK 5B"
+    private let displayItemName = TestConfiguration.displayItemName
+    private let vendorName = TestConfiguration.vendorName
+    private let modelName = TestConfiguration.modelName
 
     @MainActor func testAccessoryPickerObservation() throws {
         continueAfterFailure = false
@@ -23,7 +23,7 @@ final class M5PairingTests: XCTestCase {
         let batchID = try XCTUnwrap(env["AWARE_BATCH_ID"])
         let count = Int(env["AWARE_REPEAT_COUNT"] ?? "1") ?? 1
         XCTAssertTrue((1...10).contains(count))
-        let target = env["AWARE_TARGET_NAME"] ?? "ROCK5B-M5"
+        let target = env["AWARE_TARGET_NAME"] ?? TestConfiguration.targetName
         let timeout = min(max(Double(env["AWARE_TARGET_TIMEOUT"] ?? "5") ?? 5, 5), 5)
         let candidates = targetCandidates(target)
 
@@ -145,7 +145,7 @@ final class M5PairingTests: XCTestCase {
         let batchID = try XCTUnwrap(env["AWARE_BATCH_ID"])
         let count = Int(env["AWARE_REPEAT_COUNT"] ?? "1") ?? 1
         XCTAssertTrue((1...10).contains(count))
-        let target = env["AWARE_TARGET_NAME"] ?? "ROCK5B-M5"
+        let target = env["AWARE_TARGET_NAME"] ?? TestConfiguration.targetName
         let timeout = min(max(Double(env["AWARE_TARGET_TIMEOUT"] ?? "5") ?? 5, 5), 5)
 
         for index in 1...count {
@@ -238,7 +238,7 @@ final class M5PairingTests: XCTestCase {
         let batchID = try XCTUnwrap(env["AWARE_BATCH_ID"])
         let count = Int(env["AWARE_REPEAT_COUNT"] ?? "1") ?? 1
         XCTAssertTrue((1...10).contains(count))
-        let target = env["AWARE_TARGET_NAME"] ?? "ROCK5B-M5"
+        let target = env["AWARE_TARGET_NAME"] ?? TestConfiguration.targetName
         let targetTimeout = min(max(Double(env["AWARE_TARGET_TIMEOUT"] ?? "5") ?? 5, 5), 5)
         let pinTimeout: TimeInterval = 5
         let authorizeTimeout: TimeInterval = 5
@@ -596,7 +596,7 @@ final class M5PairingTests: XCTestCase {
 
     @MainActor func testCommonClient() throws {
         continueAfterFailure = false
-        let client = XCUIApplication(bundleIdentifier: ProcessInfo.processInfo.environment["AWARE_CLIENT_BUNDLE_ID"] ?? "com.eric3u.rtl8852be.AwareClient")
+        let client = XCUIApplication(bundleIdentifier: ProcessInfo.processInfo.environment["AWARE_CLIENT_BUNDLE_ID"] ?? TestConfiguration.clientBundle)
         client.launch()
         defer {
             let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
@@ -691,7 +691,7 @@ final class M5PairingTests: XCTestCase {
                     ["我的 iPad", "我的iPad", "On My iPad"])).firstMatch
                 XCTAssertTrue(local.waitForExistence(timeout: 5))
                 local.tap()
-                let folder = client.cells.matching(NSPredicate(format: "label CONTAINS %@", ProcessInfo.processInfo.environment["AWARE_CLIENT_FOLDER"] ?? "Aware Client RTL")).firstMatch
+                let folder = client.cells.matching(NSPredicate(format: "label CONTAINS %@", ProcessInfo.processInfo.environment["AWARE_CLIENT_FOLDER"] ?? TestConfiguration.clientDisplayName)).firstMatch
                 XCTAssertTrue(folder.waitForExistence(timeout: 5))
                 folder.tap()
                 let source = client.cells.matching(NSPredicate(format: "label CONTAINS %@", "upload-probe")).firstMatch
@@ -712,7 +712,7 @@ final class M5PairingTests: XCTestCase {
         let pin = try XCTUnwrap(env["AWARE_M5_PIN"])
         XCTAssertNotNil(pin.range(of: #"^[0-9]{6}$"#, options: .regularExpression))
         let runID = batchID + "-pairing"
-        let app = application(runID: runID, batchID: batchID, target: "ROCK5B-M5")
+        let app = application(runID: runID, batchID: batchID, target: TestConfiguration.targetName)
         func marker(_ event: String, _ fields: [String: Any] = [:]) {
             var row: [String: Any] = ["run_id": runID, "experiment_id": batchID,
                 "source": "xctest.physical", "event": event, "service": service,
@@ -784,9 +784,9 @@ final class M5PairingTests: XCTestCase {
         marker("observer_search_triggered", ["search_started_epoch": searchStart])
         let system = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let target = system.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS[c] %@", "ROCK5B-M5")).firstMatch
+            NSPredicate(format: "label CONTAINS[c] %@", TestConfiguration.targetName)).firstMatch
         guard target.waitForExistence(timeout: 5) else { failed("target_not_found"); return }
-        marker("pairing_target_found", ["query": "springboard:staticText:ROCK5B-M5"])
+        marker("pairing_target_found", ["query": "springboard:staticText:\(TestConfiguration.targetName)"])
         let setup = system.otherElements["PRXCardBottomTray"].buttons.matching(
             NSPredicate(format: "label IN %@", ["设置", "設定", "Set Up"])).firstMatch
         guard setup.exists && setup.isHittable else {
@@ -830,7 +830,7 @@ final class M5PairingTests: XCTestCase {
         let env = ProcessInfo.processInfo.environment
         let batchID = try XCTUnwrap(env["AWARE_BATCH_ID"])
         let runID = batchID + "-discovery"
-        let target = "ROCK5B-M5"
+        let target = TestConfiguration.targetName
         let app = application(runID: runID, batchID: batchID, target: target)
         app.launch()
         defer { app.terminate() }
@@ -923,7 +923,7 @@ final class M5PairingTests: XCTestCase {
         let batchID = try XCTUnwrap(ProcessInfo.processInfo.environment["AWARE_BATCH_ID"])
         let deviceID = try XCTUnwrap(ProcessInfo.processInfo.environment["AWARE_PAIRED_DEVICE_ID"])
         let app = application(runID: batchID, batchID: batchID,
-                              target: "ROCK5B-M5")
+                              target: TestConfiguration.targetName)
         app.launchEnvironment["AWARE_PAIRED_DEVICE_ID"] = deviceID
         let benchmark = ProcessInfo.processInfo.environment["AWARE_BENCH_SECONDS"].flatMap(Double.init)
         if benchmark != nil {
@@ -981,7 +981,7 @@ final class M5PairingTests: XCTestCase {
         continueAfterFailure = false
         let batchID = try XCTUnwrap(ProcessInfo.processInfo.environment["AWARE_BATCH_ID"])
         let app = application(runID: batchID + "-01", batchID: batchID,
-                              target: ProcessInfo.processInfo.environment["AWARE_TARGET_NAME"] ?? "ROCK5B-M5")
+                              target: ProcessInfo.processInfo.environment["AWARE_TARGET_NAME"] ?? TestConfiguration.targetName)
         app.launch()
         defer { app.terminate() }
         XCTAssertTrue(app.buttons["pair.refresh"].waitForExistence(timeout: 5))
@@ -1004,6 +1004,9 @@ final class M5PairingTests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["AWARE_RUN_ID"] = runID
         app.launchEnvironment["AWARE_EXPERIMENT_ID"] = batchID
+        app.launchEnvironment["AWARE_VENDOR_NAME"] = TestConfiguration.vendorName
+        app.launchEnvironment["AWARE_MODEL_NAME"] = TestConfiguration.modelName
+        app.launchEnvironment["AWARE_DISPLAY_ITEM_NAME"] = TestConfiguration.displayItemName
         app.launchEnvironment["AWARE_MODE"] = "m5"
         app.launchEnvironment["AWARE_TARGET_NAME"] = target
         app.launchEnvironment["AWARE_DISCOVERY_TIMEOUT"] = "5"

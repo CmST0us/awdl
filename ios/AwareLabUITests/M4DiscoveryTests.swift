@@ -11,7 +11,7 @@ final class M4DiscoveryTests: XCTestCase {
         let batchID = try XCTUnwrap(env["AWARE_BATCH_ID"])
         let count = Int(env["AWARE_REPEAT_COUNT"] ?? "1") ?? 1
         XCTAssertTrue((1...10).contains(count))
-        let target = env["AWARE_TARGET_NAME"] ?? "ROCK5B-M4"
+        let target = env["AWARE_TARGET_NAME"] ?? TestConfiguration.targetName
         let approval = env["AWARE_LONG_WAIT_APPROVED"] ?? ""
         let approved = !approval.isEmpty
         let targetTimeout = min(max(Double(env["AWARE_TARGET_TIMEOUT"] ?? "5") ?? 5, 5), 30)
@@ -127,7 +127,7 @@ final class M4DiscoveryTests: XCTestCase {
         if !approved { XCTAssertEqual(count, 1) }
         let ttlMode = env["AWARE_GATE_TTL"] == "1"
         if ttlMode { XCTAssertEqual(count, 1) }
-        let target = env["AWARE_TARGET_NAME"] ?? "ROCK5B-M4"
+        let target = env["AWARE_TARGET_NAME"] ?? TestConfiguration.targetName
         let timeout = min(max(Double(env["AWARE_GATE_TIMEOUT"] ?? "5") ?? 5, 5), 30)
         let runID = batchID + "-gate"
 

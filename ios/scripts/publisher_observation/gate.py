@@ -1,10 +1,11 @@
 """One-run discovery admission and shared-deadline decisions."""
+from app_identity import APP_BUNDLE
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from service_contract import SERVICE
-BUNDLE = 'com.eric3u.rtl8852be.AwareLabRTL'
+BUNDLE = APP_BUNDLE
 
 def epoch(value):
     dt = datetime.fromisoformat(value)

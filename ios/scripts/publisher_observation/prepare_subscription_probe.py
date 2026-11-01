@@ -22,13 +22,21 @@ def main():
     root=Path(__file__).resolve().parent
     stage=a.output.resolve().parent/('subscription-inputs-'+a.run_id)
     stage.mkdir(exist_ok=False)
+    project=root.parents[2]
     sources=[]
-    for name in ('subscription_probe.py','prepare_subscription_pid.py','collector.py','control.py','gate.py','driver_events.py'):
-        shutil.copy2(root/name,stage/name)
-        sources.append(dict(source=str(root/name),frozen=str(stage/name)))
+    inputs=list(root.glob('*.py'))
+    inputs.extend(root.parent/name for name in ('app_identity.py','service_contract.py'))
+    inputs.extend(project/'config'/name for name in ('fileserver-discovery.toml','wifiawared.toml'))
+    inputs.extend((project/'ios/Configurations').glob('*.xcconfig'))
+    for source in inputs:
+        destination=stage/source.relative_to(project)
+        destination.parent.mkdir(parents=True,exist_ok=True)
+        shutil.copy2(source,destination)
+        sources.append(dict(source=str(source),frozen=str(destination)))
+    program_root=stage/root.relative_to(project)
     config=dict(run_id=a.run_id,udid=installed['udid'],xctestrun=installed['xctestrun'],
-                python=installed['collector_argv'][0],collector=str(stage/'collector.py'),
-                program=str(stage/'subscription_probe.py'),installed=installed['installed'],
+                python=installed['collector_argv'][0],collector=str(program_root/'collector.py'),
+                program=str(program_root/'subscription_probe.py'),installed=installed['installed'],
                 installation_manifest=str(input_path.resolve()),installation_evidence=installed.get('installation_evidence'),
                 signed_artifacts=installed['signed_artifacts'],sources=sources,
                 activity_seconds=12,total_seconds=15,readiness_seconds=1,pid_prepared=False,device_execution_authorized=False,

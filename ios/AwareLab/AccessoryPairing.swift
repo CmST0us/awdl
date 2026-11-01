@@ -4,11 +4,11 @@ import UIKit
 import AccessorySetupKit
 import WiFiAware
 
-/// Test values that must match the publisher descriptor used by the board.
+/// Publisher identity from the shared defaults, with per-run diagnostic overrides.
 enum ASKPairingDefaults {
-    static let vendorName = "Radxa"
-    static let modelName = "ROCK 5B"
-    static let displayItemName = "ROCK 5B"
+    static let vendorName = ProcessInfo.processInfo.environment["AWARE_VENDOR_NAME"] ?? Bundle.main.object(forInfoDictionaryKey: "AwareVendorName") as! String
+    static let modelName = ProcessInfo.processInfo.environment["AWARE_MODEL_NAME"] ?? Bundle.main.object(forInfoDictionaryKey: "AwareModelName") as! String
+    static let displayItemName = ProcessInfo.processInfo.environment["AWARE_DISPLAY_ITEM_NAME"] ?? modelName
     static let serviceRole = "subscriber"
 }
 
