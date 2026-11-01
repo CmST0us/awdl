@@ -220,7 +220,7 @@ data_slots = [4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 17, 18, 19, 20,
 ```toml
 # Linux 发布端与 iOS 发现端共同使用的服务名，文件服务须以 ._tcp 结尾。
 # 修改后需生成匹配的两端配置，重新构建客户端并部署服务配置。
-service = "_rtl8852be-test._tcp"
+service = "_fileserver._tcp"
 ```
 
 构建工具读取它，为 Linux 文件服务提供默认服务名，同时生成 iOS 的 `WiFiAwareServices` 声明。Swift 从生成的应用资源读取服务名。脚本构建与 Xcode 直接构建使用同一生成步骤及依赖输入；清洁构建无需提前手工生成文件。
@@ -251,7 +251,7 @@ io_timeout = 60
 
 # 发布的 TCP 服务名，须以 ._tcp 结尾并与客户端声明一致。
 # 改名时需要同步生成客户端声明并重新构建客户端。
-service = "_rtl8852be-test._tcp"
+service = "_fileserver._tcp"
 # 目标机器上的共享目录，必须为绝对路径；已有部署保留原目录。
 files = "/srv/fileserver"
 # 在 NDI 上监听的 TCP 端口，范围 1–65535，由服务注册通告给客户端。

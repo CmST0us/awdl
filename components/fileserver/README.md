@@ -30,7 +30,7 @@ CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
   scripts/build-fileserver.sh
 ```
 
-生成可执行文件 `.build/targets/<target>/fileserver/fileserver` 和对应授权文件，默认 GNU 目标运行时需要 Linux、glibc 与 system D-Bus。配置为 `/etc/fileserver/config.toml`，安装保留已有配置。默认服务名 `_rtl8852be-test._tcp`、端口 7777、共享目录 `/srv/fileserver`；共享目录可由 `files` 或 `--files` 指定，已有安装保留其共享目录。
+生成可执行文件 `.build/targets/<target>/fileserver/fileserver` 和对应授权文件，默认 GNU 目标运行时需要 Linux、glibc 与 system D-Bus。配置为 `/etc/fileserver/config.toml`，安装保留已有配置。默认服务名 `_fileserver._tcp`、端口 7777、共享目录 `/srv/fileserver`；共享目录可由 `files` 或 `--files` 指定，已有安装保留其共享目录。
 
 启动参数支持 `--service`、`--files`、`--port`、`--io-timeout`，显式参数覆盖 TOML 中的同名配置；未指定的字段沿用配置文件或默认值。`--config PATH` 选择配置，`--config=` 仅使用命令行和默认值。默认配置文件不存在时可直接通过参数启动；显式指定的配置文件必须存在。
 

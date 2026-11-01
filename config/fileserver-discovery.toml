@@ -1,3 +1,3 @@
 # 文件服务的发现契约，由 Linux 发布端与 iOS 发现端共用，须以 ._tcp 结尾。
 # 修改后需生成匹配的两端配置，重新构建客户端并部署服务配置。
-service = "_rtl8852be-test._tcp"
+service = "_fileserver._tcp"

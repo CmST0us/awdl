@@ -1,6 +1,6 @@
 # HTTP 文件协议
 
-`fileserver` 在 `ndi0` 上提供 HTTP/1.1，使用 IPv6/TCP，默认端口 7777。服务名 `_rtl8852be-test._tcp` 和端口通过 Wi-Fi Aware 发布；连接和每个请求均受本服务安全 NDP 的 IPv6 会话授权约束。文件字节直接经过 TCP，D-Bus 只管理注册与会话。
+`fileserver` 在 `ndi0` 上提供 HTTP/1.1，使用 IPv6/TCP，默认端口 7777。服务名 `_fileserver._tcp` 和端口通过 Wi-Fi Aware 发布；连接和每个请求均受本服务安全 NDP 的 IPv6 会话授权约束。文件字节直接经过 TCP，D-Bus 只管理注册与会话。
 
 API 路径使用 `/v1`。文件名是共享目录中的普通文件名，以 UTF-8 编码并按 URL 路径段转义；不接受子目录、隐藏文件和符号链接。文件正文使用原始字节；列表与上传完成回执使用 JSON。iPad 保留 Network.framework 的 Wi-Fi Aware 路径校验，通过该连接发送 HTTP/1.1。每次目录读取、下载或上传使用新的 TCP 连接，操作完成、取消或失败时关闭；PUT 以外的请求保持 HTTP/1.1 持久连接，多连接下载在同一连接上连续请求多个范围。
 

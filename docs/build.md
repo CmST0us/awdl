@@ -53,6 +53,8 @@ sudo systemctl enable --now wifiawared fileserver
 
 首次安装将带注释的默认配置写入 `/etc`，已有配置保持不变。无线配置里的既有 PCI 优先于安装文件；显式 `--pci` 同时更新运行配置、udev 设备归属及 systemd 设备依赖。物理接口按 PCI 匹配，运行时从 PHY 取得实际名称。已运行的系统 wpa_supplicant 须释放该设备，其他网卡不受影响。
 
+文件服务使用 `_fileserver._tcp`。已有部署需将 `/etc/fileserver/config.toml` 的 `service` 改为该名称并重启 `fileserver`，同时安装按同一发现契约重新构建的 iOS 应用。共享目录、端口、I/O 期限和配对状态保留。
+
 旧文件服务配置按字段保留到 `/etc/fileserver/config.toml`，原共享目录和 I/O 期限继续生效。安装接管旧单元时停止并禁用旧服务，依据其原有启用与运行状态启动 `fileserver.service`。配对身份与共享数据不移动。
 
 ## iOS

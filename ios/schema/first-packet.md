@@ -1,6 +1,6 @@
 # 原生 TCP 首包契约
 
-服务 `_rtl8852be-test._tcp` 由 ROCK 5B 发布，TCP 端口 7777。板端监听器绑定 NDI 的 IPv6 link-local 地址及接口；iPad 使用 WiFiAware 返回的端点建立连接，并读取 `NWPath.wifiAware` 与系统配对 ID 对应。
+服务 `_fileserver._tcp` 由 ROCK 5B 发布，TCP 端口 7777。板端监听器绑定 NDI 的 IPv6 link-local 地址及接口；iPad 使用 WiFiAware 返回的端点建立连接，并读取 `NWPath.wifiAware` 与系统配对 ID 对应。
 
 同一连接只做一次交换。UTF-8 ASCII 文本，以单个 LF 结束，每行含 LF 最长 256 字节：
 
