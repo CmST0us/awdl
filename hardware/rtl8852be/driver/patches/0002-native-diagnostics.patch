@@ -1,0 +1,204 @@
+--- a/os_dep/linux/rtw_proc.c
++++ b/os_dep/linux/rtw_proc.c
+@@ -15,6 +15,8 @@
+ 
+ #include <linux/ctype.h>	/* tolower() */
+ #include <drv_types.h>
++#include <linux/ktime.h>
++#include <linux/sched.h>
+ #include "rtw_proc.h"
+ #include <rtw_btc.h>
+ #include "_hal_rate.h"
+@@ -5914,9 +5916,15 @@
+ 
+ static ssize_t rtw_odm_proc_write(struct file *file, const char __user *buffer, size_t count, loff_t *pos)
+ {
+-	ssize_t index = (ssize_t)PDE_DATA(file_inode(file));
+-	const struct rtw_proc_hdl *hdl = odm_proc_hdls + index;
+-	ssize_t (*write)(struct file *, const char __user *, size_t, loff_t *, void *) = hdl->write;
++	ssize_t index;
++	const struct rtw_proc_hdl *hdl;
++	ssize_t (*write)(struct file *, const char __user *, size_t, loff_t *, void *);
++
++	pr_info("WA_PROBE proc-write-entry pid=%d count=%zu ns=%llu\n",
++		current->pid, count, (unsigned long long)ktime_get_ns());
++	index = (ssize_t)PDE_DATA(file_inode(file));
++	hdl = odm_proc_hdls + index;
++	write = hdl->write;
+ 
+ 	if (write)
+ 		return write(file, buffer, count, pos, ((struct seq_file *)file->private_data)->private);
+--- a/phl/hal_g6/hal_api_mac.c
++++ b/phl/hal_g6/hal_api_mac.c
+@@ -9467,6 +9467,7 @@
+ 		struct mac_ax_scanofld_rsp scanofld_rpt;
+ 		struct mac_ax_twtanno_c2hpara twt_anno_rpt;
+ 		struct mac_ax_bcn_erly_rpt bcn_erly_rpt;
++		struct mac_ax_nan_info nan_rpt;
+ 	} u;
+ };
+ 
+--- a/phl/hal_g6/mac/mac_ax/dbg_cmd.c
++++ b/phl/hal_g6/mac/mac_ax/dbg_cmd.c
+@@ -13,6 +13,7 @@
+  *
+  ******************************************************************************/
+ #include "dbg_cmd.h"
++#include "wa_native_probe.h"
+ 
+ const char *MallocIDName[eMallocMAX] = {
+ 	"OS",
+@@ -116,6 +117,8 @@
+ 	{"bcn_stats", MAC_MAC_QC_START, cmd_mac_bcn_stats, \
+ 	 "Show current bcn_early, bcn_ok counter and bcn rx ratio; parameter: " \
+ 	 "<process> (start or end)"},
++	{"wa_query", MAC_MAC_WA_QUERY, cmd_wa_query, "single native cluster query"},
++	{"wa_read", MAC_MAC_WA_READ, cmd_wa_read, "CPU hex address, decimal byte count (4..256)"},
+ 	{"dbg_read", MAC_MAC_DBG_READ, cmd_mac_dbg_read, "MAC CMD for SRAM FIFO Debug Read"\
+ 	 " 'cmd mac dbg_read <enum sel> <offset> <size>'"},
+ 	{"dbg_write", MAC_MAC_DBG_WRITE, cmd_mac_dbg_write, "MAC CMD for SRAM FIFO Write"\
+--- a/phl/hal_g6/mac/mac_ax/dbg_cmd.h
++++ b/phl/hal_g6/mac/mac_ax/dbg_cmd.h
+@@ -173,6 +173,8 @@
+ 	MAC_MAC_H2C_MON,
+ 	MAC_MAC_WDT_LOG,
+ 	MAC_MAC_DBG_MSG_EN,
++	MAC_MAC_WA_QUERY,
++	MAC_MAC_WA_READ,
+ };
+ 
+ /**
+--- /dev/null
++++ b/phl/hal_g6/mac/mac_ax/wa_native_probe.h
+@@ -0,0 +1,131 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Included by dbg_cmd.c; uses the existing MAC command and platform IO paths. */
++#include "fwcmd.h"
++#include "wa_observe.h"
++#include <linux/kstrtox.h>
++
++static atomic64_t wa_probe_ops = ATOMIC64_INIT(0);
++
++static u32 wa_probe_ready(struct mac_ax_adapter *adapter)
++{
++	if (!is_chip_id(adapter, MAC_AX_CHIP_ID_8852B))
++		return MACNOITEM;
++	if (adapter->sm.fwdl != MAC_AX_FWDL_INIT_RDY)
++		return MACFWNONRDY;
++	if (adapter->mac_pwr_info.pwr_seq_proc ||
++	    adapter->sm.pwr != MAC_AX_PWR_ON ||
++	    adapter->mac_pwr_info.pwr_in_lps ||
++	    adapter->sm.fw_rst != MAC_AX_FW_RESET_IDLE)
++		return MACPROCERR;
++	return MACSUCCESS;
++}
++
++static u32 cmd_wa_query(struct mac_ax_adapter *adapter,
++		char input[][MAC_MAX_ARGV], u32 input_num,
++		char *output, u32 out_len, u32 *used)
++{
++	struct h2c_info info = {0};
++	u32 payload = 0, ret;
++	u64 op = atomic64_inc_return(&wa_probe_ops);
++
++	ret = input_num == 1 ? wa_probe_ready(adapter) : MACFUNCINPUT;
++	pr_info("WA_PROBE query-start op=%llu ns=%llu status=%u\n",
++		(unsigned long long)op, (unsigned long long)ktime_get_ns(), ret);
++	if (ret == MACSUCCESS) {
++		info.h2c_cat = FWCMD_H2C_CAT_MAC;
++		info.h2c_class = FWCMD_H2C_CL_NAN;
++		info.h2c_func = FWCMD_H2C_FUNC_NAN_GET_CLUSTER_INFO;
++		info.done_ack = 1;
++		info.content_len = sizeof(payload);
++		ret = mac_h2c_common(adapter, &info, &payload);
++	}
++	pr_info("WA_PROBE query-end op=%llu ns=%llu host_result=%u\n",
++		(unsigned long long)op, (unsigned long long)ktime_get_ns(), ret);
++	MAC_DBG_MSG(out_len, *used, output + *used, out_len - *used,
++		"WA_PROBE query op=%llu host_result=%u\n", (unsigned long long)op, ret);
++	return ret;
++}
++
++static bool wa_probe_range(u32 cpu, u32 len)
++{
++	if (!len || len > 256 || (cpu & 3) || (len & 3))
++		return false;
++	/* Common U2/U3 downloaded code extent; end is exclusive. */
++	if (cpu >= 0xb8970000 && cpu < 0xb89bb498 && len <= 0xb89bb498 - cpu)
++		return true;
++	if (cpu >= 0xb8e09070 && cpu < 0xb8e09078 && len <= 0xb8e09078 - cpu)
++		return true;
++	if (cpu >= 0xb8e09144 && cpu < 0xb8e0914c && len <= 0xb8e0914c - cpu)
++		return true;
++	if (cpu >= 0xb8e09210 && cpu < 0xb8e09218 && len <= 0xb8e09218 - cpu)
++		return true;
++	return (cpu == 0xb8e09dc8 || cpu == 0xb8e0a28c) && len == 4;
++}
++
++static u32 cmd_wa_read(struct mac_ax_adapter *adapter,
++		char input[][MAC_MAX_ARGV], u32 input_num,
++		char *output, u32 out_len, u32 *used)
++{
++	struct mac_ax_intf_ops *ops = adapter_to_intf_ops(adapter);
++	u32 data[64], selected[64];
++	u32 cpu = 0, len = 0, bus = 0, saved = 0, restored = 0;
++	u32 ret = MACFUNCINPUT, i, attempted = 0, completed = 0;
++	bool saved_valid = false;
++	u64 op = atomic64_inc_return(&wa_probe_ops);
++	u64 begin = ktime_get_ns();
++
++	if (input_num != 3 || kstrtou32(input[1], 16, &cpu) ||
++	    kstrtou32(input[2], 10, &len) || !wa_probe_range(cpu, len))
++		goto report;
++	ret = wa_probe_ready(adapter);
++	if (ret != MACSUCCESS)
++		goto report;
++	if (adapter->hw_info->is_sec_ic) {
++		ret = MACIOERRINSEC;
++		goto report;
++	}
++	bus = cpu & 0x1fffffff;
++	PLTFM_MUTEX_LOCK(&adapter->hw_info->ind_access_lock);
++	adapter->hw_info->ind_aces_cnt++;
++	ret = wa_probe_ready(adapter);
++	if (ret == MACSUCCESS) {
++		saved = MAC_REG_R32(R_AX_FILTER_MODEL_ADDR);
++		saved_valid = true;
++		for (i = 0; i < len / 4; i++) {
++			MAC_REG_W32(R_AX_FILTER_MODEL_ADDR, bus + 4 * i);
++			selected[i] = MAC_REG_R32(R_AX_FILTER_MODEL_ADDR);
++			attempted++;
++			if (selected[i] != bus + 4 * i) {
++				ret = MACPROCERR;
++				break;
++			}
++			data[i] = MAC_REG_R32(R_AX_INDIR_ACCESS_ENTRY);
++			completed++;
++		}
++		MAC_REG_W32(R_AX_FILTER_MODEL_ADDR, saved);
++		restored = MAC_REG_R32(R_AX_FILTER_MODEL_ADDR);
++		if (restored != saved)
++			ret = MACPROCERR;
++	}
++	adapter->hw_info->ind_aces_cnt--;
++	PLTFM_MUTEX_UNLOCK(&adapter->hw_info->ind_access_lock);
++report:
++	pr_info("WA_PROBE read op=%llu begin_ns=%llu end_ns=%llu cpu=%08x bus=%08x len=%u status=%u completed=%u saved_valid=%u saved=%08x restored=%08x\n",
++		(unsigned long long)op, (unsigned long long)begin,
++		(unsigned long long)ktime_get_ns(), cpu, bus, len, ret,
++		completed * 4, saved_valid, saved, restored);
++	for (i = 0; i < attempted; i++) {
++		pr_info("WA_PROBE selector op=%llu cpu=%08x requested=%08x observed=%08x\n",
++			(unsigned long long)op, cpu + i * 4, bus + i * 4, selected[i]);
++		if (i < completed)
++			pr_info("WA_PROBE data op=%llu cpu=%08x word=%08x bytes=%02x%02x%02x%02x\n",
++				(unsigned long long)op, cpu + i * 4, data[i],
++				data[i] & 255, (data[i] >> 8) & 255,
++				(data[i] >> 16) & 255, data[i] >> 24);
++	}
++	MAC_DBG_MSG(out_len, *used, output + *used, out_len - *used,
++		"WA_PROBE read op=%llu status=%u bytes=%u/%u saved_valid=%u restored_ok=%u\n",
++		(unsigned long long)op, ret, completed * 4, len,
++		saved_valid, saved_valid && saved == restored);
++	return ret;
++}

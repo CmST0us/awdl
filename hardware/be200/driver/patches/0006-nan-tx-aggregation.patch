@@ -1,0 +1,244 @@
+Subject: NAN：跳过未变化的 TLC 配置并启用受限聚合快速发送
+
+--- /dev/null
++++ b/drivers/net/wireless/intel/iwlwifi/mld/nan-tlc-cache.h
+@@ -0,0 +1,34 @@
++/* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
++#ifndef __iwl_mld_nan_tlc_cache_h__
++#define __iwl_mld_nan_tlc_cache_h__
++
++/* A schedule bitmap/sequence change alone must not restart rate learning. */
++struct iwl_mld_nan_tlc_cache {
++	bool valid;
++	struct cfg80211_chan_def chandef;
++	struct iwl_tlc_config_cmd cmd;
++};
++
++static inline bool
++iwl_mld_nan_tlc_unchanged(const struct iwl_mld_nan_tlc_cache *cache,
++                          const struct cfg80211_chan_def *chandef,
++                          const struct iwl_tlc_config_cmd *cmd)
++{
++	return cache->valid &&
++		cfg80211_chandef_identical(&cache->chandef, chandef) &&
++		!memcmp(&cache->cmd, cmd, sizeof(*cmd));
++}
++
++static inline void
++iwl_mld_nan_tlc_remember(struct iwl_mld_nan_tlc_cache *cache,
++                         const struct cfg80211_chan_def *chandef,
++                         const struct iwl_tlc_config_cmd *cmd, int result)
++{
++	cache->valid = !result;
++	if (!result) {
++		cache->chandef = *chandef;
++		cache->cmd = *cmd;
++	}
++}
++
++#endif /* __iwl_mld_nan_tlc_cache_h__ */
+--- a/drivers/net/wireless/intel/iwlwifi/mld/nan.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/nan.c
+@@ -852,9 +852,12 @@
+ 			    mld_sta->sta_type == STATION_TYPE_NAN_PEER_NDI)
+ 				iwl_mld_add_modify_sta_cmd(mld, &sta->deflink);
+ 
+-			if (added_links &&
+-			    mld_sta->sta_type == STATION_TYPE_NAN_PEER_NDI)
+-				iwl_mld_config_tlc(mld, mld_sta->vif, sta);
++			if (mld_sta->sta_type == STATION_TYPE_NAN_PEER_NDI) {
++				/* A removed/recreated PHY may have lost its TLC object. */
++				memset(mld_sta->nan_tlc, 0, sizeof(mld_sta->nan_tlc));
++				if (added_links)
++					iwl_mld_config_tlc(mld, mld_sta->vif, sta);
++			}
+ 		}
+ 
+ 		/*
+--- a/drivers/net/wireless/intel/iwlwifi/mld/sta.h
++++ b/drivers/net/wireless/intel/iwlwifi/mld/sta.h
+@@ -10,6 +10,8 @@
+ 
+ #include "mld.h"
+ #include "tx.h"
++#include "fw/api/rs.h"
++#include "nan-tlc-cache.h"
+ 
+ /**
+  * struct iwl_mld_rxq_dup_data - Duplication detection data, per STA & Rx queue
+@@ -106,6 +108,7 @@
+  * @vif: pointer the vif object.
+  * @sta_state: station state according to enum %ieee80211_sta_state
+  * @sta_type: type of this station. See &enum iwl_fw_sta_type
++ * @nan_tlc: last successfully queued single-STA NAN TLC config per PHY
+  * @mld: a pointer to the iwl_mld object
+  * @dup_data: per queue duplicate packet detection data
+  * @data_tx_ant: stores the last TX antenna index; used for setting
+@@ -131,6 +134,7 @@
+ 	struct_group(zeroed_on_hw_restart,
+ 		enum ieee80211_sta_state sta_state;
+ 		enum iwl_fw_sta_type sta_type;
++		struct iwl_mld_nan_tlc_cache nan_tlc[NUM_PHY_CTX];
+ 	);
+ 	/* And here fields that survive a fw restart */
+ 	struct iwl_mld *mld;
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tlc.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tlc.c
+@@ -14,6 +14,14 @@
+ #include "fw/api/rs.h"
+ #include "fw/api/context.h"
+ #include "fw/api/dhc.h"
++
++/* Optional deployment limit for peers with unreliable large NAN aggregates.
++ * This can only reduce the negotiated firmware/peer/FIFO bound.
++ */
++static unsigned int nan_amsdu_limit;
++module_param(nan_amsdu_limit, uint, 0400);
++MODULE_PARM_DESC(nan_amsdu_limit,
++		"Maximum NAN TX A-MSDU bytes (0: firmware/peer limits)");
+ 
+ static u8 iwl_mld_fw_bw_from_sta_bw(enum ieee80211_sta_rx_bandwidth bandwidth)
+ {
+@@ -489,6 +497,7 @@
+ 				 struct ieee80211_vif *vif,
+ 				 struct iwl_mld_sta *mld_sta,
+ 				 int fw_sta_mask, int phy_id,
++				 const struct cfg80211_chan_def *chandef,
+ 				 struct iwl_mld_tlc_sta_capa *capa)
+ {
+ 	struct iwl_tlc_config_cmd cmd = {
+@@ -501,6 +510,7 @@
+ 		.sgi_ch_width_supp = iwl_mld_get_fw_sgi(capa),
+ 		.max_mpdu_len = cpu_to_le16(capa->max_amsdu_len),
+ 	};
++	struct iwl_mld_nan_tlc_cache *cache = NULL;
+ 	u32 cmd_id = WIDE_ID(DATA_PATH_GROUP, TLC_MNG_CONFIG_CMD);
+ 	u8 cmd_ver = iwl_fw_lookup_cmd_ver(mld->fw, cmd_id, 0);
+ 	void *cmd_ptr;
+@@ -527,6 +537,23 @@
+ 		return;
+ 	}
+ 
++	/* Peer availability updates call here even when TLC inputs are identical.
++	 * Keep the learnt rates in that case. Multiple-STA TLC groups retain the
++	 * existing behavior because another member can reconfigure the group.
++	 */
++	if (mld_sta->sta_type == STATION_TYPE_NAN_PEER_NDI &&
++	    phy_id >= 0 && phy_id < ARRAY_SIZE(mld_sta->nan_tlc)) {
++		cache = &mld_sta->nan_tlc[phy_id];
++		if (hweight32(fw_sta_mask) != 1) {
++			cache->valid = false;
++			cache = NULL;
++		} else if (iwl_mld_nan_tlc_unchanged(cache, chandef, &cmd)) {
++			IWL_DEBUG_RATE(mld, "NAN TLC unchanged, phy_id=%d\n",
++				       phy_id);
++			return;
++		}
++	}
++
+ 	IWL_DEBUG_RATE(mld,
+ 		       "TLC CONFIG CMD, sta_mask=0x%x, max_ch_width=%d, mode=%d, phy_id=%d\n",
+ 		       le32_to_cpu(cmd.sta_mask), cmd.max_ch_width, cmd.mode,
+@@ -535,6 +562,8 @@
+ 	/* Send async since this can be called within a RCU-read section */
+ 	ret = iwl_mld_send_cmd_with_flags_pdu(mld, cmd_id, CMD_ASYNC, cmd_ptr,
+ 					      cmd_size);
++	if (cache)
++		iwl_mld_nan_tlc_remember(cache, chandef, &cmd, ret);
+ 	if (ret)
+ 		IWL_ERR(mld, "Failed to send TLC cmd (%d)\n", ret);
+ }
+@@ -615,7 +644,7 @@
+ 
+ 	iwl_mld_send_tlc_cmd(mld, vif, mld_sta, fw_sta_mask,
+ 			     iwl_mld_phy_from_mac80211(chan_ctx)->fw_id,
+-			     capa);
++			     chandef, capa);
+ 
+ }
+ 
+@@ -834,6 +863,9 @@
+ 
+ 	lockdep_assert_wiphy(mld->wiphy);
+ 
++	if (vif->type == NL80211_IFTYPE_NAN_DATA && nan_amsdu_limit)
++		result = min(result, nan_amsdu_limit);
++
+ 	/* Don't send an AMSDU that will be longer than the TXF.
+ 	 * Add a security margin of 256 for the TX command + headers.
+ 	 * We also want to have the start of the next packet inside the
+@@ -851,8 +883,11 @@
+ 
+ 	txf = iwl_mld_mac80211_ac_to_fw_tx_fifo(ac);
+ 
+-	/* Only one link: take the lmac according to the band */
+-	if (hweight16(sta->valid_links) <= 1) {
++	/* NAN has no per-NDI channel context and can use either LMAC, just
++	 * like a multi-link station. Bound aggregates by both FIFOs on CDB.
++	 */
++	if (vif->type != NL80211_IFTYPE_NAN_DATA &&
++	    hweight16(sta->valid_links) <= 1) {
+ 		enum nl80211_band band;
+ 		struct ieee80211_bss_conf *link =
+ 			wiphy_dereference(mld->wiphy,
+@@ -864,14 +899,14 @@
+ 			band = link->chanreq.oper.chan->band;
+ 		lmac = iwl_mld_get_lmac_id(mld, band);
+ 
+-	/* More than one link but with 2 lmacs: take the minimum */
++	/* Multiple possible bands with 2 LMACs: take the minimum */
+ 	} else if (fw_has_capa(&mld->fw->ucode_capa,
+ 			       IWL_UCODE_TLV_CAPA_CDB_SUPPORT)) {
+ 		lmac = IWL_LMAC_5G_INDEX;
+ 		result = min_t(unsigned int, result,
+ 			       mld->fwrt.smem_cfg.lmac[lmac].txfifo_size[txf] - 256);
+ 		lmac = IWL_LMAC_24G_INDEX;
+-	/* More than one link but only one lmac */
++	/* Multiple possible bands but only one LMAC */
+ 	} else {
+ 		lmac = IWL_LMAC_24G_INDEX;
+ 	}
+--- a/net/mac80211/tx.c
++++ b/net/mac80211/tx.c
+@@ -3144,7 +3144,10 @@
+ 	    !ieee80211_hw_check(&local->hw, SUPPORTS_TX_FRAG))
+ 		goto out;
+ 
+-	if (!ieee80211_vif_is_mld(&sdata->vif)) {
++	if (sdata->vif.type == NL80211_IFTYPE_NAN_DATA) {
++		/* NAN schedules span bands and have no per-NDI channel context. */
++		build.band = NUM_NL80211_BANDS;
++	} else if (!ieee80211_vif_is_mld(&sdata->vif)) {
+ 		rcu_read_lock();
+ 		chanctx_conf =
+ 			rcu_dereference(sdata->vif.bss_conf.chanctx_conf);
+@@ -3162,6 +3165,12 @@
+ 	fc = cpu_to_le16(IEEE80211_FTYPE_DATA | IEEE80211_STYPE_DATA);
+ 
+ 	switch (sdata->vif.type) {
++	case NL80211_IFTYPE_NAN_DATA:
++		/* DA SA Cluster ID; the live cluster ID is filled per packet. */
++		build.da_offs = offsetof(struct ieee80211_hdr, addr1);
++		build.sa_offs = offsetof(struct ieee80211_hdr, addr2);
++		build.hdr_len = 24;
++		break;
+ 	case NL80211_IFTYPE_ADHOC:
+ 		/* DA SA BSSID */
+ 		build.da_offs = offsetof(struct ieee80211_hdr, addr1);
+@@ -3772,6 +3781,16 @@
+ 	memcpy(skb->data + fast_tx->da_offs, da, ETH_ALEN);
+ 	memcpy(skb->data + fast_tx->sa_offs, sa, ETH_ALEN);
+ 
++	if (sdata->vif.type == NL80211_IFTYPE_NAN_DATA) {
++		struct ieee80211_sub_if_data *nmi;
++
++		/* Cluster changes do not invalidate the cached fast-TX header. */
++		nmi = rcu_dereference(sdata->u.nan_data.nmi);
++		if (!nmi)
++			goto free;
++		ether_addr_copy(hdr->addr3, nmi->u.nan.conf.cluster_id);
++	}
++
+ 	info = IEEE80211_SKB_CB(skb);
+ 	memset(info, 0, sizeof(*info));
+ 	info->band = fast_tx->band;

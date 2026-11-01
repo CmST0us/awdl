@@ -1,0 +1,18 @@
+Subject: NAN：共享 NDL 的新 NDP 仍通告 PHY 能力
+
+Element Container 属于 NDP 请求和响应。根据 NDP 状态添加能力，
+避免 NDL 已建立时省略新 NDP 所需的 HT、VHT 和 HE 元素。
+
+--- a/src/nan/nan_ndl.c
++++ b/src/nan/nan_ndl.c
+@@ -1719,8 +1719,8 @@
+ 		return;
+ 
+ 	/* Element container is expected only in NDP request/response */
+-	if (ndl->state != NAN_NDL_STATE_START &&
+-	    ndl->state != NAN_NDL_STATE_REQ_RECV)
++	if (peer->ndp_setup.state != NAN_NDP_STATE_START &&
++	    peer->ndp_setup.state != NAN_NDP_STATE_REQ_RECV)
+ 		return;
+ 
+ 	wpabuf_put_u8(buf, NAN_ATTR_ELEM_CONTAINER);

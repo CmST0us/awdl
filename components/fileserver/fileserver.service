@@ -1,0 +1,27 @@
+[Unit]
+# 服务在 systemd 中的显示名称。
+Description=Wi-Fi Aware File Server
+# 无线服务是发布和数据链路的依赖。
+Requires=wifiawared.service
+# 无线服务取得 D-Bus 名称后启动。
+After=wifiawared.service
+# 无线服务停止或重启时同步处理文件服务。
+PartOf=wifiawared.service
+
+[Service]
+# 进程启动后由应用完成监听与服务注册。
+Type=simple
+# 启动文件服务，读取 /etc/fileserver/config.toml。
+ExecStart=/usr/local/bin/fileserver
+# 异常退出时重新启动。
+Restart=on-failure
+# 异常重启间隔，单位秒。
+RestartSec=2
+# 共享文件写入时的权限掩码。
+UMask=0077
+# 停止时完成连接回收的兜底期限，单位秒。
+TimeoutStopSec=15
+
+[Install]
+# 启用后随多用户系统启动。
+WantedBy=multi-user.target

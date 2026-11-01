@@ -1,0 +1,67 @@
+Subject: NAN：按实际信道验证对端 NDC 日程
+
+--- a/src/nan/nan_util.c
++++ b/src/nan/nan_util.c
+@@ -1832,6 +1832,34 @@
+ }
+ 
+ 
++bool nan_schedule_covers_ndc(struct nan_data *nan,
++                            const struct nan_schedule *schedule, int freq,
++                            const struct nan_time_bitmap *ndc)
++{
++	struct bitfield *required = nan_tbm_to_bf(nan, ndc);
++	bool covered = false;
++	unsigned int i;
++
++	if (!required)
++		return false;
++	for (i = 0; i < schedule->n_chans; i++) {
++		struct bitfield *available;
++
++		if (schedule->chans[i].chan.freq != freq)
++			continue;
++		available = nan_tbm_to_bf(nan, &schedule->chans[i].committed);
++		if (!available)
++			continue;
++		covered = bitfield_is_subset(required, available);
++		bitfield_free(available);
++		if (covered)
++			break;
++	}
++	bitfield_free(required);
++	return covered;
++}
++
++
+ /**
+  * nan_get_chan_entry - Get channel entry for a given NAN scheduled channel
+  * @nan: NAN module context from nan_init()
+--- a/src/nan/nan.h
++++ b/src/nan/nan.h
+@@ -852,6 +852,9 @@
+ void nan_set_sched_update_pending(struct nan_data *nan, bool pending);
+ bool nan_peer_pairing_supported(struct nan_data *nan, const u8 *addr);
+ bool nan_peer_npk_nik_caching_supported(struct nan_data *nan, const u8 *addr);
++bool nan_schedule_covers_ndc(struct nan_data *nan,
++                            const struct nan_schedule *schedule, int freq,
++                            const struct nan_time_bitmap *ndc);
+ int nan_get_peer_ndc_freq(struct nan_data *nan,
+ 			  const struct nan_peer_schedule *peer_sched,
+ 			  u8 map_idx);
+--- a/wpa_supplicant/nan_supplicant.c
++++ b/wpa_supplicant/nan_supplicant.c
+@@ -2665,6 +2665,13 @@
+ 					   "NAN: No local NDC map_id found for peer NDC");
+ 				return -1;
+ 			}
++
++			/* A radio map may contain several channels. The NDC must
++			 * remain on its proposed channel, not merely in the map. */
++			if (!nan_schedule_covers_ndc(wpa_s->nan, &ndp->sched,
++				    nan_get_peer_ndc_freq(wpa_s->nan, &peer_sched, map_id),
++				    &peer_sched.maps[map_id].ndc))
++				return -1;
+ 
+ 			ndp->sched.ndc_map_id = ret;
+ 			os_memcpy(&ndp->sched.ndc, &peer_sched.maps[map_id].ndc,

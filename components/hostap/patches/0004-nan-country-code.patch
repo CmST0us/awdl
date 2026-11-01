@@ -1,0 +1,26 @@
+Subject: NAN：在发现帧中通告设备监管国家码
+
+--- a/wpa_supplicant/nan_supplicant.c
++++ b/wpa_supplicant/nan_supplicant.c
+@@ -3776,12 +3776,21 @@
+ static void wpas_nan_de_add_extra_attrs(void *ctx, struct wpabuf *buf)
+ {
+ 	struct wpa_supplicant *wpa_s = ctx;
++	const char *country = wpa_s->device_country;
+ 	struct nan_schedule sched;
+ 	u32 map_ids = (BIT(wpa_s->nan_capa.num_radios) - 1) << 1;
+ 	int i;
+ 
+ 	if (!wpas_nan_ndp_allowed(wpa_s) || !map_ids)
+ 		return;
++
++	/* Use the device's regulatory country; XZ denotes an unknown locale. */
++	if (country[0] < 'A' || country[0] > 'Z' ||
++	    country[1] < 'A' || country[1] > 'Z')
++		country = "XZ";
++	wpabuf_put_u8(buf, NAN_ATTR_COUNTRY_CODE);
++	wpabuf_put_le16(buf, 2);
++	wpabuf_put_data(buf, country, 2);
+ 
+ 	wpas_nan_fill_ndp_schedule(wpa_s, &sched);
+ 	nan_add_dev_capa_attr(wpa_s->nan, buf);

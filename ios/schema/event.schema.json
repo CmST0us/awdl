@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Aware Lab lifecycle event v1",
+  "type": "object",
+  "required": ["schemaVersion", "runID", "experimentID", "directionID", "source", "version", "sequence", "monotonicNS", "wallTime", "action", "state", "detail"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "runID": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$"},
+    "experimentID": {"type": "string"},
+    "directionID": {"enum": ["IOS-XCUITEST-G1", "NAN-DISCOVERY-DUAL", "NAN-PAIRING-DUAL"]},
+    "source": {"const": "ipad.app"},
+    "version": {"type": "string"},
+    "sequence": {"type": "integer", "minimum": 1},
+    "monotonicNS": {"type": "integer", "minimum": 0},
+    "wallTime": {"type": "string", "format": "date-time"},
+    "action": {"type": "string"},
+    "state": {"enum": ["idle", "ready", "discoveryRequested", "endpointSelected", "cancelled", "timedOut", "failed"]},
+    "detail": {"type": "string"}
+  }
+}

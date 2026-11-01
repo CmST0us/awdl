@@ -1,0 +1,13 @@
+Subject: iwlwifi：启用 BE200 c108 固件接口
+
+--- a/drivers/net/wireless/intel/iwlwifi/cfg/bz.c
++++ b/drivers/net/wireless/intel/iwlwifi/cfg/bz.c
+@@ -10,7 +10,7 @@
+ #include "fw/api/txq.h"
+ 
+ /* Highest firmware core release supported */
+-#define IWL_BZ_UCODE_CORE_MAX	107
++#define IWL_BZ_UCODE_CORE_MAX	108
+ 
+ /* Lowest firmware core release supported */
+ #define IWL_BZ_UCODE_CORE_MIN	102

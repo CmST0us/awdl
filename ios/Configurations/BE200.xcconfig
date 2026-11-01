@@ -1,0 +1,7 @@
+// 应用安装身份；重新构建后生效，升级已有安装必须选择同一 bundle。
+// 系统用于区分应用和保存权限、配对关联的唯一名称。
+PRODUCT_BUNDLE_IDENTIFIER = com.eric3u.rtl8852be.AwareLab
+// 主屏幕显示名称，与发现服务名独立。
+AWARE_DISPLAY_NAME = Aware Client
+// 使用 Xcode 选择的开发团队自动签名；团队由构建环境提供。
+CODE_SIGN_STYLE = Automatic

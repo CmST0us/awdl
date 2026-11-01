@@ -1,0 +1,188 @@
+Subject: NAN：新增 NDP 协商保留既有 NDL
+
+已有 NDP 时仍处理新请求中的 NDL 协商；成功后采用新 NDL，
+失败时恢复原连接的 NDL。安全 Confirm 的拒绝状态直接通知失败。
+
+--- a/src/nan/nan_i.h
++++ b/src/nan/nan_i.h
+@@ -553,6 +553,7 @@
+  * @ndp_setup: Used to hold an NDP object while NDP establishment is in
+  *     progress
+  * @ndl: NDL data associated with this peer
++ * @previous_ndl: Established NDL retained during another NDP negotiation
+  * @bootstrap: Bootstrap information of the peer
+  * @pairing: Pairing data associated with this peer
+  * @igtk_id: IGTK key ID used with this peer. Zero if IGTK is not used.
+@@ -570,6 +571,7 @@
+ 	struct nan_ndp_setup ndp_setup;
+ 
+ 	struct nan_ndl *ndl;
++	struct nan_ndl *previous_ndl;
+ 
+ 	struct nan_bootstrap bootstrap;
+ 
+@@ -732,6 +734,7 @@
+ void nan_ndl_setup_failure(struct nan_data *nan, struct nan_peer *peer,
+ 			   enum nan_reason reason, bool reset_state);
+ void nan_ndl_reset(struct nan_data *nan, struct nan_peer *peer);
++void nan_ndl_finish(struct nan_data *nan, struct nan_peer *peer, bool success);
+ int nan_ndl_handle_ndl_attr(struct nan_data *nan, struct nan_peer *peer,
+ 			    struct nan_msg *msg);
+ int nan_ndl_add_ndl_attr(struct nan_data *nan, const struct nan_peer *peer,
+--- a/src/nan/nan_ndl.c
++++ b/src/nan/nan_ndl.c
+@@ -119,7 +119,8 @@
+ 		   MAC2STR(peer->nmi_addr),
+ 		   nan_ndl_state_str(peer->ndl->state), peer->ndl->state);
+ 
+-	nan_clear_peer_schedule(nan, peer);
++	if (!peer->previous_ndl)
++		nan_clear_peer_schedule(nan, peer);
+ 
+ 	os_free(ndl->ndc_sched);
+ 	ndl->ndc_sched = NULL;
+@@ -141,26 +142,43 @@
+ }
+ 
+ 
+-/*
+- * nan_ndl_reset - Reset the NDL state
+- *
+- * @nan: NAN module context from nan_init()
+- * @peer: The peer that requires NDL setup reset
+- */
++static void nan_ndl_free(struct nan_ndl *ndl)
++{
++	if (!ndl)
++		return;
++	os_free(ndl->ndc_sched);
++	os_free(ndl->immut_sched);
++	os_free(ndl);
++}
++
++
+ void nan_ndl_reset(struct nan_data *nan, struct nan_peer *peer)
+ {
+-	wpa_printf(MSG_DEBUG, "NAN: NDL: Reset state for peer=" MACSTR,
+-		   MAC2STR(peer->nmi_addr));
+-
+-	if (!peer->ndl) {
+-		wpa_printf(MSG_DEBUG, "NAN: NDL: Reset: no NDL");
++	if (!peer->ndl && !peer->previous_ndl)
+ 		return;
+-	}
+-
+-	nan_ndl_clear(nan, peer);
+-
+-	os_free(peer->ndl);
++	nan_clear_peer_schedule(nan, peer);
++	nan_ndl_free(peer->ndl);
++	nan_ndl_free(peer->previous_ndl);
+ 	peer->ndl = NULL;
++	peer->previous_ndl = NULL;
++}
++
++
++void nan_ndl_finish(struct nan_data *nan, struct nan_peer *peer, bool success)
++{
++	if (!peer->previous_ndl)
++		return;
++
++	if (success) {
++		nan_ndl_free(peer->previous_ndl);
++	} else {
++		nan_ndl_free(peer->ndl);
++		peer->ndl = peer->previous_ndl;
++		/* Restore scheduling for the NDPs that are still connected. */
++		if (!dl_list_empty(&peer->ndps))
++			nan_configure_peer_schedule(nan, peer, &nan->sched);
++	}
++	peer->previous_ndl = NULL;
+ }
+ 
+ 
+@@ -839,7 +857,7 @@
+ 
+ 	wpa_printf(MSG_DEBUG, "NAN: NDL: Handle request");
+ 
+-	if (peer->ndl) {
++	if (peer->ndl && peer->ndl->state != NAN_NDL_STATE_DONE) {
+ 		wpa_printf(MSG_DEBUG,
+ 			   "NAN: NDL: Request while another establishment is ongoing");
+ 		return -1;
+@@ -852,11 +870,12 @@
+ 		return -1;
+ 	}
+ 
+-	peer->ndl = nan_ndl_alloc(nan);
+-	if (!peer->ndl)
+-		return -1;
+-
+-	ndl = peer->ndl;
++	ndl = nan_ndl_alloc(nan);
++	if (!ndl)
++		return -1;
++
++	peer->previous_ndl = peer->ndl;
++	peer->ndl = ndl;
+ 
+ 	ndl->status = NAN_NDL_STATUS_CONTINUED;
+ 
+@@ -909,7 +928,7 @@
+ 	return 0;
+ 
+ fail:
+-	nan_ndl_reset(nan, peer);
++	/* The caller stops the NDP setup and restores an established NDL. */
+ 	return -1;
+ }
+ 
+@@ -1193,7 +1212,9 @@
+ 		nan_ndl_set_state(nan, peer->ndl, NAN_NDL_STATE_DONE);
+ 	}
+ 
+-	if (peer->ndl && peer->ndl->state == NAN_NDL_STATE_DONE) {
++	if (peer->ndl && peer->ndl->state == NAN_NDL_STATE_DONE &&
++	    !(msg->oui_subtype == NAN_SUBTYPE_DATA_PATH_REQUEST &&
++	      msg->attrs.ndl)) {
+ 		wpa_printf(MSG_DEBUG, "NAN: NDL: NDL already done");
+ 		return 0;
+ 	}
+--- a/src/nan/nan.c
++++ b/src/nan/nan.c
+@@ -150,6 +150,7 @@
+ static void nan_ndp_setup_stop(struct nan_data *nan, struct nan_peer *peer)
+ {
+ 	eloop_cancel_timeout(nan_peer_state_timeout, nan, peer);
++	nan_ndl_finish(nan, peer, false);
+ 	nan_ndp_setup_reset(nan, peer);
+ 
+ 	/* Need to also remove the NDL if no active NDPs */
+@@ -2098,6 +2099,7 @@
+ 	dl_list_add(&peer->ndps, &peer->ndp_setup.ndp->list);
+ 	peer->ndp_setup.ndp = NULL;
+ 
++	nan_ndl_finish(nan, peer, true);
+ 	nan_ndp_setup_stop(nan, peer);
+ 	nan_handle_idle_period(nan);
+ 
+--- a/src/nan/nan_ndp.c
++++ b/src/nan/nan_ndp.c
+@@ -610,7 +610,8 @@
+ 		return -1;
+ 	}
+ 
+-	if (sec_present && status != NAN_NDP_STATUS_CONTINUED) {
++	if (sec_present && status != NAN_NDP_STATUS_CONTINUED &&
++	    status != NAN_NDP_STATUS_REJECTED) {
+ 		wpa_printf(MSG_DEBUG,
+ 			   "NAN: NDP: confirm: status != continued with security");
+ 		return -1;
+@@ -624,6 +625,7 @@
+ 	}
+ 
+ 	ndp_setup->status = status;
++	ndp_setup->reason = ndp_attr->reason_code;
+ 
+ 	if (sec_present)
+ 		nan_ndp_set_state(nan, &peer->ndp_setup,

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<!-- 主屏幕显示名，由所选 xcconfig 提供。 -->
+<key>CFBundleDisplayName</key><string>$(AWARE_DISPLAY_NAME)</string>
+<!-- 允许 AccessorySetupKit 通过 Wi-Fi 发现和授权配件。 -->
+<key>NSAccessorySetupKitSupports</key><array><string>WiFi</string></array>
+<!-- 发现服务声明由 config/services/fileserver.toml 在构建时填入。 -->
+<key>AwareFileService</key><string>__AWARE_FILE_SERVICE__</string>
+<!-- 向系统声明可订阅的服务；Subscribable 空字典表示订阅者角色。 -->
+<key>WiFiAwareServices</key><dict><key>__AWARE_FILE_SERVICE__</key><dict><key>Subscribable</key><dict/></dict></dict>
+<!-- 将 Documents 目录提供给系统文件共享。 -->
+<key>UIFileSharingEnabled</key><true/>
+<!-- 允许通过系统文件选择器就地打开应用文档。 -->
+<key>LSSupportsOpeningDocumentsInPlace</key><true/>
+</dict></plist>

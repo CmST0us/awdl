@@ -1,0 +1,19 @@
+# 本机构建示例；修改后用于下一次构建，不影响已安装产物。
+
+# 目标平台配置名，对应 platforms 下的目录。
+platform = "rock5b"
+# Rust Linux 目标 triple；需安装对应标准库并配置匹配的 linker。
+rust_target = "aarch64-unknown-linux-gnu"
+# 构建机上目标内核构建目录的绝对路径，需匹配目标内核版本及配置。
+kernel_headers = "/opt/kernel-headers/rock5b"
+# 可选：目标内核发行号，交叉构建时填写目标机器的 uname -r 结果。
+# 仅在目标原生构建时可以省略并使用本机内核发行号。
+# kernel_release = "目标内核发行号"
+# hostap 等 C 用户态组件的编译器；填写 PATH 中的命令名或绝对路径。
+c_compiler = "aarch64-linux-gnu-gcc"
+# 内核交叉工具链前缀，包含末尾连字符；可填写带绝对路径的前缀。
+cross_compile = "aarch64-linux-gnu-"
+# 最大并行构建任务数，正整数，按构建机内存和 CPU 资源设置。
+jobs = 4
+# U2 固件补丁的 C 编译器；使用 Clang 21 的 MIPS16 后端，独立于 Linux 目标编译器。
+mips_compiler = "clang"

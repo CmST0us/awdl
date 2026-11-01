@@ -1,0 +1,27 @@
+Subject: iwlmld：约束 NAN 速率控制建议的聚合长度
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tlc.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tlc.c
+@@ -963,6 +963,22 @@
+ 		enabled = 0;
+ 	}
+ 
++	if (size > link_sta->agg.max_amsdu_len &&
++	    iwl_mld_sta_from_mac80211(link_sta->sta)->vif->type ==
++	    NL80211_IFTYPE_NAN_DATA) {
++		u16 limit = link_sta->agg.max_amsdu_len;
++
++		/* NAN recommendations cannot raise peer or deployment limits.
++		 * Per-TID FIFO limits are applied below.
++		 */
++		if (nan_amsdu_limit)
++			limit = min_t(unsigned int, limit, nan_amsdu_limit);
++		IWL_ERR_LIMIT(mld,
++			      "NAN TLC AMSDU recommendation %u exceeds peer limit %u; using %u\n",
++			      size, link_sta->agg.max_amsdu_len, limit);
++		size = limit;
++	}
++
+ 	if (IWL_FW_CHECK(mld, size > link_sta->agg.max_amsdu_len,
+ 			 "Invalid AMSDU len in TLC notif: %d (Max AMSDU len: %d)\n",
+ 			 size, link_sta->agg.max_amsdu_len))

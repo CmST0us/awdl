@@ -1,0 +1,28 @@
+Subject: iwlwifi：在读取 RX 描述符前同步 DMA
+
+--- a/drivers/net/wireless/intel/iwlwifi/pcie/gen1_2/rx.c
++++ b/drivers/net/wireless/intel/iwlwifi/pcie/gen1_2/rx.c
+@@ -1312,6 +1312,12 @@
+ 	if (WARN_ON(!rxb))
+ 		return;
+ 
++	/* The header is read before any unmap; acquire CPU ownership first.
++	 * This is required on non-coherent DMA platforms, including RK3588.
++	 */
++	dma_sync_single_for_cpu(trans->dev, rxb->page_dma, max_len,
++				DMA_FROM_DEVICE);
++
+ 	while (offset + sizeof(u32) + sizeof(struct iwl_cmd_header) < max_len) {
+ 		struct iwl_rx_packet *pkt;
+ 		struct iwl_cmd_header hdr;
+@@ -1459,6 +1465,10 @@
+ 				goto reuse_without_page;
+ 			}
+ 		}
++
++		if (mapped)
++			dma_sync_single_for_device(trans->dev, rxb->page_dma,
++						   max_len, DMA_FROM_DEVICE);
+ 
+ 		list_add_tail(&rxb->list, &rxq->rx_free);
+ 		rxq->free_count++;

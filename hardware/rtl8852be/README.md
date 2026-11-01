@@ -1,0 +1,7 @@
+# RTL8852BE
+
+PCI `10ec:b852`，hostap 使用 rtl_nan。保留未关联的物理控制接口及原厂 p2p0；逻辑 nan0 由后端承载，业务流量使用原生持久 ndi0。无线策略由 radio.toml 提供，当前启动组合要求 dual_band=false、master_preference=200、发现信标间隔 100 TU。
+
+`hostap` 包含 vendor netlink、NMI/NDI、调度与密钥适配；`driver` 包含固定 Radxa 来源、NAN 补丁及唯一公共 UAPI；`firmware` 包含 U2 基线和正式补丁链。公共 Rust 服务与 Intel 共用。
+
+驱动只支持一个活动数据站点，活动站点不能在线更换为不同密钥。构建安装见[公共入口](../../docs/build.md)，固件能力见[能力说明](firmware/NAN-CAPABILITIES.md)。

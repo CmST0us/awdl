@@ -1,0 +1,91 @@
+Subject: iwlmld：按实际发现窗口信道建立 NAN 调度
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/iface.h
++++ b/drivers/net/wireless/intel/iwlwifi/mld/iface.h
+@@ -140,6 +140,8 @@
+  *	see @iwl_mld_low_latency_cause.
+  * @last_link_activation_time: last time a link was activated, for
+  *	deferring MLO scans (to make them more reliable)
++ * @nan_hb_freq: 5 GHz discovery frequency accepted by FW, or zero if disabled.
++ *	Protected by the wiphy lock; invalidated on stop and hardware restart.
+  * @mld: pointer to the mld structure.
+  * @deflink: default link data, for use in non-MLO,
+  * @link: reference to link data for each valid link, for use in MLO.
+@@ -180,6 +182,7 @@
+ #endif
+ 		u8 low_latency_causes;
+ 		time64_t last_link_activation_time;
++		u16 nan_hb_freq;
+ 	);
+ 	/* And here fields that survive a fw restart */
+ 	struct iwl_mld *mld;
+--- a/drivers/net/wireless/intel/iwlwifi/mld/nan.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/nan.c
+@@ -153,6 +153,7 @@
+ 		.action = cpu_to_le32(action),
+ 	};
+ 	u8 *data __free(kfree) = NULL;
++	int ret;
+ 
+ 	lockdep_assert_wiphy(mld->wiphy);
+ 
+@@ -225,9 +226,17 @@
+ 	if (!iwl_mld_nan_use_nan_stations(mld))
+ 		cmd.sta_id = mld_vif->aux_sta.sta_id;
+ 
+-	return iwl_mld_nan_send_config_cmd(mld, &cmd, data,
+-					   conf->extra_nan_attrs_len +
+-					   conf->vendor_elems_len);
++	ret = iwl_mld_nan_send_config_cmd(mld, &cmd, data,
++					conf->extra_nan_attrs_len +
++					conf->vendor_elems_len);
++	/* Keep the last accepted configuration on a failed update. Copy the
++	 * frequency rather than retaining a pointer into the caller's config.
++	 */
++	if (!ret)
++		mld_vif->nan_hb_freq = conf->band_cfgs[NL80211_BAND_5GHZ].chan ?
++			conf->band_cfgs[NL80211_BAND_5GHZ].chan->center_freq : 0;
++
++	return ret;
+ }
+ 
+ int iwl_mld_start_nan(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+@@ -283,6 +292,7 @@
+ 		     struct ieee80211_vif *vif)
+ {
+ 	struct iwl_mld *mld = IWL_MAC80211_GET_MLD(hw);
++	struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
+ 	struct iwl_nan_config_cmd cmd = {
+ 		.action = cpu_to_le32(FW_CTXT_ACTION_REMOVE),
+ 	};
+@@ -307,6 +317,7 @@
+ 	iwl_mld_cancel_notifications_of_object(mld,
+ 					       IWL_MLD_OBJECT_TYPE_NAN,
+ 					       0);
++	mld_vif->nan_hb_freq = 0;
+ 
+ 	iwl_mld_update_emlsr_block(mld, false, IWL_MLD_EMLSR_BLOCKED_NAN);
+ 
+@@ -397,6 +408,8 @@
+ 	struct wireless_dev *wdev;
+ 	struct ieee80211_channel *chan;
+ 
++	lockdep_assert_wiphy(mld->wiphy);
++
+ 	IWL_DEBUG_INFO(mld, "NAN: DW end: band=%u\n", notif->band);
+ 
+ 	if (IWL_FW_CHECK(mld, !mld_vif, "NAN: DW end without mld_vif\n"))
+@@ -417,8 +430,11 @@
+ 		chan = ieee80211_get_channel(mld->wiphy, 2437);
+ 		break;
+ 	case IWL_NAN_BAND_5GHZ:
+-		/* TODO: use the actual channel */
+-		chan = ieee80211_get_channel(mld->wiphy, 5745);
++		/* A disabled band (including after recovery) has no valid DW. */
++		if (!mld_vif->nan_hb_freq)
++			return;
++		chan = ieee80211_get_channel(mld->wiphy,
++					    mld_vif->nan_hb_freq);
+ 		break;
+ 	default:
+ 		IWL_FW_CHECK(mld, false,

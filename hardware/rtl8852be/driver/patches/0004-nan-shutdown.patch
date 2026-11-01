@@ -1,0 +1,40 @@
+--- a/os_dep/linux/pci_intf.c
++++ b/os_dep/linux/pci_intf.c
+@@ -18,6 +18,7 @@
+ #include <platform_ops.h>
+ #include <linux/pci_regs.h>
+ #include <rtw_trx_pci.h>
++#include "wa_nan_vendor.h"
+ #ifdef CONFIG_RTW_DEDICATED_CMA_POOL
+ #include <linux/of_reserved_mem.h>
+ #include <linux/platform_device.h>
+@@ -1117,7 +1118,28 @@
+ 
+ static void rtw_dev_shutdown(struct pci_dev *pdev)
+ {
+-	rtw_dev_remove(pdev);
++	struct dvobj_priv *dvobj = pci_get_drvdata(pdev);
++	int ret;
++
++	if (!dvobj)
++		return;
++
++	/* NDI holds its own module reference, but PCI shutdown bypasses module
++	 * unloading. Drain NAN while firmware and completion IRQs still run. */
++	ret = rtw_phl_wa_nan_host_stop(GET_PHL_INFO(dvobj));
++	RTW_INFO("NAN shutdown cleanup result=%d\n", ret);
++	if (!ret) {
++		rtw_dev_remove(pdev);
++		return;
++	}
++
++	/* A failed drain retains callback owners until reset. Freeing PHL here
++	 * would leave NDI and in-flight completions pointing to released memory. */
++	dev_set_drv_stopped(dvobj);
++	rtw_hw_stop(dvobj);
++	dev_set_surprise_removed(dvobj);
++	pci_clear_master(pdev);
++	RTW_INFO("NAN shutdown hardware stopped; owners retained until reset\n");
+ }
+ 
+ static int __init rtw_drv_entry(void)

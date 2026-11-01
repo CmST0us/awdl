@@ -1,0 +1,44 @@
+Subject: iwlmld：提交对端时段后更新 TLC
+
+mac80211 在调用驱动前安装新时段，驱动返回错误时恢复旧时段。
+先提交 NAN_PEER_CMD，成功后再排队依赖新时段的 TLC 配置，避免
+对端命令失败后留下新配置及其缓存。TLC 保持原有异步提交方式。
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/nan.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/nan.c
+@@ -954,14 +954,7 @@
+ 		.dataflags[1] = IWL_HCMD_DFL_DUP,
+ 	};
+ 	struct ieee80211_sta *iter;
+-
+-	/* Update TLC in case peer channels were added/removed/updated */
+-	for_each_station(iter, mld->hw) {
+-		struct iwl_mld_sta *tmp = iwl_mld_sta_from_mac80211(iter);
+-
+-		if (tmp->sta_type == STATION_TYPE_NAN_PEER_NDI)
+-			iwl_mld_config_tlc(mld, tmp->vif, iter);
+-	}
++	int ret;
+ 
+ 	for (int i = 0; i < ARRAY_SIZE(sched->maps); i++) {
+ 		if (sched->maps[i].map_id == CFG80211_NAN_INVALID_MAP_ID)
+@@ -1014,5 +1007,17 @@
+ 		}
+ 	}
+ 
+-	return iwl_mld_send_cmd(mld, &hcmd);
+-}
++	ret = iwl_mld_send_cmd(mld, &hcmd);
++	if (ret)
++		return ret;
++
++	/* Queue TLC after sending the updated peer PHY mapping. */
++	for_each_station(iter, mld->hw) {
++		struct iwl_mld_sta *tmp = iwl_mld_sta_from_mac80211(iter);
++
++		if (tmp->sta_type == STATION_TYPE_NAN_PEER_NDI)
++			iwl_mld_config_tlc(mld, tmp->vif, iter);
++	}
++
++	return 0;
++}

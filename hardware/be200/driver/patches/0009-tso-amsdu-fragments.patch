@@ -1,0 +1,84 @@
+Subject: iwlmld：按每个 A-MSDU 实际引用的片段核对 TSO 描述符预算
+
+组成 A-MSDU 时，iwl_tx_tso_segment 把 gso_size 设为 N×MSS，
+skb_segment 在 SG 模式下从 TCP 载荷起点（包含线性区中的载荷）
+每 N×MSS 字节切分一次。每个分段只引用与自身载荷区间相交的页片段，
+跨越分段边界的片段被它覆盖的每个分段引用。
+
+gen2 发送一个 A-MSDU 时，TX 命令与 802.11 头部占 2 个描述符，每个
+子帧头部占 1 个；载荷描述符不跨片段也不跨子帧，数量最多为子帧数
+加载荷块数减 1，载荷块是该 A-MSDU 引用的片段及线性区中的载荷。
+N 个子帧、引用 F 个片段的 A-MSDU 因此最多需要 2N + F + 2 个描述符。
+
+上游检查以整个 GSO 包的片段数作为 F。文件页直接发送时，64 KiB 的包
+有 16–17 个 4 KiB 片段，五子帧按 2×5 + 17 + 1 = 28 计算，超过
+max_skb_frags（22）后退为单子帧；切分后每个 5×1428 字节的 A-MSDU
+最多引用 3 个片段，检查值为 2×5 + 3 + 1 = 14。
+
+检查改用各 A-MSDU 引用片段数的最大值，计数方式与 skb_segment 的
+切分相同。2N + F + 1 不超过 max_skb_frags（描述符上限减 3）时，
+实际需要的描述符仍比上限少至少 2 个。按 A-MSDU 计得的片段数不超过
+整包片段数，上游检查允许的子帧数保持不变；整包只组成一个 A-MSDU
+时与上游相同。超出预算时仍退为单子帧。
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tx.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tx.c
+@@ -811,6 +811,41 @@
+ 
+ #ifdef CONFIG_INET
+ 
++/* Return the largest number of page fragments a single A-MSDU references
++ * once skb_segment() splits the TCP payload, including any payload in the
++ * linear part, every @amsdu_len bytes. A fragment crossing a boundary is
++ * referenced by each A-MSDU it overlaps.
++ */
++static unsigned int iwl_mld_tso_amsdu_frags(const struct sk_buff *skb,
++					    unsigned int amsdu_len)
++{
++	const struct skb_shared_info *shinfo = skb_shinfo(skb);
++	unsigned int pos = skb_headlen(skb) - skb_transport_offset(skb) -
++			   tcp_hdrlen(skb);
++	unsigned int amsdu = pos / amsdu_len;
++	unsigned int frags = 0, max_frags = 0;
++
++	for (int i = 0; i < shinfo->nr_frags; i++) {
++		unsigned int end = pos + skb_frag_size(&shinfo->frags[i]);
++
++		if (pos / amsdu_len != amsdu) {
++			amsdu = pos / amsdu_len;
++			frags = 0;
++		}
++		frags++;
++		max_frags = max(max_frags, frags);
++
++		/* A crossing fragment starts every later A-MSDU it overlaps */
++		if (end > pos && (end - 1) / amsdu_len != amsdu) {
++			amsdu = (end - 1) / amsdu_len;
++			frags = 1;
++		}
++		pos = end;
++	}
++
++	return max_frags;
++}
++
+ /* This function handles the segmentation of a large TSO packet into multiple
+  * MPDUs, ensuring that the resulting segments conform to AMSDU limits and
+  * constraints.
+@@ -869,12 +904,13 @@
+ 	tcp_payload_len = skb_tail_pointer(skb) - skb_transport_header(skb) -
+ 		tcp_hdrlen(skb) + skb->data_len;
+ 
+-	/* Make sure we have enough TBs for the A-MSDU:
++	/* Make sure we have enough TBs for each A-MSDU:
+ 	 *	2 for each subframe
+-	 *	1 more for each fragment
++	 *	1 more for each fragment the A-MSDU references
+ 	 *	1 more for the potential data in the header
+ 	 */
+-	if ((num_subframes * 2 + skb_shinfo(skb)->nr_frags + 1) >
++	if ((num_subframes * 2 +
++	     iwl_mld_tso_amsdu_frags(skb, num_subframes * mss) + 1) >
+ 	    mld->trans->info.max_skb_frags)
+ 		num_subframes = 1;
+ 

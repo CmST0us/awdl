@@ -1,0 +1,39 @@
+[Unit]
+# 服务在 systemd 中的显示名称。
+Description=Wi-Fi Aware Publisher
+# 服务必须使用系统 D-Bus。
+Requires=dbus.service
+# 在本地文件系统、设备管理和系统总线之后启动。
+After=local-fs.target NetworkManager.service dbus.service
+
+[Service]
+# 取得 BusName 后才宣布就绪。
+Type=dbus
+# 现有公共接口标识，客户端依此连接。
+BusName=org.be200.WiFiAware1
+# 启动公共守护进程，读取 /etc/wifiawared/config.toml。
+ExecStart=/usr/local/bin/wifiawared serve
+# 异常退出时重新启动。
+Restart=on-failure
+# 异常重启间隔，单位秒。
+RestartSec=5
+# 重启期间保持依赖服务的生命周期关联。
+RestartMode=direct
+# 默认运行目录名，位于 /run。
+RuntimeDirectory=wifiawared
+# 运行目录权限，以八进制表示。
+RuntimeDirectoryMode=0700
+# 默认配对状态目录名，位于 /var/lib，升级保留。
+StateDirectory=wifiawared
+# 配对状态目录权限，以八进制表示。
+StateDirectoryMode=0700
+# 新文件权限掩码，避免暴露配对密钥。
+UMask=0077
+# 先请求主进程退出，超时后清理整个服务进程组。
+KillMode=mixed
+# systemd 退出兜底，单位秒，需覆盖配置的 hostap_stop_seconds。
+TimeoutStopSec=15
+
+[Install]
+# 启用后随多用户系统启动。
+WantedBy=multi-user.target

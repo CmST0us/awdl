@@ -1,0 +1,3 @@
+*.patch -whitespace
+*.ucode binary
+*.pnvm binary

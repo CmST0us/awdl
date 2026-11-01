@@ -1,0 +1,35 @@
+Subject: iwlmld：为缺少 WRDD 的中国平台提供地区配置
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/mcc.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/mcc.c
+@@ -12,6 +12,15 @@
+ #include "mld.h"
+ #include "hcmd.h"
+ #include "mcc.h"
++
++/* Explicit country configuration for platforms without UEFI/ACPI WRDD.
++ * Like WRDD, this supplies CN only; firmware still decides channel permissions.
++ * Never infer it from the OEM test API or enable it by default.
++ */
++static bool platform_cn;
++module_param(platform_cn, bool, 0400);
++MODULE_PARM_DESC(platform_cn,
++		"Supply CN platform MCC when WRDD is absent (default: false)");
+ 
+ /* It is the caller's responsibility to free the pointer returned here */
+ static struct iwl_mcc_update_resp_v8 *
+@@ -247,7 +256,13 @@
+ 	if (IS_ERR_OR_NULL(regd))
+ 		return -EIO;
+ 
+-	if (!iwl_bios_get_mcc(&mld->fwrt, mcc)) {
++	retval = iwl_bios_get_mcc(&mld->fwrt, mcc);
++	if (retval == -ENOENT && platform_cn) {
++		memcpy(mcc, "CN", sizeof(mcc));
++		retval = 0;
++		IWL_INFO(mld, "Using explicitly configured CN platform MCC (WRDD absent)\n");
++	}
++	if (!retval) {
+ 		kfree(regd);
+ 		regd = iwl_mld_get_regdomain(mld, mcc, MCC_SOURCE_BIOS, NULL);
+ 		if (IS_ERR_OR_NULL(regd))

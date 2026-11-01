@@ -1,0 +1,45 @@
+# 无线服务运行默认值；修改后重启 wifiawared 生效。
+
+# 完整 PCI 地址，如 0000:03:00.0；空字符串选择唯一受支持设备。
+# 存在多个候选时必须指定，接口名称由该设备自动解析。
+pci = ""
+# 期望的数据主信道频率，单位 MHz；实际可用性由所选驱动确认。
+frequency = 5745
+# 目标机器上保存配对身份和密钥的绝对路径；升级保留目录内容。
+state = "/var/lib/wifiawared"
+# 目标机器上控制套接字等临时运行数据的绝对路径。
+runtime = "/run/wifiawared"
+# 随本组件安装的 hostap 可执行文件，由无线服务启动。
+supplicant = "/usr/local/libexec/wifiawared/wpa_supplicant"
+# 可选：指定匹配所选硬件的完整无线策略文件，路径位于目标机器。
+# 省略时读取该硬件随组件安装的 radio.toml。
+# radio_profile = "/etc/wifiawared/radio.toml"
+
+[identity]
+# 配对发现信息中的厂商展示名，由部署产品决定。
+vendor_name = "Wi-Fi Aware"
+# 配对发现信息中的产品型号展示名，与所用网卡型号独立。
+model_name = "Wi-Fi Aware Device"
+# 系统配对界面中的设备展示名，不作为配对密钥或设备唯一标识。
+pairing_name = "Aware Device"
+
+# 各阶段失败期限均为正整数秒；收到完成事件立即推进。
+[timeouts]
+# 等待一条 hostap 控制命令回复的最长时间。
+control_reply_seconds = 3
+# hostap 子进程启动后，等待控制接口就绪的最长时间。
+hostap_ready_seconds = 5
+# NAN 启动后，等待集群建立的最长时间。
+cluster_join_seconds = 10
+# 单次配对或缓存身份认证的最长时间，与配对窗口时长独立。
+authentication_seconds = 30
+# 单次 NDP 建链的最长时间，不限制已建立会话的持续时间。
+ndp_setup_seconds = 30
+# 终止 NDP 时保留清理责任并等待结束的最长时间。
+ndp_end_seconds = 10
+# 请求 hostap 正常退出后，等待子进程及其 NAN 接口释放的总期限。
+hostap_stop_seconds = 5
+
+[retention]
+# 无活动会话的内存 peer 记录保留时间，正整数秒；不删除配对凭据。
+inactive_peer_seconds = 600

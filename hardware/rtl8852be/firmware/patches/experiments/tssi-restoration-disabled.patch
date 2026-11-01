@@ -1,0 +1,10 @@
+--- a/driver/nan/wa_nan_rf_hal.h
++++ b/driver/nan/wa_nan_rf_hal.h
+@@ -60,6 +60,7 @@
+     for (path = 0; path < 2; path++) {
+         u32 offset = path << 13;
+         u32 enabled = !!(rtw_hal_read_bbreg(hal, 0x5820 + offset, 0xffffffff) & 0x80000000U);
++        enabled = 0;
+         u32 txagc = rtw_hal_read_bbreg(hal, 0x5818 + offset, 0xffffffff) & 0xff;
+         words[path][0] = 9 | ((u32)index << 8) | ((u32)center << 16) |
+                          ((u32)width << 24);

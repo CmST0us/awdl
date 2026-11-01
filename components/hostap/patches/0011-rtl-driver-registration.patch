@@ -1,0 +1,32 @@
+--- a/src/drivers/drivers.c
++++ b/src/drivers/drivers.c
+@@ -11,8 +11,15 @@
+ #include "driver.h"
+ 
+ 
++#ifdef CONFIG_DRIVER_RTL_NAN
++extern const struct wpa_driver_ops wpa_driver_rtl_nan_ops;
++#endif
++
+ const struct wpa_driver_ops *const wpa_drivers[] =
+ {
++#ifdef CONFIG_DRIVER_RTL_NAN
++	&wpa_driver_rtl_nan_ops,
++#endif
+ #ifdef CONFIG_DRIVER_NL80211
+ 	&wpa_driver_nl80211_ops,
+ #endif /* CONFIG_DRIVER_NL80211 */
+--- a/src/drivers/drivers.mak
++++ b/src/drivers/drivers.mak
+@@ -9,6 +9,11 @@
+ DRV_LIBS =
+ DRV_WPA_LIBS =
+ DRV_AP_LIBS =
++
++ifdef CONFIG_DRIVER_RTL_NAN
++DRV_CFLAGS += -DCONFIG_DRIVER_RTL_NAN
++DRV_LIBS += $(RTL_NAN_LIB)
++endif
+ 
+ ##### COMMON DRIVERS
+ 

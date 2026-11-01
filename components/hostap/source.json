@@ -1,0 +1,8 @@
+{
+  "name": "wpa_supplicant",
+  "version": "2.12",
+  "license": "BSD-3-Clause",
+  "repository": "https://w1.fi/hostap.git",
+  "archive": "https://w1.fi/releases/wpa_supplicant-2.12.tar.gz",
+  "directory": "wpa_supplicant-2.12"
+}

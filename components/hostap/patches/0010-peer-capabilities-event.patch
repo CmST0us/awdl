@@ -1,0 +1,41 @@
+--- a/wpa_supplicant/nan_supplicant.c
++++ b/wpa_supplicant/nan_supplicant.c
+@@ -4588,6 +4588,10 @@
+ 			const u8 *buf, size_t len, int rssi)
+ {
+ 	bool store_peer;
++#ifdef CONFIG_NAN
++	bool had_capa = wpa_s->nan &&
++		nan_peer_get_device_capabilities(wpa_s->nan, src, 0);
++#endif
+ 
+ 	if (!wpa_s->nan_de)
+ 		return;
+@@ -4607,6 +4611,9 @@
+ 	 */
+ 	if (store_peer || nan_has_peer(wpa_s->nan, src))
+ 		nan_add_peer(wpa_s->nan, src, buf, len);
++	if (!had_capa && nan_peer_get_device_capabilities(wpa_s->nan, src, 0))
++		wpa_msg(wpa_s, MSG_INFO, "NAN-PEER-CAPABILITIES peer_nmi="
++			MACSTR, MAC2STR(src));
+ #else /* CONFIG_NAN */
+ 	(void) store_peer;
+ #endif /* CONFIG_NAN */
+@@ -5096,7 +5103,16 @@
+ 			nan_sdf_attributes_len(mgmt->u.action.u.naf.variable,
+ 				len - IEEE80211_MIN_ACTION_LEN(naf));
+ 
+-	nan_action_rx(wpa_s->nan, mgmt, len);
++	{
++		bool had_capa = nan_peer_get_device_capabilities(wpa_s->nan,
++							mgmt->sa, 0);
++		nan_action_rx(wpa_s->nan, mgmt, len);
++		if (!had_capa && nan_peer_get_device_capabilities(wpa_s->nan,
++							       mgmt->sa, 0))
++			wpa_msg(wpa_s, MSG_INFO,
++				"NAN-PEER-CAPABILITIES peer_nmi=" MACSTR,
++				MAC2STR(mgmt->sa));
++	}
+ }
+ 
+ 

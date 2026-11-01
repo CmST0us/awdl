@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+AWARE_PROJECT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+export AWARE_PROJECT_ROOT
+case "${1:-}" in
+  install-*)
+    case "$(uname -s):$(uname -m)" in
+      Linux:aarch64) host=aarch64-unknown-linux-gnu ;;
+      Linux:x86_64) host=x86_64-unknown-linux-gnu ;;
+      Darwin:arm64) host=aarch64-apple-darwin ;;
+      Darwin:x86_64) host=x86_64-apple-darwin ;;
+      *) echo '不支持的安装工具运行平台' >&2; exit 1 ;;
+    esac
+    tool="$AWARE_PROJECT_ROOT/.build/tools/$host/aware-build"
+    [ -x "$tool" ] || { echo '请先在本机构建组件，生成当前运行平台的 .build/tools 工具' >&2; exit 1; }
+    exec "$tool" "$@"
+    ;;
+esac
+: "${CARGO_HOME:=$AWARE_PROJECT_ROOT/.build/cargo}"
+export CARGO_HOME
+host=$("${RUSTC:-rustc}" -vV | sed -n 's/^host: //p')
+exec "${CARGO:-cargo}" run --locked --quiet --manifest-path "$AWARE_PROJECT_ROOT/Cargo.toml" \
+  --target-dir "$AWARE_PROJECT_ROOT/.build/rust" --target "$host" -p aware-build -- "$@"

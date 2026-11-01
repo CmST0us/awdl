@@ -1,0 +1,6 @@
+{
+  "name": "dw",
+  "offset": "0x38458",
+  "expected": "805c3560",
+  "replacement": "005c3560"
+}

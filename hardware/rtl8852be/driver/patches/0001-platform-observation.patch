@@ -1,0 +1,561 @@
+--- a/phl/hal_g6/mac/mac_ax/fwcmd.c
++++ b/phl/hal_g6/mac/mac_ax/fwcmd.c
+@@ -14,6 +14,7 @@
+  ******************************************************************************/
+ 
+ #include "fwcmd.h"
++#include "wa_observe.h"
+ #include "mcc.h"
+ #include "mac_priv.h"
+ #include "twt.h"
+@@ -530,6 +531,8 @@
+ 		}
+ 	}
+ 
++	if (cat == FWCMD_H2C_CAT_MAC && _class_ == FWCMD_H2C_CL_NAN)
++		wa_obs_record("h2c-packed", (u8 *)hdr, FWCMD_HDR_LEN, MACSUCCESS);
+ 	return MACSUCCESS;
+ }
+ 
+@@ -755,6 +758,8 @@
+ 		}
+ 	}
+ 
++	if (cat == FWCMD_H2C_CAT_MAC && _class_ == FWCMD_H2C_CL_NAN)
++		wa_obs_record("h2c-packed", (u8 *)hdr, FWCMD_HDR_LEN, MACSUCCESS);
+ 	return 0;
+ }
+ 
+@@ -1074,11 +1079,11 @@
+ static u32 c2h_fwi_rev_ack(struct mac_ax_adapter *adapter, u8 *buf, u32 len,
+ 			   struct rtw_c2h_info *info)
+ {
+-	u32 data = *(u32 *)(buf + FWCMD_HDR_LEN);
++	u32 data = get_unaligned_le32(buf + FWCMD_HDR_LEN);
+ 	u32 ret;
+ 	u8 cat, _class, func, seq;
+ 
+-	data = le32_to_cpu(data);
++
+ 
+ 	cat = GET_FIELD(data, FWCMD_C2H_REC_ACK_CAT);
+ 	_class = GET_FIELD(data, FWCMD_C2H_REC_ACK_CLASS);
+@@ -1468,11 +1473,11 @@
+ static u32 c2h_fwi_done_ack(struct mac_ax_adapter *adapter, u8 *buf, u32 len,
+ 			    struct rtw_c2h_info *info)
+ {
+-	u32 data = *(u32 *)(buf + FWCMD_HDR_LEN);
++	u32 data = get_unaligned_le32(buf + FWCMD_HDR_LEN);
+ 	u32 ret;
+ 	u8 cat, _class, func, _return, seq;
+ 
+-	data = le32_to_cpu(data);
++
+ 
+ 	cat = GET_FIELD(data, FWCMD_C2H_REC_ACK_CAT);
+ 	_class = GET_FIELD(data, FWCMD_C2H_DONE_ACK_CLASS);
+@@ -1581,8 +1586,7 @@
+ 	u32 hdr0;
+ 	u32 func;
+ 
+-	hdr0 = ((struct fwcmd_hdr *)buf)->hdr0;
+-	hdr0 = le32_to_cpu(hdr0);
++	hdr0 = get_unaligned_le32(buf);
+ 
+ 	func = GET_FIELD(hdr0, C2H_HDR_FUNC);
+ 
+@@ -2755,8 +2759,8 @@
+ 		return MACNPTR;
+ 	}
+ 
+-	act_schedule.dword0 = le32_to_cpu(*(u32 *)(buf + FWCMD_HDR_LEN));
+-	act_schedule.dword1 = le32_to_cpu(*(u32 *)(buf + FWCMD_HDR_LEN + 4));
++	act_schedule.dword0 = get_unaligned_le32(buf + FWCMD_HDR_LEN);
++	act_schedule.dword1 = get_unaligned_le32(buf + FWCMD_HDR_LEN + 4);
+ 	ack_info = &adapter->nan_info.nan_act_ack_info;
+ 	ack_info->schedule_id = GET_FIELD(act_schedule.dword1,
+ 					  FWCMD_C2H_ACT_SCHEDULE_REQ_ACK_SCHEDULE_ID);
+@@ -2775,13 +2779,13 @@
+ 		return MACNPTR;
+ 	}
+ 
+-	cluster_info.dword0 = le32_to_cpu(*(u32 *)(buf + FWCMD_HDR_LEN));
+-	cluster_info.dword1 = le32_to_cpu(*(u32 *)(buf + FWCMD_HDR_LEN + 4));
+-	cluster_info.dword2 = le32_to_cpu(*(u32 *)(buf + FWCMD_HDR_LEN + 8));
+-	cluster_info.dword3 = le32_to_cpu(*(u32 *)(buf + FWCMD_HDR_LEN + 12));
+-	cluster_info.dword4 = le32_to_cpu(*(u32 *)(buf + FWCMD_HDR_LEN + 16));
+-	cluster_info.dword5 = le32_to_cpu(*(u32 *)(buf + FWCMD_HDR_LEN + 20));
+-	cluster_info.dword6 = le32_to_cpu(*(u32 *)(buf + FWCMD_HDR_LEN + 24));
++	cluster_info.dword0 = get_unaligned_le32(buf + FWCMD_HDR_LEN);
++	cluster_info.dword1 = get_unaligned_le32(buf + FWCMD_HDR_LEN + 4);
++	cluster_info.dword2 = get_unaligned_le32(buf + FWCMD_HDR_LEN + 8);
++	cluster_info.dword3 = get_unaligned_le32(buf + FWCMD_HDR_LEN + 12);
++	cluster_info.dword4 = get_unaligned_le32(buf + FWCMD_HDR_LEN + 16);
++	cluster_info.dword5 = get_unaligned_le32(buf + FWCMD_HDR_LEN + 20);
++	cluster_info.dword6 = get_unaligned_le32(buf + FWCMD_HDR_LEN + 24);
+ 
+ 	nan_info = &adapter->nan_info;
+ 
+@@ -2826,9 +2830,9 @@
+ 		return MACNPTR;
+ 	}
+ 
+-	tsf_info.dword0 = le32_to_cpu(*(u32 *)(buf + FWCMD_HDR_LEN));
+-	tsf_info.dword1 = le32_to_cpu(*(u32 *)(buf + FWCMD_HDR_LEN + 4));
+-	tsf_info.dword2 = le32_to_cpu(*(u32 *)(buf + FWCMD_HDR_LEN + 8));
++	tsf_info.dword0 = get_unaligned_le32(buf + FWCMD_HDR_LEN);
++	tsf_info.dword1 = get_unaligned_le32(buf + FWCMD_HDR_LEN + 4);
++	tsf_info.dword2 = get_unaligned_le32(buf + FWCMD_HDR_LEN + 8);
+ 
+ 	nan_info = &adapter->nan_info;
+ 
+@@ -2861,8 +2865,7 @@
+ 	u32 hdr0;
+ 	u32 func;
+ 
+-	hdr0 = ((struct fwcmd_hdr *)buf)->hdr0;
+-	hdr0 = le32_to_cpu(hdr0);
++	hdr0 = get_unaligned_le32(buf);
+ 
+ 	func = GET_FIELD(hdr0, C2H_HDR_FUNC);
+ 
+@@ -2936,16 +2939,16 @@
+ 	u32 val;
+ 	u8 c2h_seq;
+ 
+-	val = le32_to_cpu(hdr->hdr0);
++	val = get_unaligned_le32((u8 *)hdr);
+ 	info->c2h_cat = GET_FIELD(val, C2H_HDR_CAT);
+ 	info->c2h_class = GET_FIELD(val, C2H_HDR_CLASS);
+ 	info->c2h_func = GET_FIELD(val, C2H_HDR_FUNC);
+ 	c2h_seq = GET_FIELD(val, C2H_HDR_C2H_SEQ);
+ 
+-	val = le32_to_cpu(hdr->hdr1);
++	val = get_unaligned_le32((u8 *)hdr + 4);
+ 	info->content_len = GET_FIELD(val, C2H_HDR_TOTAL_LEN) -
+ 				FWCMD_HDR_LEN;
+-	info->content = (u8 *)(hdr + 1);
++	info->content = (u8 *)hdr + FWCMD_HDR_LEN;
+ 
+ 	if (adapter->sm.h2c_c2h_mon == MAC_AX_H2C_C2H_MON_ON) {
+ 		if (info->content_len >= 4) {
+@@ -2953,7 +2956,7 @@
+ 					"SEQ: %d, Len: %d, 1'st DW: %08x\n",
+ 					info->c2h_cat, info->c2h_class, info->c2h_func,
+ 					c2h_seq, info->content_len + FWCMD_HDR_LEN,
+-					*((u32 *)(hdr + 1)));
++					get_unaligned_le32((u8 *)hdr + FWCMD_HDR_LEN));
+ 		} else {
+ 			PLTFM_MSG_TRACE("[h2c_c2h_mon] C2H CAT: %d, CLASS: %d, FUNC: %d, "\
+ 					"SEQ: %d, Len: %d\n",
+@@ -2965,7 +2968,7 @@
+ 	return MACSUCCESS;
+ }
+ 
+-u32 mac_process_c2h(struct mac_ax_adapter *adapter, u8 *buf, u32 len,
++static u32 wa_original_process_c2h(struct mac_ax_adapter *adapter, u8 *buf, u32 len,
+ 		    u8 *ret)
+ {
+ 	u8 _class_, result;
+@@ -2980,7 +2983,7 @@
+ 	hdr = (struct fwcmd_hdr *)buf;
+ 
+ 	info = (struct rtw_c2h_info *)ret;
+-	val = le32_to_cpu(hdr->hdr0);
++	val = get_unaligned_le32((u8 *)hdr);
+ 
+ 	result = c2h_field_parsing(adapter, hdr, info);
+ 	if (result) {
+@@ -3019,6 +3022,51 @@
+ 	}
+ 
+ 	return handler(adapter, buf, len, info);
++}
++
++u32 mac_process_c2h(struct mac_ax_adapter *adapter, u8 *buf, u32 len, u8 *ret)
++{
++ u32 h0, h1, total, cat, cls, func, need = 0, rc;
++ bool observe;
++ if (!buf || len < FWCMD_HDR_LEN) {
++  wa_obs_record("c2h-short-header", buf, buf ? len : 0, MACBUFSZ);
++  return MACBUFSZ;
++ }
++ h0 = get_unaligned_le32(buf); h1 = get_unaligned_le32(buf + 4);
++ if (GET_FIELD(h0, C2H_HDR_DEL_TYPE) != FWCMD_TYPE_C2H) {
++  wa_obs_record("c2h-wrong-type", buf, 8, MACNOITEM);
++  return MACNOITEM;
++ }
++ total = GET_FIELD(h1, C2H_HDR_TOTAL_LEN);
++ cat = GET_FIELD(h0, C2H_HDR_CAT); cls = GET_FIELD(h0, C2H_HDR_CLASS);
++ func = GET_FIELD(h0, C2H_HDR_FUNC);
++ observe = cat == FWCMD_C2H_CAT_MAC && (cls == FWCMD_C2H_CL_NAN || (cls == FWCMD_C2H_CL_FW_INFO && (func <= 1 || func == FWCMD_C2H_FUNC_BCN_CNT)));
++ if (total < FWCMD_HDR_LEN || total > len) {
++  wa_obs_record("c2h-invalid-total", buf, len < 8 ? len : 8, MACBUFSZ);
++  return MACBUFSZ;
++ }
++ if (cat == FWCMD_C2H_CAT_MAC && cls == FWCMD_C2H_CL_FW_INFO && func <= 1 && total < FWCMD_HDR_LEN + 4) {
++  wa_obs_record("c2h-short-ack", buf, total, MACBUFSZ);
++  return MACBUFSZ;
++ }
++ if (cat == FWCMD_C2H_CAT_MAC && cls == FWCMD_C2H_CL_FW_INFO &&
++     func == FWCMD_C2H_FUNC_BCN_CNT && total < FWCMD_HDR_LEN + 7) {
++  wa_obs_record("c2h-short-bcn-count", buf, total, MACBUFSZ);
++  return MACBUFSZ;
++ }
++ if (cat == FWCMD_C2H_CAT_MAC && cls == FWCMD_C2H_CL_NAN) {
++  if (func <= 5) need = 8;
++  else if (func == 6) need = 28;
++  else if (func == 7) need = 12;
++  if (total - FWCMD_HDR_LEN < need) {
++   wa_obs_record("c2h-short-nan", buf, total, MACBUFSZ);
++   return MACBUFSZ;
++  }
++ }
++ if (observe) wa_obs_record("c2h-received", buf, total, 0);
++ rc = wa_original_process_c2h(adapter, buf, total, ret);
++ if (observe) wa_obs_record("c2h-dispatched", buf, total, rc);
++ return rc;
+ }
+ 
+ u32 mac_outsrc_h2c_common(struct mac_ax_adapter *adapter,
+@@ -3708,8 +3756,8 @@
+ 	struct fwcmd_act_schedule_req_ack act_schedule;
+ 	struct mac_ax_nan_info *nan_info;
+ 
+-	act_schedule.dword0 = le32_to_cpu(*(u32 *)(c2h->content));
+-	act_schedule.dword1 = le32_to_cpu(*(u32 *)(c2h->content + 4));
++	act_schedule.dword0 = get_unaligned_le32(c2h->content);
++	act_schedule.dword1 = get_unaligned_le32(c2h->content + 4);
+ 	nan_info = (struct mac_ax_nan_info *)c2h_info;
+ 	nan_info->nan_act_ack_info.schedule_id =
+ 		GET_FIELD(act_schedule.dword1, FWCMD_C2H_ACT_SCHEDULE_REQ_ACK_SCHEDULE_ID);
+@@ -3727,13 +3775,13 @@
+ 	struct fwcmd_nan_info_notify_cluster_info cluster_info;
+ 	struct mac_ax_nan_info *nan_info;
+ 
+-	cluster_info.dword0 = le32_to_cpu(*(u32 *)(c2h->content));
+-	cluster_info.dword1 = le32_to_cpu(*(u32 *)(c2h->content + 4));
+-	cluster_info.dword2 = le32_to_cpu(*(u32 *)(c2h->content + 8));
+-	cluster_info.dword3 = le32_to_cpu(*(u32 *)(c2h->content + 12));
+-	cluster_info.dword4 = le32_to_cpu(*(u32 *)(c2h->content + 16));
+-	cluster_info.dword5 = le32_to_cpu(*(u32 *)(c2h->content + 20));
+-	cluster_info.dword6 = le32_to_cpu(*(u32 *)(c2h->content + 24));
++	cluster_info.dword0 = get_unaligned_le32(c2h->content);
++	cluster_info.dword1 = get_unaligned_le32(c2h->content + 4);
++	cluster_info.dword2 = get_unaligned_le32(c2h->content + 8);
++	cluster_info.dword3 = get_unaligned_le32(c2h->content + 12);
++	cluster_info.dword4 = get_unaligned_le32(c2h->content + 16);
++	cluster_info.dword5 = get_unaligned_le32(c2h->content + 20);
++	cluster_info.dword6 = get_unaligned_le32(c2h->content + 24);
+ 
+ 	nan_info = (struct mac_ax_nan_info *)c2h_info;
+ 	nan_info->rpt_cluster_id[0] = GET_FIELD(cluster_info.dword1,
+@@ -3776,9 +3824,9 @@
+ 	struct fwcmd_nan_info_notify_tsf_info tsf_info;
+ 	struct mac_ax_nan_info *nan_info;
+ 
+-	tsf_info.dword0 = le32_to_cpu(*(u32 *)(c2h->content));
+-	tsf_info.dword1 = le32_to_cpu(*(u32 *)(c2h->content + 4));
+-	tsf_info.dword2 = le32_to_cpu(*(u32 *)(c2h->content + 8));
++	tsf_info.dword0 = get_unaligned_le32(c2h->content);
++	tsf_info.dword1 = get_unaligned_le32(c2h->content + 4);
++	tsf_info.dword2 = get_unaligned_le32(c2h->content + 8);
+ 	nan_info = (struct mac_ax_nan_info *)c2h_info;
+ 	nan_info->rpt_port_dwst_low = GET_FIELD(tsf_info.dword1,
+ 						FWCMD_C2H_NAN_INFO_NOTIFY_TSF_INFO_PORT_DWST_LOW);
+@@ -3861,7 +3909,7 @@
+ 	return MACSUCCESS;
+ }
+ 
+-u32 mac_h2c_common(struct mac_ax_adapter *adapter,
++static u32 wa_original_h2c_common(struct mac_ax_adapter *adapter,
+ 		   struct h2c_info *info, u32 *content)
+ {
+ 	u32 ret = 0;
+@@ -3962,3 +4010,13 @@
+ 
+ 	return ret;
+ }
++
++u32 mac_h2c_common(struct mac_ax_adapter *adapter, struct h2c_info *info, u32 *content)
++{
++ u32 rc;
++ bool observe = info->h2c_cat == FWCMD_H2C_CAT_MAC && info->h2c_class == FWCMD_H2C_CL_NAN;
++ if (observe) wa_obs_record("h2c-request-payload", (u8 *)content, info->content_len, 0);
++ rc = wa_original_h2c_common(adapter, info, content);
++ if (observe) wa_obs_record("h2c-host-result", (u8 *)content, info->content_len, rc);
++ return rc;
++}
+--- a/phl/hal_g6/mac/mac_ax/fwdl.c
++++ b/phl/hal_g6/mac/mac_ax/fwdl.c
+@@ -14,6 +14,12 @@
+  ******************************************************************************/
+ 
+ #include "fwdl.h"
++#include "wa_observe.h"
++#include <crypto/sha2.h>
++atomic64_t wa_obs_epoch = ATOMIC64_INIT(0);
++atomic64_t wa_obs_generation = ATOMIC64_INIT(0);
++atomic64_t wa_obs_events = ATOMIC64_INIT(0);
++
+ 
+ static inline u32 fwdl_precheck(struct mac_ax_adapter *adapter)
+ {
+@@ -1030,11 +1036,12 @@
+ 	struct fw_bin_info info;
+ 	struct mac_ax_intf_ops *ops = adapter_to_intf_ops(adapter);
+ 
++	pr_info("WA_OBS redownload-enter ns=%llu identity=unproven\n", (unsigned long long)ktime_get_ns());
+ 	//FWREDL funtion is available only on 8852B
+ 	if (!IS_SUPPORT_REDL) {
+ 		PLTFM_MSG_ERR("%s: FWREDL is available only on 8852B/8851B/8852BT\n",
+ 			      __func__);
+-		return MACSUCCESS;
++		pr_info("WA_OBS redownload-end result=0 identity=unproven\n"); return MACSUCCESS;
+ 	}
+ 
+ 	ret = fwhdr_parser(adapter, fw, len, &info);
+@@ -1045,7 +1052,7 @@
+ 
+ 	if (!info.is_fw_use_ple) {
+ 		PLTFM_MSG_WARN("[WARN]%s: no need to redownload\n", __func__);
+-		return MACSUCCESS;
++		pr_info("WA_OBS redownload-end result=0 identity=unproven\n"); return MACSUCCESS;
+ 	}
+ 	ret = update_fw_ver(adapter, (struct fwhdr_hdr_t *)fw);
+ 	if (ret) {
+@@ -1074,12 +1081,53 @@
+ 	}
+ 
+ 	mac_scanofld_reset_state(adapter);
+-	return MACSUCCESS;
++	pr_info("WA_OBS redownload-end result=0 identity=unproven\n"); return MACSUCCESS;
+ 
+ fwdl_err:
+ 	fwdl_fail_dump(adapter, &info, ret);
+ 
+-	return ret;
++	pr_info("WA_OBS redownload-end result=%u identity=unproven\n", ret); return ret;
++}
++
++static const char *wa_obs_symbol(u8 *fw)
++{
++#if defined(INTERNAL_FW_CONTENT_8852B_CBV_NIC)
++ if (fw && fw == INTERNAL_FW_CONTENT_8852B_CBV_NIC) return WA_OBS_STRING(INTERNAL_FW_CONTENT_8852B_CBV_NIC);
++#endif
++#if defined(INTERNAL_FW_CONTENT_8852B_CBV_NICCE)
++ if (fw && fw == INTERNAL_FW_CONTENT_8852B_CBV_NICCE) return WA_OBS_STRING(INTERNAL_FW_CONTENT_8852B_CBV_NICCE);
++#endif
++#if defined(INTERNAL_FW_CONTENT_8852B_CBV_NICCE_BPLUS)
++ if (fw && fw == INTERNAL_FW_CONTENT_8852B_CBV_NICCE_BPLUS) return WA_OBS_STRING(INTERNAL_FW_CONTENT_8852B_CBV_NICCE_BPLUS);
++#endif
++#if defined(INTERNAL_FW_CONTENT_8852B_CBV_NIC_BPLUS)
++ if (fw && fw == INTERNAL_FW_CONTENT_8852B_CBV_NIC_BPLUS) return WA_OBS_STRING(INTERNAL_FW_CONTENT_8852B_CBV_NIC_BPLUS);
++#endif
++#if defined(INTERNAL_FW_CONTENT_8852B_CBV_WOWLAN)
++ if (fw && fw == INTERNAL_FW_CONTENT_8852B_CBV_WOWLAN) return WA_OBS_STRING(INTERNAL_FW_CONTENT_8852B_CBV_WOWLAN);
++#endif
++#if defined(INTERNAL_FW_CONTENT_8852B_CBV_WOWLAN_BPLUS)
++ if (fw && fw == INTERNAL_FW_CONTENT_8852B_CBV_WOWLAN_BPLUS) return WA_OBS_STRING(INTERNAL_FW_CONTENT_8852B_CBV_WOWLAN_BPLUS);
++#endif
++#if defined(INTERNAL_FW_CONTENT_8852B_CCV_NIC)
++ if (fw && fw == INTERNAL_FW_CONTENT_8852B_CCV_NIC) return WA_OBS_STRING(INTERNAL_FW_CONTENT_8852B_CCV_NIC);
++#endif
++#if defined(INTERNAL_FW_CONTENT_8852B_CCV_NICCE)
++ if (fw && fw == INTERNAL_FW_CONTENT_8852B_CCV_NICCE) return WA_OBS_STRING(INTERNAL_FW_CONTENT_8852B_CCV_NICCE);
++#endif
++#if defined(INTERNAL_FW_CONTENT_8852B_CCV_NICCE_BPLUS)
++ if (fw && fw == INTERNAL_FW_CONTENT_8852B_CCV_NICCE_BPLUS) return WA_OBS_STRING(INTERNAL_FW_CONTENT_8852B_CCV_NICCE_BPLUS);
++#endif
++#if defined(INTERNAL_FW_CONTENT_8852B_CCV_NIC_BPLUS)
++ if (fw && fw == INTERNAL_FW_CONTENT_8852B_CCV_NIC_BPLUS) return WA_OBS_STRING(INTERNAL_FW_CONTENT_8852B_CCV_NIC_BPLUS);
++#endif
++#if defined(INTERNAL_FW_CONTENT_8852B_CCV_WOWLAN)
++ if (fw && fw == INTERNAL_FW_CONTENT_8852B_CCV_WOWLAN) return WA_OBS_STRING(INTERNAL_FW_CONTENT_8852B_CCV_WOWLAN);
++#endif
++#if defined(INTERNAL_FW_CONTENT_8852B_CCV_WOWLAN_BPLUS)
++ if (fw && fw == INTERNAL_FW_CONTENT_8852B_CCV_WOWLAN_BPLUS) return WA_OBS_STRING(INTERNAL_FW_CONTENT_8852B_CCV_WOWLAN_BPLUS);
++#endif
++ return "external-or-unmapped";
+ }
+ 
+ u32 mac_fwdl(struct mac_ax_adapter *adapter, u8 *fw, u32 len)
+@@ -1088,7 +1136,17 @@
+ 	u32 ret;
+ 	struct fw_bin_info info;
+ 	struct mac_ax_intf_ops *ops = adapter_to_intf_ops(adapter);
+-
++	u8 digest[SHA256_DIGEST_SIZE];
++	u64 epoch = ktime_get_ns();
++	atomic64_cmpxchg(&wa_obs_epoch, 0, epoch);
++	atomic64_inc(&wa_obs_generation);
++	if (fw && len) {
++		sha256(fw, len, digest);
++		pr_info("WA_OBS download epoch=%lld fwdl_call=%lld ns=%llu chip=%u cut=%u symbol=%s len=%u sha256=%*phN proof=input-only\n",
++		 atomic64_read(&wa_obs_epoch), atomic64_read(&wa_obs_generation),
++		 (unsigned long long)ktime_get_ns(), adapter->hw_info->chip_id,
++		 adapter->hw_info->cv, wa_obs_symbol(fw), len, 32, digest);
++	}
+ 	ret = 0;
+ 	retry_cnt = 0;
+ 	MAC_REG_W32(R_AX_UDM1, 0);
+@@ -1096,7 +1154,7 @@
+ 		PLTFM_MSG_ERR("[ERR]%s: no fw\n", __func__);
+ 		ret = MACNOFW;
+ 		PLTFM_MEMSET(&info, 0, sizeof(struct fw_bin_info));
+-		return ret;
++		pr_info("WA_OBS call-end call=%lld result=%u ns=%llu\n", atomic64_read(&wa_obs_generation), ret, (unsigned long long)ktime_get_ns()); return ret;
+ 	}
+ 	/* Move this fuinction outside the retry loop may be buggy.
+ 	 * Since we've reed efuse in this function.
+@@ -1104,15 +1162,17 @@
+ 	ret = fwhdr_parser(adapter, fw, len, &info);
+ 	if (ret) {
+ 		PLTFM_MSG_ERR("[ERR]%s: fwhdr_parser fail\n", __func__);
+-		return ret;
++		pr_info("WA_OBS call-end call=%lld result=%u ns=%llu\n", atomic64_read(&wa_obs_generation), ret, (unsigned long long)ktime_get_ns()); return ret;
+ 	}
+ 
+ 	ret = update_fw_ver(adapter, (struct fwhdr_hdr_t *)fw);
+-	if (ret)
+-		return ret;
++	if (ret) {
++		pr_info("WA_OBS call-end call=%lld result=%u ns=%llu\n", atomic64_read(&wa_obs_generation), ret, (unsigned long long)ktime_get_ns()); return ret;
++	}
+ 
+ 	// FWDL retry, for 025 temp workaround
+ 	while (retry_cnt < FWDL_TRY_CNT) {
++		pr_info("WA_OBS attempt-start call=%lld attempt=%u ns=%llu\n", atomic64_read(&wa_obs_generation), retry_cnt + 1, (unsigned long long)ktime_get_ns());
+ 		ret = fwdl_phase0(adapter);
+ 		if (ret) {
+ 			PLTFM_MSG_ERR("[ERR]%s: fwdl_phase0 fail\n", __func__);
+@@ -1137,25 +1197,29 @@
+ 			goto fwdl_err;
+ 		}
+ 
++		pr_info("WA_OBS attempt-end call=%lld attempt=%u result=0 ns=%llu\n", atomic64_read(&wa_obs_generation), retry_cnt + 1, (unsigned long long)ktime_get_ns());
+ 		return MACSUCCESS;
+ 
+ fwdl_err:
++		pr_info("WA_OBS attempt-end call=%lld attempt=%u result=%u ns=%llu\n", atomic64_read(&wa_obs_generation), retry_cnt + 1, ret, (unsigned long long)ktime_get_ns());
+ 		retry_cnt++;
+ 		PLTFM_MSG_ERR("[ERR]%s: Retry FWDL count %d\n", __func__, retry_cnt);
+ 		// At most retry 2 times
+ 		if (retry_cnt < FWDL_TRY_CNT) {
+ 			ret = mac_disable_cpu(adapter);
++			pr_info("WA_OBS retry-cpu-disable call=%lld result=%u ns=%llu\n", atomic64_read(&wa_obs_generation), ret, (unsigned long long)ktime_get_ns());
+ 			if (ret != MACSUCCESS) {
+ 				PLTFM_MSG_ERR("[ERR]%s: mac_disable_cpu fail\n", __func__);
+ 				fwdl_fail_dump(adapter, &info, ret);
+-				return ret;
++				pr_info("WA_OBS call-end call=%lld result=%u ns=%llu\n", atomic64_read(&wa_obs_generation), ret, (unsigned long long)ktime_get_ns()); return ret;
+ 			}
+ 
+ 			ret = mac_enable_cpu(adapter, AX_BOOT_REASON_PWR_ON, 1);
++			pr_info("WA_OBS retry-cpu-enable call=%lld result=%u ns=%llu\n", atomic64_read(&wa_obs_generation), ret, (unsigned long long)ktime_get_ns());
+ 			if (ret != MACSUCCESS) {
+ 				PLTFM_MSG_ERR("[ERR]%s: mac_enable_cpu fail\n", __func__);
+ 				fwdl_fail_dump(adapter, &info, ret);
+-				return ret;
++				pr_info("WA_OBS call-end call=%lld result=%u ns=%llu\n", atomic64_read(&wa_obs_generation), ret, (unsigned long long)ktime_get_ns()); return ret;
+ 			}
+ 			MAC_REG_W32(R_AX_UDM1, retry_cnt);
+ 		} else {
+@@ -1165,7 +1229,7 @@
+ 
+ 	fwdl_fail_dump(adapter, &info, ret);
+ 
+-	return ret;
++	pr_info("WA_OBS call-end call=%lld result=%u ns=%llu\n", atomic64_read(&wa_obs_generation), ret, (unsigned long long)ktime_get_ns()); return ret;
+ }
+ 
+ u32 mac_enable_cpu(struct mac_ax_adapter *adapter, u8 boot_reason, u8 dlfw)
+@@ -1476,6 +1540,7 @@
+ 	PLTFM_MSG_ALWAYS("[FWDL] Query Internal FW Chip_ID = 0x%X\n", chip_id);
+ 	PLTFM_MSG_ALWAYS("[FWDL] Query Internal FW CV = 0x%X\n", cv);
+ 	PLTFM_MSG_ALWAYS("[FWDL] Query Internal FW cat = 0x%X\n", cat);
++	pr_info("WA_OBS select ns=%llu chip=%u cut=%u requested_category=%u\n", (unsigned long long)ktime_get_ns(), chip_id, cv, cat);
+ 
+ 	ret = get_dle_rsvd_info(adapter, (enum DLE_RSVD_INFO *)&dle_info);
+ 	if (ret != MACSUCCESS) {
+--- a/phl/hal_g6/mac/mac_ax/mport.c
++++ b/phl/hal_g6/mac/mac_ax/mport.c
+@@ -14,6 +14,7 @@
+  ******************************************************************************/
+ 
+ #include "mport.h"
++#include <asm/unaligned.h>
+ #include "../mac_ax.h"
+ 
+ #define MAX_TSF_SOURCE_PORT 7
+@@ -2402,12 +2403,12 @@
+ 			    u8 *content, struct mac_ax_bcn_cnt *val)
+ 
+ {
+-	u32 *pdata, data0, data1;
++	u32 data0, data1;
+ 	u8 port_mbssid;
+ 
+-	pdata = (u32 *)content;
+-	data0 = le32_to_cpu(*pdata);
+-	data1 = le32_to_cpu(*(pdata + 1));
++	data0 = get_unaligned_le32(content);
++	data1 = (u32)content[4] | ((u32)content[5] << 8) |
++		((u32)content[6] << 16);
+ 
+ 	port_mbssid = GET_FIELD(data0, FWCMD_C2H_BCN_CNT_PORT_MBSSID_IDX);
+ 	if (port_mbssid < MAC_AX_P0_MBID_LAST) {
+@@ -2440,13 +2441,13 @@
+ {
+ 	struct mac_ax_bcn_cnt *info;
+ 	struct mac_ax_bcn_rpt_stats *prpt_stats;
+-	u32 *pdata, data0, data1;
++	u32 data0, data1;
+ 	u8 port_mbssid;
+ 
+ 	info = (struct mac_ax_bcn_cnt *)c2h_info;
+-	pdata = (u32 *)c2h->content;
+-	data0 = le32_to_cpu(*pdata);
+-	data1 = le32_to_cpu(*(pdata + 1));
++	data0 = get_unaligned_le32(c2h->content);
++	data1 = (u32)c2h->content[4] | ((u32)c2h->content[5] << 8) |
++		((u32)c2h->content[6] << 16);
+ 
+ 	port_mbssid = GET_FIELD(data0, FWCMD_C2H_BCN_CNT_PORT_MBSSID_IDX);
+ 	if (port_mbssid < MAC_AX_P0_MBID_LAST) {
+--- /dev/null
++++ b/phl/hal_g6/mac/mac_ax/wa_observe.h
+@@ -0,0 +1,19 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef WA_OBSERVE_H
++#define WA_OBSERVE_H
++#include <linux/atomic.h>
++#include <linux/ktime.h>
++#include <linux/printk.h>
++#include <asm/unaligned.h>
++extern atomic64_t wa_obs_epoch, wa_obs_generation, wa_obs_events;
++#define WA_OBS_STRING1(x) #x
++#define WA_OBS_STRING(x) WA_OBS_STRING1(x)
++static inline void wa_obs_record(const char *kind, const u8 *buf, u32 len, u32 result)
++{
++ /* Bounded NAN components/nanctl/ACK records only. No key command payloads. */
++ u32 n = len < 40 ? len : 40;
++ pr_info("WA_OBS %s epoch=%lld fwdl_call=%lld event=%lld ns=%llu valid_len=%u result=%u raw=%*phN\n",
++ kind, atomic64_read(&wa_obs_epoch), atomic64_read(&wa_obs_generation),
++ atomic64_inc_return(&wa_obs_events), (unsigned long long)ktime_get_ns(), len, result, n, buf);
++}
++#endif
+--- a/phl/hal_g6/rtl8852b/hal_trx_8852b.c
++++ b/phl/hal_g6/rtl8852b/hal_trx_8852b.c
+@@ -725,9 +725,8 @@
+ 		struct rtw_c2h_info c = {0};
+ 
+ 		phl_rx->type = RTW_RX_TYPE_C2H;
+-		rtw_hal_mac_parse_c2h(hal, pkt->vir_addr, mdata->pktlen, (void *)&c);
+-
+-		hal_c2h_post_process(phl_com, hal, (void *)&c);
++		if (rtw_hal_mac_parse_c2h(hal, pkt->vir_addr, mdata->pktlen, (void *)&c) == RTW_HAL_STATUS_SUCCESS)
++			hal_c2h_post_process(phl_com, hal, (void *)&c);
+ 	}
+ 	break;
+ 	case RX_8852B_DESC_PKT_T_TX_RPT:

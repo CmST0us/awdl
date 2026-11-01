@@ -1,0 +1,8 @@
+{
+  "name": "rtl8852be-u2",
+  "file": "u2/rtl8852be_fw.bin",
+  "size": 325304,
+  "sha256": "a310447813efc85a81dd2d88ac7f106b6c382acd759e5753984785f4d2db09a2",
+  "source_symbol": "array_8852b_u2_nicce",
+  "source_module_sha256": "64a0658b48ec15ea315511d3ff9138e9035a5badf0d1e3e2dcfb6b6c6fa78203"
+}

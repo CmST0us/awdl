@@ -1,0 +1,123 @@
+Subject: NAN：在对端时段配置失败时回滚新建站点
+
+完成信道和时段参数准备后再创建 NMI station。参数准备失败返回错误，
+并释放所有 map 中已经分配的 bitmap。新建 station 后配置失败时删除
+该 station，保留原配置错误；已有 station 的更新失败不删除 station。
+
+--- a/wpa_supplicant/nan_supplicant.c
++++ b/wpa_supplicant/nan_supplicant.c
+@@ -268,6 +268,40 @@
+ 		   MAC2STR(nmi_addr), new_sta, cdw, sequence_id,
+ 		   max_channel_switch_time);
+ 
++	os_memset(&peer_sched, 0, sizeof(peer_sched));
++	if (sched) {
++		wpa_printf(MSG_DEBUG, "NAN: Peer schedule info:");
++		wpa_printf(MSG_DEBUG, "  n_maps=%u", sched->n_maps);
++
++		for (i = 0; i < sched->n_maps && i < MAX_NUM_NAN_MAPS; i++) {
++			struct nan_schedule_config *sched_cfg =
++				&peer_sched.maps[peer_sched.n_maps].sched;
++
++			wpa_printf(MSG_DEBUG, "  Map %d: map_id=%u",
++				   i, sched->maps[i].map_id);
++
++			sched_cfg->num_channels = 0;
++
++			for (j = 0; j < sched->maps[i].n_chans &&
++				     sched_cfg->num_channels <
++				     MAX_NUM_NAN_SCHEDULE_CHANNELS; j++) {
++				if (wpas_nan_set_peer_sched_chan(wpa_s, sched,
++								 i, j,
++								 sched_cfg) < 0) {
++					ret = -1;
++					goto out;
++				}
++			}
++
++			/* Only add map if it has channels after filtering */
++			if (sched_cfg->num_channels > 0) {
++				peer_sched.maps[peer_sched.n_maps].map_id =
++					sched->maps[i].map_id;
++				peer_sched.n_maps++;
++			}
++		}
++	}
++
+ 	if (new_sta) {
+ 		struct hostapd_sta_add_params sta_params;
+ 
+@@ -279,39 +313,7 @@
+ 		ret = wpa_drv_sta_add(wpa_s, &sta_params);
+ 		if (ret) {
+ 			wpa_printf(MSG_INFO, "NAN: Failed to add NMI station");
+-			return ret;
+-		}
+-	}
+-
+-	os_memset(&peer_sched, 0, sizeof(peer_sched));
+-	if (sched) {
+-		wpa_printf(MSG_DEBUG, "NAN: Peer schedule info:");
+-		wpa_printf(MSG_DEBUG, "  n_maps=%u", sched->n_maps);
+-
+-		for (i = 0; i < sched->n_maps && i < MAX_NUM_NAN_MAPS; i++) {
+-			struct nan_schedule_config *sched_cfg =
+-				&peer_sched.maps[peer_sched.n_maps].sched;
+-
+-			wpa_printf(MSG_DEBUG, "  Map %d: map_id=%u",
+-				   i, sched->maps[i].map_id);
+-
+-			sched_cfg->num_channels = 0;
+-
+-			for (j = 0; j < sched->maps[i].n_chans &&
+-				     sched_cfg->num_channels <
+-				     MAX_NUM_NAN_SCHEDULE_CHANNELS; j++) {
+-				if (wpas_nan_set_peer_sched_chan(wpa_s, sched,
+-								 i, j,
+-								 sched_cfg) < 0)
+-					goto out;
+-			}
+-
+-			/* Only add map if it has channels after filtering */
+-			if (sched_cfg->num_channels > 0) {
+-				peer_sched.maps[peer_sched.n_maps].map_id =
+-					sched->maps[i].map_id;
+-				peer_sched.n_maps++;
+-			}
++			goto out;
+ 		}
+ 	}
+ 
+@@ -323,8 +325,12 @@
+ 	/* Only print an error without returning, so we attempt to remove
+ 	 * the STA if needed (sched == NULL)
+ 	 */
+-	if (ret)
++	if (ret) {
+ 		wpa_printf(MSG_INFO, "NAN: Failed to configure peer schedule");
++		if (new_sta && wpa_drv_sta_remove(wpa_s, nmi_addr))
++			wpa_printf(MSG_INFO,
++				   "NAN: Failed to remove newly added NMI station");
++	}
+ 
+ 	if (!sched && !new_sta) {
+ 		/* TODO: Should we maybe keep that NMI station? */
+@@ -339,16 +345,8 @@
+ 	}
+ 
+ out:
+-	/* Free allocated time bitmaps */
+-	for (i = 0; i < peer_sched.n_maps; i++) {
+-		struct nan_schedule_config *sched_cfg =
+-			&peer_sched.maps[i].sched;
+-
+-		for (j = 0; j < sched_cfg->num_channels; j++) {
+-			wpabuf_free(sched_cfg->channels[j].time_bitmap);
+-			sched_cfg->channels[j].time_bitmap = NULL;
+-		}
+-	}
++	for (i = 0; i < ARRAY_SIZE(peer_sched.maps); i++)
++		clear_sched_config(&peer_sched.maps[i].sched);
+ 
+ 	return ret;
+ }

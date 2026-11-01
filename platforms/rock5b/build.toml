@@ -1,0 +1,7 @@
+# ROCK 5B 平台默认构建设置；下一次构建生效，本机文件和命令行可以覆盖。
+# Linux Rust 目标，与目标 CPU 和系统 ABI 匹配。
+rust_target = "aarch64-unknown-linux-gnu"
+# 内核构建使用的 ARCH，不是构建机的架构。
+kernel_arch = "arm64"
+# RTL 驱动平台选择；由上游 Makefile 定义。
+rtl_platform = "CONFIG_PLATFORM_ARM_ROCKCHIP"

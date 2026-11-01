@@ -1,0 +1,13 @@
+0001-nan-publisher-interop.patch
+0002-ndc-response-schedule.patch
+0003-ndi-group-key-removal.patch
+0004-nan-country-code.patch
+0005-nan-peer-schedule-rollback.patch
+0006-ndi-failed-setup-refcount.patch
+0007-ndp-capabilities-on-shared-ndl.patch
+0008-additional-ndp-ndl-negotiation.patch
+0009-peer-schedule-common-slots.patch
+0010-peer-capabilities-event.patch
+0011-rtl-driver-registration.patch
+0012-cached-auth-local-schedule.patch
+0013-ndc-channel-coverage.patch

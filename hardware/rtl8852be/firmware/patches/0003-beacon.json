@@ -1,0 +1,7 @@
+{
+  "name": "beacon",
+  "module": "u2_beacon_trace",
+  "options": {
+    "diagnostic": false
+  }
+}

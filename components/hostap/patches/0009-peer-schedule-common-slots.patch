@@ -1,0 +1,95 @@
+Subject: NAN：保留长周期对端调度的共同可用时隙
+
+--- a/src/common/nan_bitmap.h
++++ b/src/common/nan_bitmap.h
+@@ -4,13 +4,18 @@
+ 
+ #include <stddef.h>
+ 
+-/* Project availability onto nl80211's repeating 32 x 16 TU schedule. */
++/*
++ * Keep the availability shared by every 32 x 16 TU cycle. The firmware
++ * repeats this schedule, so a slot must be available in every peer cycle.
++ * Return 1 if the projection removes slots, 0 if exact, or -1 if invalid.
++ */
+ static inline int nan_bitmap_512(const unsigned char *src, size_t len,
+ 				unsigned int duration, unsigned int period,
+ 				unsigned int offset, unsigned char out[4])
+ {
+ 	unsigned char slots[512] = { 0 };
+ 	unsigned int step, width, start, bit, sub, i;
++	int reduced = 0;
+ 
+ 	if (len > 64 || duration > 3 || !period || period > 7)
+ 		return -1;
+@@ -36,7 +41,8 @@
+ 	}
+ 	for (i = 32; i < 512; i++) {
+ 		if (slots[i] != slots[i % 32])
+-			return -1;
++			reduced = 1;
++		slots[i % 32] &= slots[i];
+ 	}
+ 	for (i = 0; i < 4; i++)
+ 		out[i] = 0;
+@@ -44,6 +50,6 @@
+ 		if (slots[i])
+ 			out[i / 8] |= 1U << (i % 8);
+ 	}
+-	return 0;
++	return reduced;
+ }
+ #endif
+--- a/wpa_supplicant/nan_supplicant.c
++++ b/wpa_supplicant/nan_supplicant.c
+@@ -209,7 +209,7 @@
+ 	const struct nan_map_chan *src_chan = &sched->maps[i].chans[j];
+ 	struct nan_chan_entry *chan_entry;
+ 	u8 bitmap[4];
+-	int ch_idx;
++	int ch_idx, ret;
+ 
+ 	if (!src_chan->committed)
+ 		return 0;
+@@ -235,12 +235,23 @@
+ 		return -1;
+ 	}
+ 
+-	if (nan_bitmap_512(src_chan->tbm.bitmap, src_chan->tbm.len,
+-			   src_chan->tbm.duration, src_chan->tbm.period,
+-			   src_chan->tbm.offset, bitmap)) {
++	ret = nan_bitmap_512(src_chan->tbm.bitmap, src_chan->tbm.len,
++			     src_chan->tbm.duration, src_chan->tbm.period,
++			     src_chan->tbm.offset, bitmap);
++	if (ret < 0) {
+ 		wpa_printf(MSG_INFO,
+-			   "NAN: Peer bitmap cannot be represented in 512 TUs");
+-		return -1;
++			   "NAN: Invalid peer time bitmap for freq %u",
++			   src_chan->chan.freq);
++		return -1;
++	}
++	if (ret > 0)
++		wpa_hexdump(MSG_DEBUG, "NAN: Common 512 TU peer availability",
++			    bitmap, sizeof(bitmap));
++	if (!(bitmap[0] | bitmap[1] | bitmap[2] | bitmap[3])) {
++		wpa_printf(MSG_DEBUG,
++			   "NAN: Skip peer channel without repeating availability: freq=%u",
++			   src_chan->chan.freq);
++		return 0;
+ 	}
+ 	sched_cfg->channels[ch_idx].time_bitmap =
+ 		wpabuf_alloc_copy(bitmap, sizeof(bitmap));
+@@ -300,6 +311,12 @@
+ 				peer_sched.n_maps++;
+ 			}
+ 		}
++	}
++
++	if (sched && !peer_sched.n_maps) {
++		wpa_printf(MSG_INFO, "NAN: No usable repeating peer availability");
++		ret = -1;
++		goto out;
+ 	}
+ 
+ 	if (new_sta) {

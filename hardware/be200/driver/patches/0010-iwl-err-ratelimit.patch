@@ -1,0 +1,18 @@
+Subject: iwlwifi：限频错误日志在频率允许时输出
+
+net_ratelimit() 返回非零表示允许输出，上游 __iwl_err 却在此时跳过
+打印，只在全局限频触发后才输出。IWL_ERR_LIMIT 改为允许时输出、超出
+频率时只写入 trace，与 __iwl_dbg 的限频处理一致。NAN TLC 超限建议的
+限幅记录等 IWL_ERR_LIMIT 诊断由此在正常频率下写入内核日志。
+
+--- a/drivers/net/wireless/intel/iwlwifi/iwl-debug.c
++++ b/drivers/net/wireless/intel/iwlwifi/iwl-debug.c
+@@ -44,7 +44,7 @@
+ 	va_start(args, fmt);
+ 	switch (mode) {
+ 	case IWL_ERR_MODE_RATELIMIT:
+-		if (net_ratelimit())
++		if (!net_ratelimit())
+ 			break;
+ 		fallthrough;
+ 	case IWL_ERR_MODE_REGULAR:

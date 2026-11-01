@@ -1,0 +1,7 @@
+# 通用构建默认值；平台、本机文件、环境变量和显式参数可覆盖。
+# hostap 的 C 编译器，命令名或构建机绝对路径。
+c_compiler = "cc"
+# 最大并行编译任务数，正整数。
+jobs = 4
+# U2 固件补丁的 C 编译器，使用 Clang 21 并包含 MIPS16 后端。
+mips_compiler = "clang"

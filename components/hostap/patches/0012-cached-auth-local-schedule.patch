@@ -1,0 +1,19 @@
+--- a/src/nan/nan_pairing.c
++++ b/src/nan/nan_pairing.c
+@@ -650,7 +650,15 @@
+ 	peer->pairing.peer_instance_id = peer_instance_id;
+ 	peer->pairing.flags = 0;
+ 
+-	ret = nan_configure_peer_schedule(nan_data, peer, sched);
++	/* Cached Auth1 can precede discovery. Keep the committed local schedule
++	 * during authentication; peer capabilities still gate NDP admission. */
++	if (responder && auth_mode == NAN_PASN_AUTH_MODE_PMK &&
++	    sched && sched->n_chans &&
++	    dl_list_empty(&peer->info.dev_capa) &&
++	    dl_list_empty(&peer->info.avail_entries))
++		ret = 0;
++	else
++		ret = nan_configure_peer_schedule(nan_data, peer, sched);
+ 	if (ret) {
+ 		wpa_printf(MSG_DEBUG, "NAN: Could not configure peer schedule");
+ 		nan_pairing_deinit_peer(peer);

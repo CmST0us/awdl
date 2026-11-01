@@ -1,0 +1,12 @@
+{
+  "name": "backport-iwlwifi",
+  "version": "24.70-14867-0ubuntu1",
+  "license": "GPL-2.0-only",
+  "repository": "https://git.kernel.org/pub/scm/linux/kernel/git/iwlwifi/backport-iwlwifi.git",
+  "upstream_tracking": "iwlwifi-stack-public:release/core24.70:14867:362ada0a",
+  "archive": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/backport-iwlwifi-dkms/1:24.70-14867-0ubuntu1/backport-iwlwifi-dkms_24.70-14867.orig.tar.gz",
+  "directory": "backport-iwlwifi-dkms-24.70-14867",
+  "packaging_archive": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/backport-iwlwifi-dkms/1:24.70-14867-0ubuntu1/backport-iwlwifi-dkms_24.70-14867-0ubuntu1.debian.tar.xz",
+  "packaging_license": "Apache-2.0",
+  "packaging_series": "debian/patches/series"
+}

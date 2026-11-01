@@ -1,0 +1,47 @@
+# BE200 backport Kconfig 输入；重新构建模块生效。m 为模块，y 为启用。
+# 无线配置层编译为模块。
+CPTCFG_CFG80211=m
+# 启用 cfg80211 默认节能策略。
+CPTCFG_CFG80211_DEFAULT_PS=y
+# 暴露 cfg80211 debugfs 诊断。
+CPTCFG_CFG80211_DEBUGFS=y
+# 采用该驱动基线的认证责任配置。
+CPTCFG_CFG80211_CERTIFICATION_ONUS=y
+# 允许基线的 NO_IR 监管放宽处理，最终限制由驱动确认。
+CPTCFG_CFG80211_REG_RELAX_NO_IR=y
+# 启用 nl80211 测试命令接口。
+CPTCFG_NL80211_TESTMODE=y
+# 802.11 MAC 层编译为模块。
+CPTCFG_MAC80211=m
+# 编入 Minstrel 速率控制。
+CPTCFG_MAC80211_RC_MINSTREL=y
+# 将 Minstrel 设为默认软件速率控制。
+CPTCFG_MAC80211_RC_DEFAULT_MINSTREL=y
+# 暴露 mac80211 debugfs 诊断。
+CPTCFG_MAC80211_DEBUGFS=y
+# 编入 mac80211 trace 事件。
+CPTCFG_MAC80211_MESSAGE_TRACING=y
+# 启用无线驱动子系统。
+CPTCFG_WLAN=y
+# Intel 无线核心编译为模块。
+CPTCFG_IWLWIFI=m
+# DVM opmode 编译为模块。
+CPTCFG_IWLDVM=m
+# MVM opmode 编译为模块。
+CPTCFG_IWLMVM=m
+# NAN 使用的 MLD opmode 编译为模块。
+CPTCFG_IWLMLD=m
+# 编入 Intel 调试日志。
+CPTCFG_IWLWIFI_DEBUG=y
+# 暴露 Intel debugfs 诊断。
+CPTCFG_IWLWIFI_DEBUGFS=y
+# 编入 Intel 设备 trace 事件。
+CPTCFG_IWLWIFI_DEVICE_TRACING=y
+# 编入 Intel 设备测试接口。
+CPTCFG_IWLWIFI_DEVICE_TESTMODE=y
+# 编入上游验证 opmode。
+CPTCFG_IWLXVT=m
+# 固件异常时不默认触发 NMI，值为布尔开关 0/1。
+CPTCFG_IWLWIFI_FW_MISBEHAVE_NMI_DEFAULT=0
+# 将 opmode 独立为可装载模块。
+CPTCFG_IWLWIFI_OPMODE_MODULAR=y

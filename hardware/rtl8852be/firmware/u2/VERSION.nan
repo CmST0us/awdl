@@ -1,0 +1,8 @@
+version: nan-ndc-channel-coverage-20261101
+firmware_file: rtl8852be_fw_nan.bin
+firmware_size: 341688
+firmware_sha256: 92a858aef2f718757b412054048d10da0ed7b517cb89d89577e257ddb2ae4241
+build: scripts/build-driver.sh rtl8852be --platform rock5b
+compiler: Clang 21.0.0 with MIPS16, GNU MIPS binutils
+source: patches/series
+validation: byte-identical to the original main rebuild and the firmware embedded in deployed module 777F7911C134D4F7D275A1B; embedded array and download length verified

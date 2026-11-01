@@ -1,0 +1,200 @@
+Subject: NAN：按本地可用时段配置对端调度并接受兼容 NDC
+
+--- a/src/nan/nan.c
++++ b/src/nan/nan.c
+@@ -1657,7 +1657,7 @@
+ 
+ 
+ static void
+-nan_peer_get_committed_avail(const struct nan_data *nan,
++nan_peer_get_committed_avail(struct nan_data *nan,
+ 			     const struct nan_peer *peer,
+ 			     const struct nan_schedule *local_sched,
+ 			     struct nan_peer_schedule *sched);
+@@ -2815,24 +2815,55 @@
+ 
+ 
+ static bool
+-nan_peer_channel_in_local_sched(const struct nan_data *nan,
+-				int peer_ctrl_freq,
+-				const struct nan_schedule *local_sched)
+-{
+-	unsigned int i;
+-
+-	/* It's enough to compare the control freqs to ensure compatibility */
++nan_peer_intersect_local_avail(struct nan_data *nan, int peer_ctrl_freq,
++			      const struct nan_time_bitmap *peer_tbm,
++			      const struct nan_schedule *local_sched,
++			      struct nan_time_bitmap *tbm)
++{
++	struct bitfield *peer_bf;
++	unsigned int i, slot;
++	bool available = false;
++
++	peer_bf = nan_tbm_to_bf(nan, peer_tbm);
++	if (!peer_bf)
++		return false;
++
++	os_memset(tbm, 0, sizeof(*tbm));
++	tbm->period = 7;
++	tbm->len = NAN_TIME_BITMAP_MAX_LEN;
++
++	/* Project the peer's radios onto our actual channel availability. */
+ 	for (i = 0; i < local_sched->n_chans; i++) {
+-		if (peer_ctrl_freq == local_sched->chans[i].chan.freq)
+-			return true;
+-	}
+-
+-	return false;
++		struct bitfield *local_bf;
++		u8 map_id, op_class;
++		u16 cbm, pcbm;
++
++		if (peer_ctrl_freq != local_sched->chans[i].chan.freq)
++			continue;
++
++		if (nan_convert_chan_sched_to_bf(nan, &local_sched->chans[i],
++					       &local_bf, &map_id, &op_class,
++					       &cbm, &pcbm))
++			continue;
++
++		for (slot = 0; slot < NAN_MAX_TIME_BITMAP_SLOTS; slot++) {
++			if (!bitfield_is_set(peer_bf, slot) ||
++			    !bitfield_is_set(local_bf, slot))
++				continue;
++
++			tbm->bitmap[slot / 8] |= BIT(slot % 8);
++			available = true;
++		}
++		bitfield_free(local_bf);
++	}
++
++	bitfield_free(peer_bf);
++	return available;
+ }
+ 
+ 
+ static void
+-nan_peer_get_committed_avail_add(const struct nan_data *nan,
++nan_peer_get_committed_avail_add(struct nan_data *nan,
+ 				 const struct nan_peer *peer,
+ 				 const struct nan_avail_entry *avail,
+ 				 const struct nan_schedule *local_sched,
+@@ -2840,7 +2871,7 @@
+ {
+ 	struct nan_map *map;
+ 	struct nan_map_chan *chan;
+-	struct nan_sched_chan schan;
++	struct nan_time_bitmap tbm;
+ 	const struct oper_class_map *op;
+ 	u8 chan_id;
+ 	bool committed;
+@@ -2920,10 +2951,13 @@
+ 		/* TODO: Missing support for 80 + 80 */
+ 	}
+ 
+-	/* Skip channels that are not in local schedule */
+-	if (local_sched &&
+-	    !nan_peer_channel_in_local_sched(nan, freq, local_sched))
+-		return;
++	if (local_sched) {
++		if (!nan_peer_intersect_local_avail(nan, freq, &avail->tbm,
++						    local_sched, &tbm))
++			return;
++	} else {
++		os_memcpy(&tbm, &avail->tbm, sizeof(tbm));
++	}
+ 
+ 	/* Assume committed for conditional slots if setup is done */
+ 	committed = (avail->type == NAN_AVAIL_ENTRY_CTRL_TYPE_COMMITTED) ||
+@@ -2947,8 +2981,6 @@
+ 	}
+ 
+ 	map->map_id = avail->map_id;
+-
+-	os_memset(&schan, 0, sizeof(schan));
+ 
+ 	/* Find channel entry if already exists */
+ 	for (i = 0; i < map->n_chans; i++) {
+@@ -2980,12 +3012,12 @@
+ 	chan->chan.center_freq1 = center_freq1;
+ 	chan->chan.center_freq2 = center_freq2;
+ 
+-	os_memcpy(&chan->tbm, &avail->tbm, sizeof(avail->tbm));
++	os_memcpy(&chan->tbm, &tbm, sizeof(tbm));
+ }
+ 
+ 
+ static void
+-nan_peer_get_committed_avail(const struct nan_data *nan,
++nan_peer_get_committed_avail(struct nan_data *nan,
+ 			     const struct nan_peer *peer,
+ 			     const struct nan_schedule *local_sched,
+ 			     struct nan_peer_schedule *sched)
+--- a/src/nan/nan_ndl.c
++++ b/src/nan/nan_ndl.c
+@@ -697,16 +697,6 @@
+ 
+ 	nan_ndl_sched_print(nan, &nan->sched);
+ 
+-	if (is_zero_ether_addr(ndl->ndc_id)) {
+-		if (os_get_random(ndl->ndc_id, ETH_ALEN) < 0) {
+-			reason = NAN_REASON_UNSPECIFIED_REASON;
+-			goto out_fail;
+-		}
+-		wpa_printf(MSG_DEBUG,
+-			   "NAN: NDL: generated NDC ID " MACSTR,
+-			   MAC2STR(ndl->ndc_id));
+-	}
+-
+ 	ndl->local_qos.min_slots = params->qos.min_slots;
+ 	ndl->local_qos.max_latency = params->qos.max_latency;
+ 
+@@ -721,6 +711,22 @@
+ 						       &reason);
+ 		if (ndl->status == NAN_NDL_STATUS_REJECTED)
+ 			goto out_fail;
++	}
++
++	/* An accepted proposal retains its NDC identity. A counterproposal
++	 * has a different schedule and needs a new identity.
++	 */
++	if (is_zero_ether_addr(ndl->ndc_id) ||
++	    (params->type == NAN_NDP_ACTION_RESP &&
++	     ndl->state == NAN_NDL_STATE_REQ_RECV &&
++	     ndl->status == NAN_NDL_STATUS_CONTINUED)) {
++		if (os_get_random(ndl->ndc_id, ETH_ALEN) < 0) {
++			reason = NAN_REASON_UNSPECIFIED_REASON;
++			goto out_fail;
++		}
++		wpa_printf(MSG_DEBUG,
++			   "NAN: NDL: generated NDC ID " MACSTR,
++			   MAC2STR(ndl->ndc_id));
+ 	}
+ 
+ 	ndl->setup_reason = NAN_NDL_SETUP_REASON_NDP;
+--- a/wpa_supplicant/nan_supplicant.c
++++ b/wpa_supplicant/nan_supplicant.c
+@@ -2642,7 +2642,7 @@
+ 	int ret;
+ 	u8 map_id;
+ 
+-	wpa_printf(MSG_DEBUG, "NAN: NDP CONF - use the NDC from peer");
++	wpa_printf(MSG_DEBUG, "NAN: Use the NDC proposed by peer");
+ 	ret = nan_peer_get_schedule_info(wpa_s->nan, ndp->ndp_id.peer_nmi,
+ 					 &peer_sched);
+ 	if (ret) {
+@@ -2685,6 +2685,13 @@
+ 	if (ndp->type == NAN_NDP_ACTION_CONF &&
+ 	    ndp->u.resp.status == NAN_NDP_STATUS_ACCEPTED)
+ 		return wpas_nan_select_ndc_copy_peers(wpa_s, ndp);
++
++	/* Prefer the proposed NDC when its channel is configured locally.
++	 * The NDL setup validates its bitmap against the local availability.
++	 */
++	if (ndp->type == NAN_NDP_ACTION_RESP &&
++	    !wpas_nan_select_ndc_copy_peers(wpa_s, ndp))
++		return 0;
+ 
+ 	tbm = &ndp->sched.chans[0].committed;
+ #ifdef CONFIG_TESTING_OPTIONS

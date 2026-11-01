@@ -1,0 +1,28 @@
+source: /lib/modules/6.1.115-g847bc9cd7ecd-dirty/updates/8852be.ko
+source_symbol: array_8852b_u2_nicce
+source_symbol_size: 325304
+source_module_sha256: 64a0658b48ec15ea315511d3ff9138e9035a5badf0d1e3e2dcfb6b6c6fa78203
+firmware_file: rtl8852be_fw.bin
+firmware_size: 325304
+firmware_sha256: a310447813efc85a81dd2d88ac7f106b6c382acd759e5753984785f4d2db09a2
+source_mtime_utc: 2026-10-03 16:04:17 +0000
+extracted_at: 2026-10-22T23:52:10+08:00
+boot_id: 0609b0c8-be14-43f2-820c-559dcfd60fd7
+
+# firmware version
+u2_wifi_firmware_version_dmesg: not present
+bluetooth_firmware_version_dmesg: 0xd9b744d8
+bluetooth_version_line: "[    5.783091] Bluetooth: hci0: RTL: fw version 0xd9b744d8"
+
+# /lib/firmware scan
+lib_firmware_rtl8852be_path: absent
+lib_firmware_rtl_bt_fw: /lib/firmware/rtl_bt/rtl8852bu_fw.bin
+lib_firmware_rtl_bt_fw_size: 49828
+lib_firmware_rtl_bt_fw_sha256: 483e0ba0a0328e99dd14ee2ec4ab63535085bc8588823e21194541b2d06db4cc
+lib_firmware_rtl_bt_config: /lib/firmware/rtl_bt/rtl8852bu_config.bin
+lib_firmware_rtl_bt_config_size: 14
+lib_firmware_rtl_bt_config_sha256: 2f9968b88d3f434fd67ffa00387fb7eaf0f04e2f9d04e6c5e22f39d359a53c4a
+lib_firmware_mtime_utc: 2026-10-03 16:01:51 +0000
+
+# note
+The board's /lib/firmware has no rtl8852be WiFi image. The U2 WiFi firmware is embedded in the loaded 8852be.ko as array_8852b_u2_nicce; this extraction is read-only. The original module on the board was not modified or removed.

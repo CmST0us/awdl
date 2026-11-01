@@ -1,0 +1,6 @@
+--- a/firmware/patches/u2_bigtk_native.c
++++ b/firmware/patches/u2_bigtk_native.c
+@@ -59,3 +59,2 @@
+         big_window_trace(251,(macid<<24)|(ret&0xffffff),low-(u32)big_free_time());
+-    if (ret) u2_nan_window_arm(macid, low, high);
+     return ret;

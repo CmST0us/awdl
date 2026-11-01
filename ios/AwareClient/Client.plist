@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <!-- 客户端随应用交付的策略，修改后重新构建并安装应用。 -->
+    <!-- 单次数据连接建立的最长时间，正整数秒。 -->
+    <key>ConnectionTimeoutSeconds</key>
+    <integer>60</integer>
+    <!-- 连接读写允许的无进展时长，正整数秒，不是整个文件的传输时限。 -->
+    <key>IOIdleTimeoutSeconds</key>
+    <integer>60</integer>
+</dict>
+</plist>

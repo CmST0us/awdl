@@ -1,0 +1,19 @@
+Subject: mac80211：按接收地址分发 NAN 单播管理帧
+
+--- a/net/mac80211/rx.c
++++ b/net/mac80211/rx.c
+@@ -4664,8 +4664,13 @@
+ 		if (ieee80211_is_auth(hdr->frame_control) &&
+ 		    ether_addr_equal(sdata->vif.addr, hdr->addr1))
+ 			return true;
++		/* Robust unicast management belongs to the addressed interface.
++		 * In particular, do not reflect an NDI's Block Ack action as an
++		 * unsupported action from the NMI.
++		 */
+ 		if (!ieee80211_is_disassoc(hdr->frame_control) &&
+-		    ieee80211_is_robust_mgmt_frame(skb))
++		    ieee80211_is_robust_mgmt_frame(skb) &&
++		    (multicast || ether_addr_equal(sdata->vif.addr, hdr->addr1)))
+ 			return true;
+ 		return false;
+ 	case NL80211_IFTYPE_NAN_DATA:

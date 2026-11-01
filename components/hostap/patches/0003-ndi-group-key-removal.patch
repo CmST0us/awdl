@@ -1,0 +1,13 @@
+Subject: NAN：使用组密钥删除标志清理 NDI 本地 GTK
+
+--- a/wpa_supplicant/nan_supplicant.c
++++ b/wpa_supplicant/nan_supplicant.c
+@@ -430,7 +430,7 @@
+ 
+ 	if (wpa_drv_set_key(wpa_s, -1, WPA_ALG_NONE, broadcast_ether_addr,
+ 			    wpa_s->ndi_gtk.id, 0, NULL, 0, NULL, 0,
+-			    KEY_FLAG_GROUP_TX_DEFAULT)) {
++			    KEY_FLAG_GROUP)) {
+ 		wpa_printf(MSG_INFO, "NAN: Failed to remove NDI group TX key");
+ 		return -1;
+ 	}

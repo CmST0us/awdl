@@ -1,0 +1,16 @@
+{
+  "repository": "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git",
+  "commit": "24247053afda2bab6b4ace42402dbf9f3b1305d6",
+  "version": "108.45105872.0",
+  "license": "Redistributable, see LICENCE.iwlwifi_firmware",
+  "files": [
+    {
+      "file": "iwlwifi-gl-c0-fm-c0-c108.ucode",
+      "upstream_path": "intel/iwlwifi/iwlwifi-gl-c0-fm-c0-c108.ucode"
+    },
+    {
+      "file": "iwlwifi-gl-c0-fm-c0.pnvm",
+      "upstream_path": "intel/iwlwifi/iwlwifi-gl-c0-fm-c0.pnvm"
+    }
+  ]
+}

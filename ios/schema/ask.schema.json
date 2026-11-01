@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Aware Lab AccessorySetupKit session v1",
+  "description": "M5 observation record written by the iPad app. It records what AccessorySetupKit and WiFiAware exposed; it does not certify that the system paired a board.",
+  "type": "object",
+  "required": ["schemaVersion", "runID", "source", "directionID", "appVersion", "supportedTechnologies", "descriptor", "pinHandling", "session", "accessories", "pairedDevices", "outcome", "events"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "runID": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$"},
+    "source": {"const": "ipad.app"},
+    "directionID": {"const": "NAN-PAIRING-DUAL"},
+    "appVersion": {"type": "string"},
+    "supportedTechnologies": {"type": "array", "items": {"type": "string"}},
+    "descriptor": {"$ref": "#/$defs/descriptor"},
+    "pinHandling": {"const": "system_picker"},
+    "session": {"$ref": "#/$defs/session"},
+    "accessories": {"type": "array", "items": {"$ref": "#/$defs/accessory"}},
+    "pairedDevices": {"type": "array", "items": {"$ref": "#/$defs/pairedDevice"}},
+    "initialAccessories": {"type": "array", "items": {"$ref": "#/$defs/accessory"}},
+    "initialPairedDevices": {"type": "array", "items": {"$ref": "#/$defs/pairedDevice"}},
+    "pairedDeviceSnapshotError": {"type": ["string", "null"]},
+    "outcome": {"enum": ["not_started", "session_ready", "picker_requested", "picker_presented", "picker_failed", "picker_dismissed_without_accessory", "picker_dismissed_with_accessory", "accessory_observed", "authorized"]},
+    "events": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/event"}}
+  },
+  "$defs": {
+    "descriptor": {
+      "type": "object",
+      "required": ["wifiAwareServiceName", "wifiAwareServiceRole", "wifiAwareVendorName", "wifiAwareModelName", "displayItemName", "expectedPairingName"],
+      "additionalProperties": false,
+      "properties": {
+        "wifiAwareServiceName": {"type": "string", "description": "Discovery name from config/services/fileserver.toml; checked against the contract by the evidence reader."},
+        "wifiAwareServiceRole": {"const": "subscriber"},
+        "wifiAwareVendorName": {"type": "string"},
+        "wifiAwareModelName": {"type": "string"},
+        "displayItemName": {"type": "string"},
+        "expectedPairingName": {"type": "string"}
+      }
+    },
+    "session": {
+      "type": "object",
+      "required": ["activated", "invalidated", "pickerRequested", "pickerPresented", "pickerDismissed", "accessoryAddedCount", "accessoryChangedCount", "accessoryRemovedCount"],
+      "additionalProperties": false,
+      "properties": {
+        "activated": {"type": "boolean"},
+        "activationMonotonicNS": {"type": "integer", "minimum": 0},
+        "invalidated": {"type": "boolean"},
+        "invalidationMonotonicNS": {"type": "integer", "minimum": 0},
+        "pickerRequested": {"type": "boolean"},
+        "pickerRequestedMonotonicNS": {"type": "integer", "minimum": 0},
+        "pickerPresented": {"type": "boolean"},
+        "pickerPresentedMonotonicNS": {"type": "integer", "minimum": 0},
+        "pickerDismissed": {"type": "boolean"},
+        "pickerDismissedMonotonicNS": {"type": "integer", "minimum": 0},
+        "pickerCompletionError": {"type": ["string", "null"]},
+        "accessoryAddedCount": {"type": "integer", "minimum": 0},
+        "accessoryChangedCount": {"type": "integer", "minimum": 0},
+        "accessoryRemovedCount": {"type": "integer", "minimum": 0}
+      }
+    },
+    "accessory": {
+      "type": "object",
+      "required": ["displayName", "state", "wifiAwarePairedDeviceID", "hasSSID", "hasBluetoothIdentifier"],
+      "additionalProperties": false,
+      "properties": {
+        "displayName": {"type": "string"},
+        "state": {"enum": ["unauthorized", "awaitingAuthorization", "authorized", "unknown"]},
+        "wifiAwarePairedDeviceID": {"type": "integer", "minimum": 0},
+        "hasSSID": {"type": "boolean"},
+        "hasBluetoothIdentifier": {"type": "boolean"}
+      }
+    },
+    "pairedDevice": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "integer", "minimum": 0},
+        "name": {"type": ["string", "null"]},
+        "pairingName": {"type": ["string", "null"]},
+        "vendorName": {"type": ["string", "null"]},
+        "modelName": {"type": ["string", "null"]}
+      }
+    },
+    "event": {
+      "type": "object",
+      "required": ["sequence", "monotonicNS", "wallTime", "event", "detail"],
+      "additionalProperties": false,
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 1},
+        "monotonicNS": {"type": "integer", "minimum": 0},
+        "wallTime": {"type": "string", "format": "date-time"},
+        "event": {"type": "string", "pattern": "^ask_"},
+        "eventCode": {"type": "integer"},
+        "detail": {"type": "string"},
+        "accessory": {"oneOf": [{"$ref": "#/$defs/accessory"}, {"type": "null"}]},
+        "error": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

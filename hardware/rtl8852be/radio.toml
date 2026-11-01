@@ -1,0 +1,21 @@
+# RTL8852BE 已验证的无线策略；修改后重启无线服务生效。
+# 配置必须与实际硬件匹配，不能通过改名选择另一种网卡能力。
+hardware = "rtl8852be"
+
+[nan]
+# NAN 发现主信道频率，单位 MHz；当前 RTL 后端使用 2437。
+discovery_frequency_mhz = 2437
+# hostap 的 NAN 双频配置；当前 RTL 后端要求 false。
+# 该值不关闭独立配置的 5 GHz 数据主信道。
+dual_band = false
+# NAN 主设备选择优先级；当前 RTL 后端要求 200。
+master_preference = 200
+# 发现信标间隔，单位 TU；当前 RTL 后端要求 100。
+discovery_beacon_interval_tu = 100
+
+[schedule]
+# 发现主信道的可用槽号，整数 0–31；每槽 16 TU，不替代协议 DW。
+discovery_slots = [0, 1, 2, 3, 8, 10, 11]
+# 数据主信道的可用槽号，整数 0–31；不同信道的两组槽不能重叠。
+data_slots = [4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+              21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
