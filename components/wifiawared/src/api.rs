@@ -14,13 +14,13 @@ pub enum Error {
     AccessDenied(String),
     #[zbus(name = "freedesktop.DBus.Error.Failed")]
     Failed(String),
-    #[zbus(name = "be200.WiFiAware1.Error.AlreadyRegistered")]
+    #[zbus(name = "wifiawared1.Error.AlreadyRegistered")]
     AlreadyRegistered(String),
-    #[zbus(name = "be200.WiFiAware1.Error.NotReady")]
+    #[zbus(name = "wifiawared1.Error.NotReady")]
     NotReady(String),
-    #[zbus(name = "be200.WiFiAware1.Error.Busy")]
+    #[zbus(name = "wifiawared1.Error.Busy")]
     Busy(String),
-    #[zbus(name = "be200.WiFiAware1.Error.Radio")]
+    #[zbus(name = "wifiawared1.Error.Radio")]
     Radio(String),
 }
 impl From<anyhow::Error> for Error {
@@ -93,7 +93,7 @@ fn sender(header: &Header<'_>) -> Result<String, Error> {
         .ok_or_else(|| Error::AccessDenied("缺少总线发送者".into()))
 }
 
-#[zbus::interface(name = "org.be200.WiFiAware1.Manager")]
+#[zbus::interface(name = "org.wifiawared1.Manager")]
 impl Manager {
     async fn register_service(
         &self,
@@ -163,7 +163,7 @@ impl Manager {
     }
 }
 
-#[zbus::interface(name = "org.be200.WiFiAware1.Service")]
+#[zbus::interface(name = "org.wifiawared1.Service")]
 impl Service {
     async fn unregister(&self, #[zbus(header)] header: Header<'_>) -> Result<(), Error> {
         let owner = sender(&header)?;

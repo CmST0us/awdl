@@ -8,6 +8,7 @@
 | 公共 hostap | 2.12 固定源码与 13 个补丁完整构建，ARM64 与 amd64 均包含 nl80211 和 rtl_nan |
 | AwareClient | AwareClient / AwareClientBE200 两种安装身份的 iOS Release 构建通过 |
 | 新安装 | 用户态暂存安装通过，配置保留注释，两个硬件策略、设备规则与独立服务单元齐全 |
+| 公共 D-Bus 命名空间 | `org.wifiawared1` 的 ARM64 Release 构建与暂存安装通过；BE200、RTL8852BE 均通过 systemd 就绪、普通用户属性与对象树读取、fileserver 注册/注销/重新注册、AlreadyRegistered / NotReady 错误名称验证；运行配置及配对文件保持一致 |
 | 配置接管 | 原服务名、共享路径、端口、I/O 期限保留；旧单元及启用状态由 fileserver 接管；已有无线配置不被默认值覆盖；运行中程序文件可替换 |
 | BE200 驱动 | 实机对应 6.1.115-gd2eccb6c9eff-dirty headers 构建及七个模块、c108 / PNVM 暂存安装通过 |
 | BE200 / RTL8852BE 实机 | 保留配对升级，128 KiB 下载及 112 KiB 上传逐字节一致；服务重启、断开重连、关闭配对窗口保留活动 NDP、文件服务注销通过 |

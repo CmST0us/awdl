@@ -9,8 +9,8 @@ After=local-fs.target NetworkManager.service dbus.service
 [Service]
 # 取得 BusName 后才宣布就绪。
 Type=dbus
-# 现有公共接口标识，客户端依此连接。
-BusName=org.be200.WiFiAware1
+# 硬件无关的公共总线名称；取得此名称后服务就绪。
+BusName=org.wifiawared1
 # 启动公共守护进程，读取 /etc/wifiawared/config.toml。
 ExecStart=/usr/local/bin/wifiawared serve
 # 异常退出时重新启动。

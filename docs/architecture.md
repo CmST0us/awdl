@@ -179,14 +179,14 @@ NAN 发现、SAE/PASN、NIK/NPK、NDL/NDP、服务映射及协议调度协商由
 
 | 标识或状态 | 决定 |
 | --- | --- |
-| D-Bus 名称与对象根 | 保留 `org.be200.WiFiAware1` 和 `/org/be200/WiFiAware1` |
+| D-Bus 名称与对象根 | `org.wifiawared1` 和 `/org/wifiawared1`，独立于硬件后端 |
 | 文件服务发现名 | 默认由 `config/fileserver-discovery.toml` 定义 `_rtl8852be-test._tcp`，两端同源；其他应用注册自己的服务名 |
 | Linux 配置与配对目录 | 保留 `/etc/wifiawared`、`/var/lib/wifiawared` |
 | 运行目录 | 保留 `/run/wifiawared` |
 | 文件配置和共享目录 | 沿用已有部署配置，安装时只创建缺失的默认配置 |
 | 设备厂商和型号展示 | 从无线服务配置的 `identity` 段取得；客户端按服务发现 |
 
-这些名称已被两个项目共同使用，作为现有接口标识继续生效。标准组件的复用边界由接口和职责确定。
+D-Bus 命名空间由公共组件拥有，版本号表示协议主版本。硬件选择由运行配置和后端处理，应用通过同一接口访问所选网卡。
 
 `SupportedRoles`、`SupportedTransports`、`SupportsMultipleServices` 等现有属性继续表达应用契约。多服务、多个 NDP 和多个物理数据站点分别处理；资源不足由对应后端返回实际错误。新增硬件的能力通过协议栈和驱动上报。
 

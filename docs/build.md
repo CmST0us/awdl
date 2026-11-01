@@ -49,6 +49,8 @@ sudo systemctl enable --now wifiawared fileserver
 
 `CN` 只代表示例部署地区。RTL 必须明确国家码；BE200 的 `--cn` / `[be200].platform_cn` 是独立的平台提示。ROCK 5B 的 usbmoded 关机配置由 `install-platform` 单独安装。
 
+公共用户态升级时，先停止 `fileserver` 和 `wifiawared`，安装同一版本的程序、systemd 单元及 D-Bus 策略，再启动服务。公共总线名称、接口和错误命名空间为 `org.wifiawared1`，本机 D-Bus 调用方须使用同一契约。
+
 首次安装将带注释的默认配置写入 `/etc`，已有配置保持不变。无线配置里的既有 PCI 优先于安装文件；显式 `--pci` 同时更新运行配置、udev 设备归属及 systemd 设备依赖。物理接口按 PCI 匹配，运行时从 PHY 取得实际名称。已运行的系统 wpa_supplicant 须释放该设备，其他网卡不受影响。
 
 旧文件服务配置按字段保留到 `/etc/fileserver/config.toml`，原共享目录和 I/O 期限继续生效。安装接管旧单元时停止并禁用旧服务，依据其原有启用与运行状态启动 `fileserver.service`。配对身份与共享数据不移动。

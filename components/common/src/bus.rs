@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-pub const NAME: &str = "org.be200.WiFiAware1";
-pub const PATH: &str = "/org/be200/WiFiAware1";
-pub const MANAGER: &str = "org.be200.WiFiAware1.Manager";
-pub const SERVICE: &str = "org.be200.WiFiAware1.Service";
+pub const NAME: &str = "org.wifiawared1";
+pub const PATH: &str = "/org/wifiawared1";
+pub const MANAGER: &str = "org.wifiawared1.Manager";
+pub const SERVICE: &str = "org.wifiawared1.Service";
 pub const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
 pub const OBJECT_MANAGER: &str = "org.freedesktop.DBus.ObjectManager";
 pub type Session = (String, String, String, String);

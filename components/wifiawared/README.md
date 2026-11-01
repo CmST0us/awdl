@@ -1,6 +1,6 @@
 # Wi-Fi Aware Publisher
 
-Rust 守护进程通过 Unix 控制接口管理公共 hostap，提供配对窗口、NDP 会话和多个 TCP / UDP 服务注册。D-Bus 契约保持 `org.be200.WiFiAware1`；接口见[服务 API](../../docs/service-api.md)。
+Rust 守护进程通过 Unix 控制接口管理公共 hostap，提供配对窗口、NDP 会话和多个 TCP / UDP 服务注册。D-Bus 公共命名空间为 `org.wifiawared1`；接口见[服务 API](../../docs/service-api.md)。
 
 `configuration.rs` 读取带注释的公共默认值及部署覆盖；`backend.rs` 选择硬件并读取 radio.toml；`radio.rs` 管理进程、接口和本地日程；`publisher.rs` 串行管理认证、服务和会话；`api.rs` 发布状态快照。硬件接管和接口约束分别位于 `hardware/*/radio.rs`。
 
