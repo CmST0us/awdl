@@ -3,5 +3,5 @@ from pathlib import Path
 import tomllib
 
 SERVICE = tomllib.loads(
-    (Path(__file__).resolve().parents[2] / 'config/services/fileserver.toml').read_text()
+    (Path(__file__).resolve().parents[2] / 'config/fileserver-discovery.toml').read_text()
 )['service']

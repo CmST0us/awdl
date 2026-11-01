@@ -105,7 +105,7 @@ pub fn service(root: &Path, cfg: &Settings, publisher: bool) -> Result<()> {
     } else {
         format!(
             "{}\n{}",
-            fs::read_to_string(root.join("config/services/fileserver.toml"))?,
+            fs::read_to_string(root.join("config/fileserver-discovery.toml"))?,
             fs::read_to_string(root.join("config/fileserver.toml"))?
         )
     };

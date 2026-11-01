@@ -14,7 +14,7 @@ impl Default for Configuration {
     fn default() -> Self {
         aware_common::configuration::load(
             include_str!("../../../config/fileserver.toml"),
-            include_str!("../../../config/services/fileserver.toml"),
+            include_str!("../../../config/fileserver-discovery.toml"),
         )
         .expect("版本化文件服务默认配置")
     }
@@ -57,7 +57,7 @@ impl Configuration {
                         &format!(
                             "{}\n{}",
                             include_str!("../../../config/fileserver.toml"),
-                            include_str!("../../../config/services/fileserver.toml")
+                            include_str!("../../../config/fileserver-discovery.toml")
                         ),
                         &text,
                     )

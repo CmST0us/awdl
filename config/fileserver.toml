@@ -1,4 +1,5 @@
 # 文件服务运行默认值；修改后重启 fileserver 生效。
+# 双端共用的发现服务名由 fileserver-discovery.toml 提供。
 
 # 目标机器上的共享目录，必须为绝对路径。
 files = "/srv/fileserver"

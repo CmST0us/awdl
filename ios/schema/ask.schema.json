@@ -29,7 +29,7 @@
       "required": ["wifiAwareServiceName", "wifiAwareServiceRole", "wifiAwareVendorName", "wifiAwareModelName", "displayItemName", "expectedPairingName"],
       "additionalProperties": false,
       "properties": {
-        "wifiAwareServiceName": {"type": "string", "description": "Discovery name from config/services/fileserver.toml; checked against the contract by the evidence reader."},
+        "wifiAwareServiceName": {"type": "string", "description": "Discovery name from config/fileserver-discovery.toml; checked against the contract by the evidence reader."},
         "wifiAwareServiceRole": {"const": "subscriber"},
         "wifiAwareVendorName": {"type": "string"},
         "wifiAwareModelName": {"type": "string"},

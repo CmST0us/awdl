@@ -77,7 +77,7 @@ wifi-aware/
 ├── config/
 │   ├── wifiawared.toml             # 无线服务运行默认值
 │   ├── fileserver.toml             # 文件服务运行默认值
-│   ├── services/fileserver.toml    # Linux / iOS 共用发现契约
+│   ├── fileserver-discovery.toml   # Linux / iOS 共用发现契约
 │   └── local/                     # 本机持久构建与安装配置，不入 Git
 ├── components/
 │   ├── common/                    # aware-common：D-Bus 类型与系统支持
@@ -180,7 +180,7 @@ NAN 发现、SAE/PASN、NIK/NPK、NDL/NDP、服务映射及协议调度协商由
 | 标识或状态 | 决定 |
 | --- | --- |
 | D-Bus 名称与对象根 | 保留 `org.be200.WiFiAware1` 和 `/org/be200/WiFiAware1` |
-| 文件服务发现名 | 默认由 `config/services/fileserver.toml` 定义 `_rtl8852be-test._tcp`，两端同源；其他应用注册自己的服务名 |
+| 文件服务发现名 | 默认由 `config/fileserver-discovery.toml` 定义 `_rtl8852be-test._tcp`，两端同源；其他应用注册自己的服务名 |
 | Linux 配置与配对目录 | 保留 `/etc/wifiawared`、`/var/lib/wifiawared` |
 | 运行目录 | 保留 `/run/wifiawared` |
 | 文件配置和共享目录 | 沿用已有部署配置，安装时只创建缺失的默认配置 |

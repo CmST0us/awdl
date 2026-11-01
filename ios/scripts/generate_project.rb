@@ -23,7 +23,7 @@ ui.resources_build_phase.add_file_reference(project.main_group.new_file('../.bui
 ui.build_configurations.each { |c| c.build_settings['TEST_TARGET_NAME']='AwareLab' }
 phase = app.new_shell_script_build_phase('Service contract')
 phase.shell_script = 'PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; export PATH; "$SRCROOT/../scripts/aware-build" generate-ios-config'
-phase.input_paths = ['$(SRCROOT)/../config/services/fileserver.toml', '$(SRCROOT)/AwareLab/Info.plist']
+phase.input_paths = ['$(SRCROOT)/../config/fileserver-discovery.toml', '$(SRCROOT)/AwareLab/Info.plist']
 phase.output_paths = ['$(SRCROOT)/../.build/config/ios/AwareLab-Info.plist']
 app.build_phases.delete(phase)
 app.build_phases.unshift(phase)

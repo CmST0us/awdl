@@ -9,7 +9,7 @@ struct Contract {
 }
 pub fn generate(root: &Path) -> Result<()> {
     let contract: Contract = toml::from_str(&fs::read_to_string(
-        root.join("config/services/fileserver.toml"),
+        root.join("config/fileserver-discovery.toml"),
     )?)?;
     ensure!(
         (6..128).contains(&contract.service.len())

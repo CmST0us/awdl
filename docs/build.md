@@ -4,7 +4,9 @@
 
 ## 构建选择
 
-`config/build.toml` 提供公共构建默认值，`platforms/rock5b/build.toml` 提供 ARM64 / ROCKCHIP 选择。复制 `config/examples/build.toml` 到 `config/local/build.toml`，按构建机填写路径和工具链。复制 `config/examples/install.toml` 到 `config/local/install.toml`，按目标机器填写 PCI 与实际地区。本机文件持久保留，不进入 Git。
+`config/build.toml` 提供公共构建默认值，`platforms/rock5b/build.toml` 提供 ARM64 / ROCKCHIP 选择。复制 `config/examples/build.toml` 到 `config/local/build.toml`，按构建机填写路径和工具链。
+
+安装示例按平台和网卡命名：`config/examples/install-rock5b-rtl8852be.toml` 或 `config/examples/install-rock5b-be200.toml`。将对应示例复制到 `config/local/install.toml`，按目标机器填写 PCI 与实际地区。本机文件持久保留，不进入 Git。
 
 优先级为显式参数、对应环境变量、本机文件、平台和公共默认值。`CARGO_BUILD_TARGET`、`KERNEL_RELEASE`、`KLIB_BUILD` / `KSRC`、`CC`、`U2_CC`、`CROSS_COMPILE`、`ARCH`、`JOBS`、`DESTDIR` 分别映射到构建目标；`CARGO` / `RUSTC` 选择执行工具。使用 `scripts/aware-build help` 查看参数。
 
@@ -53,7 +55,7 @@ sudo systemctl enable --now wifiawared fileserver
 
 ## iOS
 
-使用支持 WiFiAware 的 Xcode 和 iOS SDK。`scripts/build-ios.sh` 或直接构建 Xcode scheme 都会从 `config/services/fileserver.toml` 生成 Info.plist。构建期需要 Rust 工具链；`Client.plist` 随应用交付，控制连接与 I/O 空闲期限。
+使用支持 WiFiAware 的 Xcode 和 iOS SDK。`scripts/build-ios.sh` 或直接构建 Xcode scheme 都会从 `config/fileserver-discovery.toml` 生成 Info.plist。构建期需要 Rust 工具链；`Client.plist` 随应用交付，控制连接与 I/O 空闲期限。
 
 | Scheme | Bundle ID |
 | --- | --- |

@@ -25,10 +25,12 @@ wifi-aware/
 ├── config/
 │   ├── build.toml                      # 公共构建工具默认值
 │   ├── examples/                       # 带注释的本机与部署示例
+│   │   ├── build.toml
+│   │   ├── install-rock5b-rtl8852be.toml # ROCK 5B / RTL8852BE
+│   │   └── install-rock5b-be200.toml    # ROCK 5B / BE200
 │   ├── wifiawared.toml                 # 公共运行默认值
-│   ├── fileserver.toml                  # 文件应用运行默认值
-│   ├── services/
-│   │   └── fileserver.toml              # Linux / iOS 共用的发现契约
+│   ├── fileserver.toml                 # Linux 文件应用运行默认值
+│   ├── fileserver-discovery.toml       # Linux / iOS 共用的发现契约
 │   └── local/                          # 本机持久配置，不入 Git
 │       ├── build.toml                   # 本机工具链、headers 等路径
 │       └── install.toml                 # 硬件、PCI 与地区安装选择
@@ -209,9 +211,11 @@ data_slots = [4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 17, 18, 19, 20,
 
 ## 文件应用与双端服务契约
 
+`fileserver.toml` 由部署者调整 Linux 服务端行为；`fileserver-discovery.toml` 由应用维护者定义双端一致的发现名称。共享目录、端口和 I/O 期限改变时只需重启服务端；发现名称改变时需要同步部署服务端并重新构建客户端。两份来源在安装时合成为一个 `/etc/fileserver/config.toml`。
+
 ### 发现名称
 
-`config/services/fileserver.toml` 是文件应用发现名称的唯一默认来源：
+`config/fileserver-discovery.toml` 是文件应用发现名称的唯一默认来源：
 
 ```toml
 # Linux 发布端与 iOS 发现端共同使用的服务名，文件服务须以 ._tcp 结尾。

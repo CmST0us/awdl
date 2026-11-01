@@ -242,7 +242,7 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
-				"$(SRCROOT)/../config/services/fileserver.toml",
+				"$(SRCROOT)/../config/fileserver-discovery.toml",
 				"$(SRCROOT)/AwareLab/Info.plist",
 			);
 			name = "Service contract";

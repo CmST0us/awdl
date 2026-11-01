@@ -162,7 +162,7 @@
             isa = PBXShellScriptBuildPhase;
             buildActionMask = 2147483647;
             files = ();
-            inputPaths = ("$(SRCROOT)/../config/services/fileserver.toml", "$(SRCROOT)/AwareClient/Info.plist");
+            inputPaths = ("$(SRCROOT)/../config/fileserver-discovery.toml", "$(SRCROOT)/AwareClient/Info.plist");
             outputPaths = ("$(SRCROOT)/../.build/config/ios/Info.plist");
             name = "Service contract";
             runOnlyForDeploymentPostprocessing = 0;
