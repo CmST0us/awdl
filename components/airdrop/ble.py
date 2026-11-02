@@ -37,6 +37,8 @@ class Advertisement:
             self.sock.bind((self.index,))
             self.sock.setsockopt(0, 2, struct.pack('<IIIH2x', 1 << 4, (1 << 14) | (1 << 15), 0, 0))
             self.sock.settimeout(3)
+            # Reset the idle controller before selecting legacy LE advertising.
+            self.command(0x0c03, b'')
             # 100 ms, connectable undirected, public address, all three channels.
             self.command(0x2006, struct.pack('<HHBBB6sBB', 160, 160, 0, 0, 0, bytes(6), 7, 0))
             manufacturer = bytes.fromhex('4c00051240') + os.urandom(3) + bytes(4) + bytes([3]) + bytes(9)
