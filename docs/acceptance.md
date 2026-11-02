@@ -4,7 +4,7 @@ Wi-Fi Aware 基线为 BE200 `f0f35f48df6cf05ea3386efb765cb6260eb1b4fe` 与 RTL88
 
 | 范围 | 验证结果 |
 | --- | --- |
-| ARM64 / amd64 Linux 公共服务 | wifiawared 与 fileserver Release 构建通过，依赖和标准库授权随产物收集 |
+| ARM64 / amd64 Linux 公共服务 | 公共无线服务与 fileserver Release 构建通过，依赖和标准库授权随产物收集 |
 | 公共 hostap | 2.12 固定源码与 13 个补丁完整构建，ARM64 与 amd64 均包含 nl80211 和 rtl_nan |
 | AwareClient | AwareClient / AwareClientBE200 两种安装身份的 iOS Release 构建通过 |
 | 新安装 | 用户态暂存安装通过，配置保留注释，两个硬件策略、设备规则与独立服务单元齐全 |
@@ -20,7 +20,15 @@ Wi-Fi Aware 基线为 BE200 `f0f35f48df6cf05ea3386efb765cb6260eb1b4fe` 与 RTL88
 
 实机使用同一 ARM64 公共用户态产物。BE200 内核为 `6.1.115-gd2eccb6c9eff-dirty`，RTL 内核为 `6.1.115-g847bc9cd7ecd-dirty`；配置数据频率均为 5745 MHz。iPad 分别使用两个保留的 bundle 身份和既有配对连接。
 
-服务就绪后立即重启的检查覆盖退出信号与内核接口释放。最终安装的 wifiawared、fileserver 均 active/enabled；共享目录、已有配对和原 I/O 期限保留。新构建的内核模块完成暂存安装，实机验证使用各设备现有 main 驱动。
+服务就绪后立即重启的检查覆盖退出信号与内核接口释放。Wi-Fi Aware 合并验收时，无线服务与 fileserver 均 active/enabled；共享目录、已有配对和原 I/O 期限保留。新构建的内核模块完成暂存安装，实机验证使用各设备现有 main 驱动。
+
+## wirelessd 更名与部署接管
+
+2026-11-03，`wirelessd`、fileserver 与安装工具完成 ARM64 Linux 构建。新安装、旧默认目录升级、自定义目录保留均通过暂存安装；iOS 配置重新生成后的资源内容一致。
+
+ROCK 5B / RTL8852BE 通过实际安装器完成接管：`wirelessd.service` 保持 active/enabled，旧命令和服务单元移除；fileserver 注册、注销和普通用户 D-Bus 属性读取通过。AirDrop 就绪、AWDL 原生启动与 STOP 通过，退出后 `awdl0` 已删除。验证结束后恢复 NAN 运行，fileserver 保持 inactive/enabled，AirDrop 与 AWDL 单元保持 inactive/disabled。
+
+配置值、配对身份与凭据、共享文件保留，默认目录引用随名称更新。D-Bus 协议名称仍为 `org.wifiawared1`，驱动与固件沿用原部署。本次改名的实机接管验证覆盖 RTL8852BE。
 
 ## AirDrop 发送
 

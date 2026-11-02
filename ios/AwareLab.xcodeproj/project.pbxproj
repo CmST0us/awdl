@@ -245,7 +245,7 @@
 			);
 			inputPaths = (
 				"$(SRCROOT)/../config/fileserver-discovery.toml",
-				"$(SRCROOT)/../config/wifiawared.toml",
+				"$(SRCROOT)/../config/wirelessd.toml",
 				"$(SRCROOT)/Configurations/AwareClient.xcconfig",
 				"$(SRCROOT)/AwareLab/Info.plist",
 			);

@@ -1,5 +1,5 @@
 [workspace]
-members = ["components/common", "components/wifiawared", "components/fileserver", "tools/aware-build", "components/awdl", "components/airdrop"]
+members = ["components/common", "components/wirelessd", "components/fileserver", "tools/aware-build", "components/awdl", "components/airdrop"]
 resolver = "3"
 
 [workspace.package]

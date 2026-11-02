@@ -14,11 +14,11 @@
 
 ```sh
 scripts/build-hostap.sh
-scripts/build-publisher.sh
+scripts/build-wirelessd.sh
 scripts/build-fileserver.sh
 ```
 
-交叉构建时设置 `--target aarch64-unknown-linux-gnu` 或 `--target x86_64-unknown-linux-gnu`。Rust 需要对应标准库与 linker；hostap 需要 `--cc` 和目标架构的 pkg-config 库搜索路径。`--archive /path/to/wpa_supplicant-2.12.tar.gz` 可复用固定版本的本地归档。两种无线后端编入同一份 hostap 与 wifiawared。
+交叉构建时设置 `--target aarch64-unknown-linux-gnu` 或 `--target x86_64-unknown-linux-gnu`。Rust 需要对应标准库与 linker；hostap 需要 `--cc` 和目标架构的 pkg-config 库搜索路径。`--archive /path/to/wpa_supplicant-2.12.tar.gz` 可复用固定版本的本地归档。两种无线后端编入同一份 hostap 与 wirelessd。
 
 驱动显式选择硬件、目标内核和平台：
 
@@ -41,17 +41,25 @@ BE200 准备 Ubuntu backport 24.70-14867 及其打包补丁后应用项目补丁
 
 ```sh
 sudo scripts/install-driver.sh rtl8852be --kernel-release <目标内核版本> --country CN
-sudo scripts/install-publisher.sh --pci 0002:21:00.0
+sudo scripts/install-wirelessd.sh --pci 0002:21:00.0
 sudo scripts/install-fileserver.sh
 sudo scripts/aware-build install-platform --platform rock5b
-sudo systemctl enable --now wifiawared fileserver
+sudo systemctl enable --now wirelessd fileserver
 ```
 
 `CN` 只代表示例部署地区。RTL 必须明确国家码；BE200 的 `--cn` / `[be200].platform_cn` 是独立的平台提示。ROCK 5B 的 usbmoded 关机配置由 `install-platform` 单独安装。
 
-公共用户态升级时，先停止 `fileserver` 和 `wifiawared`，安装同一版本的程序、systemd 单元及 D-Bus 策略，再启动服务。公共总线名称、接口和错误命名空间为 `org.wifiawared1`，本机 D-Bus 调用方须使用同一契约。
+公共用户态升级时，先停止 `fileserver` 和 `wirelessd`，安装同一版本的程序、systemd 单元及 D-Bus 策略，再启动服务。公共总线名称、接口和错误命名空间为 `org.wifiawared1`，本机 D-Bus 调用方须使用同一契约。
 
 首次安装将带注释的默认配置写入 `/etc`，已有配置保持不变。无线配置里的既有 PCI 优先于安装文件；显式 `--pci` 同时更新运行配置、udev 设备归属及 systemd 设备依赖。物理接口按 PCI 匹配，运行时从 PHY 取得实际名称。已运行的系统 wpa_supplicant 须释放该设备，其他网卡不受影响。
+
+### 从 wifiawared 升级
+
+先保留目标机器的程序、配置和状态目录，再执行 `install-wirelessd.sh`。安装器停止旧服务及其依赖应用，将 `wifiawared.service`、`wifiawared-awdl.service` 接管为 `wirelessd.service`、`wirelessd-awdl.service`，保留原启用与运行状态，并更新已有 fileserver / AirDrop 单元的依赖。旧命令和旧服务单元移除。
+
+默认配置目录 `/etc/wifiawared`、配对状态目录 `/var/lib/wifiawared` 和辅助程序目录 `/usr/local/libexec/wifiawared` 分别迁移到同级 `wirelessd` 目录。配置中这些目录及其子路径同步更新，临时运行目录改为 `/run/wirelessd`；其他自定义路径继续使用原值。配对内容、共享文件和 D-Bus 协议名称 `org.wifiawared1` 保留。新旧目录同时存在时，安装器在停止服务前报告冲突，不覆盖已有目录。
+
+升级顺序为 `install-wirelessd.sh`，随后按已安装的组件执行 `install-fileserver.sh`、`install-awdl.sh`、`install-airdrop.sh`。`--destdir` 使用相同目录接管规则及启用链接转换，不启动服务。
 
 文件服务使用 `_fileserver._tcp`。已有部署需将 `/etc/fileserver/config.toml` 的 `service` 改为该名称并重启 `fileserver`，同时安装按同一发现契约重新构建的 iOS 应用。共享目录、端口、I/O 期限和配对状态保留。
 

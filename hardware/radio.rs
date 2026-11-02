@@ -14,7 +14,7 @@ mod rtl8852be;
 impl Backend {
     pub fn awdl_program(self) -> Result<&'static str> {
         match self {
-            Self::Rtl8852be => Ok("/usr/local/libexec/wifiawared/rtl-awdl"),
+            Self::Rtl8852be => Ok("/usr/local/libexec/wirelessd/rtl-awdl"),
             _ => anyhow::bail!("{} 尚不支持 AWDL", self.name()),
         }
     }

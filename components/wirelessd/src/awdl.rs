@@ -261,7 +261,7 @@ impl Manager {
 pub async fn run(mut radio: Radio, shutdown: impl std::future::Future<Output = ()>) -> Result<()> {
     let cfg: Configuration = aware_common::configuration::load(
         include_str!("../../../config/awdl.toml"),
-        &std::fs::read_to_string("/etc/wifiawared/awdl.toml")?,
+        &std::fs::read_to_string("/etc/wirelessd/awdl.toml")?,
     )?;
     ensure!(
         !cfg.name.is_empty() && cfg.name.len() <= 63 && !cfg.name.contains(['\n', '\r']),

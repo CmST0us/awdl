@@ -158,6 +158,6 @@ pub fn build_awdl(root: &Path, cfg: &Settings) -> Result<()> {
 pub fn awdl_installation(root: &Path, cfg: &Settings) -> Vec<(PathBuf, PathBuf)> {
     vec![(
         cfg.user_dir(root).join("aware-awdl/rtl-awdl"),
-        cfg.dest.join("usr/local/libexec/wifiawared/rtl-awdl"),
+        cfg.dest.join("usr/local/libexec/wirelessd/rtl-awdl"),
     )]
 }

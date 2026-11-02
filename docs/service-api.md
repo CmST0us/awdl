@@ -1,6 +1,6 @@
 # 上层服务接口
 
-`wifiawared` 使用 system D-Bus，无线守护进程和 fileserver 均使用 Rust zbus。总线名称为 `org.wifiawared1`，管理对象为 `/org/wifiawared1`。接口名称中的 `1` 表示协议主版本。类型与方法通过标准 Introspectable 接口查询，实际能力通过 Manager 属性查询。
+`wirelessd` 使用 system D-Bus，无线守护进程和 fileserver 均使用 Rust zbus。总线名称为 `org.wifiawared1`，管理对象为 `/org/wifiawared1`。接口名称中的 `1` 表示协议主版本。类型与方法通过标准 Introspectable 接口查询，实际能力通过 Manager 属性查询。
 
 能力属性面向本机上层应用；空口服务发现和 NDP 参数仍由 hostap 按 Wi-Fi Aware 协议通告。管理协议不承载文件数据。上层应用先在 `ndi0` 建立监听，再注册服务；TCP 或 UDP 数据直接进入上层进程。
 
@@ -69,7 +69,7 @@
 
 UDP 使用相同的 `RegisterService`、服务对象、NDP 会话及注销规则。上层在 `ndi0` 绑定 IPv6 UDP 套接字后，以 `("_device-control._udp", "udp", 7788)` 注册。NDP 响应的服务信息分别编码端口（16 位小端）和 IP 传输协议号：TCP 为 6，UDP 为 17。对端据此取得该服务的目标端口和传输协议。
 
-UDP 没有 accept 或连接断开事件；上层按照 `Sessions` 中的地址接收和发送数据报。会话移除后停止向对应地址发送并忽略其数据，服务对象或守护进程失效后关闭套接字。消息边界、丢包、乱序和重传由上层业务处理，`wifiawared` 不转发或缓存业务数据。TCP 与 UDP 服务可以同时注册；FileServer 固定使用 TCP。
+UDP 没有 accept 或连接断开事件；上层按照 `Sessions` 中的地址接收和发送数据报。会话移除后停止向对应地址发送并忽略其数据，服务对象或守护进程失效后关闭套接字。消息边界、丢包、乱序和重传由上层业务处理，`wirelessd` 不转发或缓存业务数据。TCP 与 UDP 服务可以同时注册；FileServer 固定使用 TCP。
 
 ## 查询与调用
 
@@ -79,12 +79,12 @@ busctl get-property org.wifiawared1 /org/wifiawared1 \
   org.wifiawared1.Manager SupportedTransports
 busctl call org.wifiawared1 /org/wifiawared1 \
   org.freedesktop.DBus.ObjectManager GetManagedObjects
-sudo wifiawared status
-sudo wifiawared pair --seconds 120
-sudo wifiawared close-pairing
+sudo wirelessd status
+sudo wirelessd pair --seconds 120
+sudo wirelessd close-pairing
 ```
 
-`wifiawared status` 使用 D-Bus 查询后在终端输出 JSON：`manager` 是能力与管理属性，`services` 是各服务的属性及对象 `path`，`radio` 是 hostap 状态。JSON 仅为命令行输出格式。
+`wirelessd status` 使用 D-Bus 查询后在终端输出 JSON：`manager` 是能力与管理属性，`services` 是各服务的属性及对象 `path`，`radio` 是 hostap 状态。JSON 仅为命令行输出格式。
 
 Rust 注册示例（在 Tokio 异步入口内调用）：
 

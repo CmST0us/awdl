@@ -1,16 +1,16 @@
 # AirDrop 与 AWDL
 
-RTL8852BE 使用原生 `awdl0` 承载系统 AirDrop。公共 `wifiawared` 管理硬件所有权和 AWDL 会话；`airdrop` 管理 BLE 唤醒、发现、用户接受与传输。BE200 尚不支持 AWDL。
+RTL8852BE 使用原生 `awdl0` 承载系统 AirDrop。公共 `wirelessd` 管理硬件所有权和 AWDL 会话；`airdrop` 管理 BLE 唤醒、发现、用户接受与传输。BE200 尚不支持 AWDL。
 
 ## 构建与安装
 
 ```sh
-scripts/build-publisher.sh --platform rock5b
+scripts/build-wirelessd.sh --platform rock5b
 scripts/build-awdl.sh --platform rock5b
 scripts/build-airdrop.sh --platform rock5b
 scripts/build-driver.sh rtl8852be --platform rock5b
 
-sudo scripts/install-publisher.sh
+sudo scripts/install-wirelessd.sh
 sudo scripts/install-awdl.sh
 sudo scripts/install-airdrop.sh
 sudo scripts/install-driver.sh rtl8852be --country CN
@@ -22,7 +22,7 @@ sudo scripts/install-driver.sh rtl8852be --country CN
 
 ```sh
 # 当前 RTL 后端测试前，正常停止占用同一网卡的服务。
-sudo systemctl stop fileserver wifiawared
+sudo systemctl stop fileserver wirelessd
 # 启动 AWDL 管理与 AirDrop 应用。
 sudo systemctl start airdrop
 
@@ -40,7 +40,7 @@ airdrop decline 1
 airdrop stop
 
 # 结束 AirDrop/AWDL，恢复 NAN 文件服务。
-sudo systemctl stop airdrop wifiawared-awdl
+sudo systemctl stop airdrop wirelessd-awdl
 sudo systemctl start fileserver
 ```
 

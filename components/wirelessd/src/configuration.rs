@@ -43,7 +43,7 @@ pub struct Retention {
 impl Configuration {
     pub fn load(path: &str) -> Result<Self> {
         let mut cfg: Self = aware_common::configuration::load(
-            include_str!("../../../config/wifiawared.toml"),
+            include_str!("../../../config/wirelessd.toml"),
             &std::fs::read_to_string(path).with_context(|| format!("读取无线配置 {path}"))?,
         )
         .with_context(|| format!("解析无线配置 {path}"))?;

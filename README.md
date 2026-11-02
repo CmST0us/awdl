@@ -1,8 +1,8 @@
 # Wireless Service
 
-Linux 无线服务组件，Wi-Fi Aware 支持 Intel BE200 与 RTL8852BE，AWDL / AirDrop 接入 RTL8852BE。两种网卡共用 Rust `wifiawared`、hostap 2.12、Rust HTTP 文件服务和 iOS AwareClient。驱动、固件及无线接入差异位于 `hardware/`。
+Linux 无线服务组件，Wi-Fi Aware 支持 Intel BE200 与 RTL8852BE，AWDL / AirDrop 接入 RTL8852BE。两种网卡共用 Rust `wirelessd`、hostap 2.12、Rust HTTP 文件服务和 iOS AwareClient。驱动、固件及无线接入差异位于 `hardware/`。
 
-`wifiawared` 提供配对、服务注册和安全 NDP 会话；应用通过 D-Bus 注册 TCP / UDP 服务。`fileserver` 是使用该接口的文件应用，可独立安装。一套服务管理一块网卡，业务数据走原生 NDI 与内核 IPv6。
+`wirelessd` 管理无线设备与协议生命周期：Wi-Fi Aware 提供配对、服务注册和安全 NDP 会话，AWDL 提供发现、对端选择和原生数据链路。应用通过 D-Bus 使用对应接口。`fileserver` 是使用该接口的文件应用，可独立安装。一套服务管理一块网卡，业务数据走原生 NDI 与内核 IPv6。
 
 - [AirDrop 与 AWDL](docs/airdrop.md)：系统 AirDrop 发送接收、接受策略与硬件接入限制。
 - [架构](docs/architecture.md)：组件、硬件边界与来源版本。
@@ -14,4 +14,4 @@ Linux 无线服务组件，Wi-Fi Aware 支持 Intel BE200 与 RTL8852BE，AWDL /
 
 可编辑的本机配置放在 `config/local/`，示例位于 `config/examples/`。`.build/` 存放可重建产物，`.private/` 存放私有诊断材料；配对状态与共享文件保存在目标机器上。
 
-仓库地址：`ssh://git@gitlab-r.eric3u.xyz:20022/oxygen/wireless/wireless-service.git`。现有 Wi-Fi Aware 配置路径、D-Bus 名称与 iOS 安装身份保持不变。
+仓库地址：`ssh://git@gitlab-r.eric3u.xyz:20022/oxygen/wireless/wireless-service.git`。现有 Wi-Fi Aware 配置内容、D-Bus 协议名称与 iOS 安装身份保留。

@@ -7,7 +7,7 @@
 <key>NSAccessorySetupKitSupports</key><array><string>WiFi</string></array>
 <!-- 服务名由公共文件服务契约生成，重新构建应用生效。 -->
 <key>AwareFileService</key><string>__AWARE_FILE_SERVICE__</string>
-<!-- 诊断厂商名称，来自 config/wifiawared.toml 的 identity.vendor_name；AWARE_VENDOR_NAME 可覆盖。 -->
+<!-- 诊断厂商名称，来自 config/wirelessd.toml 的 identity.vendor_name；AWARE_VENDOR_NAME 可覆盖。 -->
 <key>AwareVendorName</key><string>__AWARE_VENDOR_NAME__</string>
 <!-- 诊断型号名称，来自 identity.model_name；AWARE_MODEL_NAME 可覆盖。 -->
 <key>AwareModelName</key><string>__AWARE_MODEL_NAME__</string>

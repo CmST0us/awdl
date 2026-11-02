@@ -1,6 +1,6 @@
 # Wireless Service 架构
 
-采用单仓库、公共用户态组件、独立硬件适配的结构。`wifiawared`、hostap、文件服务和 iOS 客户端各维护一份源码；BE200 与 RTL8852BE 的驱动、固件、无线接口差异分别放入硬件目录。新增网卡扩展硬件适配，业务应用继续使用相同的服务接口。
+采用单仓库、公共用户态组件、独立硬件适配的结构。`wirelessd`、hostap、文件服务和 iOS 客户端各维护一份源码；BE200 与 RTL8852BE 的驱动、固件、无线接口差异分别放入硬件目录。新增网卡扩展硬件适配，业务应用继续使用相同的服务接口。
 
 公共实现以 2026-11-01 核对的两个远端 `main` 为来源：
 
@@ -22,7 +22,7 @@ flowchart TB
     App["AwareClient / 其他 Wi-Fi Aware 客户端"]
     Files["fileserver：文件应用"]
     Business["其他 TCP / UDP 应用"]
-    Daemon["wifiawared：服务、配对窗口、会话、无线生命周期"]
+    Daemon["wirelessd：服务、配对窗口、会话、无线生命周期"]
     Hostap["hostap：NAN / PASN / NDL / NDP"]
     Intel["nl80211 后端"]
     RTL["rtl_nan 后端"]
@@ -44,7 +44,7 @@ flowchart TB
     NDI --- Business
 ```
 
-图中的两个无线分支表示可选择的后端。一个守护进程管理一块网卡、一套 `nan0` / `ndi0`，支持多个上层服务。文件内容直接经过 NDI 和内核网络栈，D-Bus 与 `wifiawared` 只承载控制信息。
+图中的两个无线分支表示可选择的后端。一个守护进程管理一块网卡、一套 `nan0` / `ndi0`，支持多个上层服务。文件内容直接经过 NDI 和内核网络栈，D-Bus 与 `wirelessd` 只承载控制信息。
 
 交付分成三个部分：公共 Linux 用户态、指定网卡的硬件包、使用公共接口的应用。文件服务可以独立安装和停用；其他应用直接注册 TCP / UDP 服务，无须引入文件协议。
 
@@ -75,17 +75,17 @@ wifi-aware/
 ├── Cargo.lock
 ├── .cargo/config.toml
 ├── config/
-│   ├── wifiawared.toml             # 无线服务运行默认值
+│   ├── wirelessd.toml             # 无线服务运行默认值
 │   ├── fileserver.toml             # 文件服务运行默认值
 │   ├── fileserver-discovery.toml   # Linux / iOS 共用发现契约
 │   └── local/                     # 本机持久构建与安装配置，不入 Git
 ├── components/
 │   ├── common/                    # aware-common：D-Bus 类型与系统支持
-│   ├── wifiawared/
+│   ├── wirelessd/
 │   │   ├── src/                   # Manager、Service、配对、会话、公共 Radio
 │   │   │   └── radio.rs           # 公共异步无线生命周期
 │   │   ├── Cargo.toml
-│   │   └── wifiawared.service
+│   │   └── wirelessd.service
 │   ├── hostap/
 │   │   ├── source.json
 │   │   ├── hostap.config
@@ -130,11 +130,11 @@ wifi-aware/
 └── .private/                      # 私有证据与临时材料
 ```
 
-`components/hostap` 负责协议栈，最终程序仍是 `wpa_supplicant`。现有 RTL `components/hostapd` 中的私有代码归入 `hardware/rtl8852be/hostap`；其中公共进程管理归入 `wifiawared`。
+`components/hostap` 负责协议栈，最终程序仍是 `wpa_supplicant`。现有 RTL `components/hostapd` 中的私有代码归入 `hardware/rtl8852be/hostap`；其中公共进程管理归入 `wirelessd`。
 
 文件服务的组件目录为 `components/fileserver`，Cargo package 和可执行文件均为 `fileserver`，systemd 单元为 `fileserver.service`。
 
-Rust `Publisher` 通过公共 `Radio` 操作无线设备；文件服务与 App 使用公开协议。`hardware/*/radio.rs` 作为 `wifiawared` 内部模块编入，通过 `hardware/radio.rs` 接入；RTL 的 C 适配编入独立 hostap 进程，通过 hostap 原生驱动接口使用内核 UAPI。两进程沿用 Unix 控制套接字通信。`common` 保持公共类型和系统支持职责。
+Rust `Publisher` 通过公共 `Radio` 操作无线设备；文件服务与 App 使用公开协议。`hardware/*/radio.rs` 作为 `wirelessd` 内部模块编入，通过 `hardware/radio.rs` 接入；RTL 的 C 适配编入独立 hostap 进程，通过 hostap 原生驱动接口使用内核 UAPI。两进程沿用 Unix 控制套接字通信。`common` 保持公共类型和系统支持职责。
 
 ## 两个明确的硬件边界
 
@@ -142,7 +142,7 @@ Rust `Publisher` 通过公共 `Radio` 操作无线设备；文件服务与 App �
 
 公共 Rust `Radio` 负责设备枚举、进程管理、控制套接字、日志、事件等待、NAN 启动流程、NDI 地址配置和资源所有权。
 
-后端使用 `hardware/catalog.rs` 的 Rust 枚举选择，PCI 匹配由守护进程与安装器共用。两种实现静态编入同一个 `wifiawared`。接口为仓库内部接口，与公共代码一起构建。后端提供设备匹配、启动接口准备、引导接口退出方式、运行接口判定及硬件能力约束。NAN 启动值和本地时隙策略从对应 `radio.toml` 读取。
+后端使用 `hardware/catalog.rs` 的 Rust 枚举选择，PCI 匹配由守护进程与安装器共用。两种实现静态编入同一个 `wirelessd`。接口为仓库内部接口，与公共代码一起构建。后端提供设备匹配、启动接口准备、引导接口退出方式、运行接口判定及硬件能力约束。NAN 启动值和本地时隙策略从对应 `radio.toml` 读取。
 
 | 项目 | BE200 | RTL8852BE |
 | --- | --- | --- |
@@ -188,8 +188,8 @@ NAN 发现、SAE/PASN、NIK/NPK、NDL/NDP、服务映射及协议调度协商由
 | --- | --- |
 | D-Bus 名称与对象根 | `org.wifiawared1` 和 `/org/wifiawared1`，独立于硬件后端 |
 | 文件服务发现名 | 默认由 `config/fileserver-discovery.toml` 定义 `_fileserver._tcp`，两端同源；其他应用注册自己的服务名 |
-| Linux 配置与配对目录 | 保留 `/etc/wifiawared`、`/var/lib/wifiawared` |
-| 运行目录 | 保留 `/run/wifiawared` |
+| Linux 配置与配对目录 | `/etc/wirelessd`、`/var/lib/wirelessd`；升级接管旧目录及其内容 |
+| 运行目录 | `/run/wirelessd` |
 | 文件配置和共享目录 | 沿用已有部署配置，安装时只创建缺失的默认配置 |
 | 设备厂商和型号展示 | 从无线服务配置的 `identity` 段取得；客户端按服务发现 |
 
@@ -223,10 +223,10 @@ hostap 2.12 的来源清单、配置、授权和补丁统一放入 `components/h
 
 ```text
 scripts/build-hostap.sh
-scripts/build-publisher.sh
+scripts/build-wirelessd.sh
 scripts/build-fileserver.sh
 scripts/build-driver.sh be200|rtl8852be
-scripts/install-publisher.sh
+scripts/install-wirelessd.sh
 scripts/install-fileserver.sh
 scripts/install-driver.sh be200|rtl8852be
 ```
@@ -291,6 +291,6 @@ AwareClient 使用一份 Swift 源码、一套服务名发现规则和一个项�
 
 `components/awdl` 管理 AWDL 协议状态机；`hardware/rtl8852be/awdl` 适配 vendor 管理帧、对端能力、原生接口与发送日程。`components/airdrop` 独立管理系统 AirDrop 的 BLE 唤醒、服务发现、TLS、接收决策和传输，不使用 NAN 的 NDP 或 fileserver HTTP 契约。
 
-同一 `wifiawared` 可由 NAN 单元或 AWDL 单元启动。两者共用配置中的 PCI 选择、空闲接口接管、设备锁与公共 D-Bus 名称；服务单元不自动停止其他无线服务。当前 RTL 接入要求已有设备所有者先完成退出，并行协议接入仍需实现。AWDL 使用独立 `org.wifiawared1.Awdl` 接口，控制宿主按管理帧和协议计时器推进，通过完成事件宣布就绪和停止。文件数据直接经过原生 `awdl0` 与内核 IPv6。
+同一 `wirelessd` 可由 NAN 单元或 AWDL 单元启动。两者共用配置中的 PCI 选择、空闲接口接管、设备锁与公共 D-Bus 名称；服务单元不自动停止其他无线服务。当前 RTL 接入要求已有设备所有者先完成退出，并行协议接入仍需实现。AWDL 使用独立 `org.wifiawared1.Awdl` 接口，控制宿主按管理帧和协议计时器推进，通过完成事件宣布就绪和停止。文件数据直接经过原生 `awdl0` 与内核 IPv6。
 
 AirDrop 为常驻应用服务，一个时刻持有一个发送或接收操作。每个操作有独立异步运行时，取消时先关闭所有 TLS/HTTP 连接，再回收无线会话及 BLE。接收完成后继续服务；单对端退出后重新发现。默认接收由本机操作者确认，可在配置中明确启用自动接受。配置、命令和接口见 [AirDrop 与 AWDL](airdrop.md)。

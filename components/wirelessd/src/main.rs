@@ -75,7 +75,7 @@ async fn client(operation: &str, seconds: u32) -> Result<()> {
     Ok(())
 }
 async fn run() -> Result<()> {
-    let mut config = "/etc/wifiawared/config.toml".to_string();
+    let mut config = "/etc/wirelessd/config.toml".to_string();
     let mut seconds = 120;
     let mut operation = None;
     let mut protocol = "nan".to_string();
@@ -87,7 +87,7 @@ async fn run() -> Result<()> {
         match key {
             "--help" | "-h" => {
                 println!(
-                    "用法: wifiawared [--config PATH] [--protocol nan|awdl] {{serve|status|pair|close-pairing}} [--seconds 30..600]"
+                    "用法: wirelessd [--config PATH] [--protocol nan|awdl] {{serve|status|pair|close-pairing}} [--seconds 30..600]"
                 );
                 return Ok(());
             }

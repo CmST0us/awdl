@@ -94,7 +94,7 @@ fn execute(root: &Path, action: &str, args: &[String]) -> Result<()> {
             .collect::<Vec<_>>()
             .join("|");
         println!(
-            "用法: scripts/aware-build <命令> [参数]\nprepare-source hostap|{hardware}\nbuild-hostap | build-publisher | build-fileserver | build-awdl | build-airdrop | build-ios\nbuild-driver {hardware}\ninstall-driver {hardware} | install-publisher | install-fileserver | install-awdl | install-airdrop | install-platform\ngenerate-ios-config\n构建: --platform --target --kernel-release --headers --cc --mips-cc --cross-compile --kernel-arch --jobs --archive\n安装: --hardware --pci --country --cn --destdir\n配置: config/local/build.toml、config/local/install.toml"
+            "用法: scripts/aware-build <命令> [参数]\nprepare-source hostap|{hardware}\nbuild-hostap | build-wirelessd | build-fileserver | build-awdl | build-airdrop | build-ios\nbuild-driver {hardware}\ninstall-driver {hardware} | install-wirelessd | install-fileserver | install-awdl | install-airdrop | install-platform\ngenerate-ios-config\n构建: --platform --target --kernel-release --headers --cc --mips-cc --cross-compile --kernel-arch --jobs --archive\n安装: --hardware --pci --country --cn --destdir\n配置: config/local/build.toml、config/local/install.toml"
         );
         return Ok(());
     }
@@ -156,7 +156,7 @@ fn execute(root: &Path, action: &str, args: &[String]) -> Result<()> {
                 .args(["wpa_supplicant", "wpa_cli"]))?;
             fs::write(toolchain_path, toolchain)?;
         }
-        "build-publisher" => build_rust(root, &cfg, "wifiawared", "wifiawared")?,
+        "build-wirelessd" => build_rust(root, &cfg, "wirelessd", "wirelessd")?,
         "build-fileserver" => build_rust(root, &cfg, "fileserver", "fileserver")?,
         "generate-ios-config" | "build-ios" => {
             ios::generate(root)?;
@@ -200,7 +200,7 @@ fn execute(root: &Path, action: &str, args: &[String]) -> Result<()> {
             }
         }
         "install-driver" => install::driver(root, &cfg)?,
-        "install-publisher" => install::service(root, &cfg, true)?,
+        "install-wirelessd" => install::service(root, &cfg, true)?,
         "install-fileserver" => install::service(root, &cfg, false)?,
         "install-platform" => platform::install(root, &cfg)?,
         _ => bail!("未知命令 {action}"),

@@ -129,7 +129,7 @@ impl Publisher {
                 signal = signals.owners.next() => {
                     let signal = signal.context("D-Bus 连接已关闭")??;
                     let (name, previous, _): (String, String, String) = signal.body().deserialize()?;
-                    if name == bus::NAME && previous == self.owner { bail!("wifiawared 已退出"); }
+                    if name == bus::NAME && previous == self.owner { bail!("wirelessd 已退出"); }
                 }
                 signal = signals.service.next() => {
                     let signal = signal.context("D-Bus 连接已关闭")??;

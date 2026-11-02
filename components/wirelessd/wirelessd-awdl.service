@@ -12,11 +12,11 @@ Type=notify
 # 接受管理器启动的 systemd-notify 子进程发送的就绪消息。
 NotifyAccess=all
 # 复用设备选择与所有权，AWDL 使用独立接口。
-ExecStart=/usr/local/bin/wifiawared serve --protocol awdl
+ExecStart=/usr/local/bin/wirelessd serve --protocol awdl
 # 回收错误保留现场，不自动重启或更换内核模块。
 Restart=no
 # 与 NAN 模式共用临时运行目录和锁。
-RuntimeDirectory=wifiawared
+RuntimeDirectory=wirelessd
 RuntimeDirectoryMode=0700
 # 新文件权限掩码。
 UMask=0077

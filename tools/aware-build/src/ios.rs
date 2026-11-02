@@ -44,7 +44,7 @@ pub fn generate(root: &Path) -> Result<()> {
         "无效的文件服务发现名称"
     );
     let publisher: Publisher =
-        toml::from_str(&fs::read_to_string(root.join("config/wifiawared.toml"))?)?;
+        toml::from_str(&fs::read_to_string(root.join("config/wirelessd.toml"))?)?;
     let replacements = [
         ("__AWARE_FILE_SERVICE__", contract.service),
         ("__AWARE_VENDOR_NAME__", publisher.identity.vendor_name),

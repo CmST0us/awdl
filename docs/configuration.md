@@ -10,7 +10,7 @@
 
 | 类别 | 决策者与消费者 | 典型内容 | 生效时机 |
 | --- | --- | --- | --- |
-| 无线服务配置 | 部署者 → wifiawared | 选定 PCI、数据频率、展示信息、状态目录、控制阶段期限 | 服务重启 |
+| 无线服务配置 | 部署者 → wirelessd | 选定 PCI、数据频率、展示信息、状态目录、控制阶段期限 | 服务重启 |
 | 文件应用配置 | 部署者 → fileserver | 共享目录、监听端口、I/O 空闲期限 | 文件服务重启 |
 | 无线适配配置 | 硬件维护者 → 公共 Radio 与对应后端 | NAN 启动参数、已验证的本地时隙策略 | 无线服务重启 |
 | 双端服务契约 | 应用维护者 → Linux 发布端与 iOS 发现端 | 服务发现名称 | 重新构建客户端并部署对应服务配置 |
@@ -28,7 +28,7 @@ wifi-aware/
 │   │   ├── build.toml
 │   │   ├── install-rock5b-rtl8852be.toml # ROCK 5B / RTL8852BE
 │   │   └── install-rock5b-be200.toml    # ROCK 5B / BE200
-│   ├── wifiawared.toml                 # 公共运行默认值
+│   ├── wirelessd.toml                 # 公共运行默认值
 │   ├── fileserver.toml                 # Linux 文件应用运行默认值
 │   ├── fileserver-discovery.toml       # Linux / iOS 共用的发现契约
 │   └── local/                          # 本机持久配置，不入 Git
@@ -39,9 +39,9 @@ wifi-aware/
 │   │   ├── source.json
 │   │   ├── hostap.config                # 上游原生编译配置
 │   │   └── patches/series
-│   ├── wifiawared/
-│   │   ├── wifiawared.service           # 原生 systemd 单元
-│   │   └── org.wifiawared.conf          # 原生 D-Bus 策略
+│   ├── wirelessd/
+│   │   ├── wirelessd.service           # 原生 systemd 单元
+│   │   └── org.wirelessd.conf          # 原生 D-Bus 策略
 │   └── fileserver/
 │       └── fileserver.service
 ├── hardware/
@@ -87,10 +87,10 @@ TOML、systemd 和 shell 风格配置使用 `#`，XML plist 使用 XML 注释，
 
 ## 无线服务配置
 
-源文件为 `config/wifiawared.toml`，安装到 `/etc/wifiawared/config.toml`。保留现有 `pci`、`frequency`、`state`、`runtime`、`supplicant` 键，增加职责明确的配置段。
+源文件为 `config/wirelessd.toml`，安装到 `/etc/wirelessd/config.toml`。保留现有 `pci`、`frequency`、`state`、`runtime`、`supplicant` 键，增加职责明确的配置段。从 wifiawared 升级时，安装器保留配置内容，将旧默认目录及其中的子路径改为 wirelessd 路径，其他自定义目录保持不变；升级步骤见[构建与安装](build.md#从-wifiawared-升级)。
 
 ```toml
-# 无线服务运行默认值；修改后重启 wifiawared 生效。
+# 无线服务运行默认值；修改后重启 wirelessd 生效。
 
 # 完整 PCI 地址，如 0000:03:00.0；空字符串选择唯一受支持设备。
 # 存在多个候选时必须指定，接口名称由该设备自动解析。
@@ -98,14 +98,14 @@ pci = ""
 # 期望的数据主信道频率，单位 MHz；实际可用性由所选驱动确认。
 frequency = 5745
 # 目标机器上保存配对身份和密钥的绝对路径；升级保留目录内容。
-state = "/var/lib/wifiawared"
+state = "/var/lib/wirelessd"
 # 目标机器上控制套接字等临时运行数据的绝对路径。
-runtime = "/run/wifiawared"
+runtime = "/run/wirelessd"
 # 随本组件安装的 hostap 可执行文件，由无线服务启动。
-supplicant = "/usr/local/libexec/wifiawared/wpa_supplicant"
+supplicant = "/usr/local/libexec/wirelessd/wpa_supplicant"
 # 可选：指定匹配所选硬件的完整无线策略文件，路径位于目标机器。
 # 省略时读取该硬件随组件安装的 radio.toml。
-# radio_profile = "/etc/wifiawared/radio.toml"
+# radio_profile = "/etc/wirelessd/radio.toml"
 
 [identity]
 # 配对发现信息中的厂商展示名，由部署产品决定。
@@ -208,7 +208,7 @@ data_slots = [4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 17, 18, 19, 20,
 
 设备能力约束继续由实现检查。RTL 当前只接受指定的 master preference、dual_band 和 beacon interval；修改配置不会扩展固件能力。配置描述已支持的选择，驱动描述支持范围。
 
-工程调试可通过 `wifiawared.toml` 的可选 `radio_profile` 指定一份完整的本地策略文件。文件必须匹配实际硬件；它整体替代该硬件的默认策略，不进行字段级叠加。正式配置固定本轮实际使用的文件，验收结论记录对应策略内容。
+工程调试可通过 `wirelessd.toml` 的可选 `radio_profile` 指定一份完整的本地策略文件。文件必须匹配实际硬件；它整体替代该硬件的默认策略，不进行字段级叠加。正式配置固定本轮实际使用的文件，验收结论记录对应策略内容。
 
 设备 PCI ID、hostap driver 名称、NMI/NDI 操作及资源释放流程继续属于后端实现。它们决定如何操作硬件，不作为用户选择另一行为的配置项。
 
@@ -287,7 +287,7 @@ io_timeout = 60
 
 bundle ID、显示名和签名设置放在 `ios/Configurations/*.xcconfig`，由既有安装身份的 scheme 选择；诊断 App 和测试 Runner 也从各自的 xcconfig 取得身份。构建脚本读取 scheme 的 Archive 配置，分别生成对应安装产物。两个客户端 bundle 与诊断 App 的身份分别保留。服务名来自共用契约，不在每个 scheme 中另写。
 
-AwareLab 的默认厂商、型号和配对目标名来自 `config/wifiawared.toml` 的 `identity`，写入生成的应用及测试资源。诊断实际部署时，`AWARE_VENDOR_NAME`、`AWARE_MODEL_NAME`、`AWARE_TARGET_NAME` 可指定对应设备的展示信息，`AWARE_DISPLAY_ITEM_NAME` 可覆盖系统配对卡片显示名；省略时显示配置中的型号。诊断覆盖不修改 Linux 配对身份或持久配置。
+AwareLab 的默认厂商、型号和配对目标名来自 `config/wirelessd.toml` 的 `identity`，写入生成的应用及测试资源。诊断实际部署时，`AWARE_VENDOR_NAME`、`AWARE_MODEL_NAME`、`AWARE_TARGET_NAME` 可指定对应设备的展示信息，`AWARE_DISPLAY_ITEM_NAME` 可覆盖系统配对卡片显示名；省略时显示配置中的型号。诊断覆盖不修改 Linux 配对身份或持久配置。
 
 256 KiB 读写块、分片分配算法和 HTTP 缓冲布局保留在文件应用实现中。两端缓冲块无需相同，HTTP 定义的是字节流及范围。单次单连接／多连接选择仍由 App 操作决定。
 
@@ -385,9 +385,9 @@ systemd 单元拥有进程启动、重启策略和外部停止期限；D-Bus 策
 | 文件或数据 | 所有者 | 处理方式 |
 | --- | --- | --- |
 | `components/hostap/hostap.config` | 构建维护者 | hostap 编译输入，随源码版本化 |
-| `/run/wifiawared/bootstrap.conf`、控制套接字 | 无线服务 | 每次启动生成，退出清理 |
-| `/var/lib/wifiawared/nan.conf` | hostap | 包含更新和持久化的配对状态，升级保留 |
-| `/var/lib/wifiawared/local-nik` | 设备身份 | 本机生成、持久保留，不进入仓库 |
+| `/run/wirelessd/bootstrap.conf`、控制套接字 | 无线服务 | 每次启动生成，退出清理 |
+| `/var/lib/wirelessd/nan.conf` | hostap | 包含更新和持久化的配对状态，升级保留 |
+| `/var/lib/wirelessd/local-nik` | 设备身份 | 本机生成、持久保留，不进入仓库 |
 | 对端密钥、实际 NDP、协商信道和接口地址 | 协议栈、驱动 | 从运行状态取得，不写成静态配置 |
 | `config/local` 中的本机配置 | 部署者 | 持久输入，不入 Git，构建清理保留 |
 | `.build/config` 中的 iOS 资源和安装文件 | 构建／安装工具 | 可重建输出，只由工具写入 |
@@ -403,7 +403,7 @@ systemd 单元拥有进程启动、重启策略和外部停止期限；D-Bus 策
 
 ## AWDL 与 AirDrop 配置
 
-`config/awdl.toml` 提供公共 AWDL 节点名与启动、停止失败期限，安装到 `/etc/wifiawared/awdl.toml`；设备选择沿用 `/etc/wifiawared/config.toml`。当前 RTL 启动信道和支持的同块跟随范围属于硬件实现。
+`config/awdl.toml` 提供公共 AWDL 节点名与启动、停止失败期限，安装到 `/etc/wirelessd/awdl.toml`；设备选择沿用 `/etc/wirelessd/config.toml`。当前 RTL 启动信道和支持的同块跟随范围属于硬件实现。
 
 `config/airdrop.toml` 提供 AirDrop 的产品显示名、mDNS 主机标签、接收目录和端口、手工或自动接受策略、专用 HCI 选择、发现/接受/传输期限及公告周期，安装到 `/etc/airdrop/config.toml`。每项配置就地注明单位、约束与作用；已有文件不被安装器覆盖。
 

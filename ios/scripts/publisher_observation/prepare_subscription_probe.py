@@ -26,7 +26,7 @@ def main():
     sources=[]
     inputs=list(root.glob('*.py'))
     inputs.extend(root.parent/name for name in ('app_identity.py','service_contract.py'))
-    inputs.extend(project/'config'/name for name in ('fileserver-discovery.toml','wifiawared.toml'))
+    inputs.extend(project/'config'/name for name in ('fileserver-discovery.toml','wirelessd.toml'))
     inputs.extend((project/'ios/Configurations').glob('*.xcconfig'))
     for source in inputs:
         destination=stage/source.relative_to(project)

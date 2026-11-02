@@ -67,11 +67,7 @@ pub fn service(root: &Path, cfg: &Settings, publisher: bool) -> Result<()> {
     cfg.linux()?;
     let dest = &cfg.dest;
     let live = dest == Path::new("/");
-    let name = if publisher {
-        "wifiawared"
-    } else {
-        "fileserver"
-    };
+    let name = if publisher { "wirelessd" } else { "fileserver" };
     let build = cfg.user_dir(root).join(name);
     let component = root.join("components").join(name);
     let mut planned = vec![
@@ -102,9 +98,13 @@ pub fn service(root: &Path, cfg: &Settings, publisher: bool) -> Result<()> {
     }
     let generated = root.join(".build/config").join(&cfg.target);
     let config = dest.join("etc").join(name).join("config.toml");
+    let previous_config = dest.join("etc/wifiawared/config.toml");
+    let rename_daemon = publisher
+        && (dest.join("etc/wifiawared").exists()
+            || dest.join("etc/systemd/system/wifiawared.service").exists());
     let old = dest.join("etc/aware-fileserver/config.toml");
     let defaults = if publisher {
-        fs::read_to_string(root.join("config/wifiawared.toml"))?
+        fs::read_to_string(root.join("config/wirelessd.toml"))?
     } else {
         format!(
             "{}\n{}",
@@ -114,10 +114,34 @@ pub fn service(root: &Path, cfg: &Settings, publisher: bool) -> Result<()> {
     };
     let mut document: DocumentMut = if config.exists() {
         fs::read_to_string(&config)?
+    } else if publisher && previous_config.exists() {
+        fs::read_to_string(&previous_config)?
     } else {
         defaults.clone()
     }
     .parse()?;
+    if rename_daemon {
+        for (key, previous, current) in [
+            ("state", "/var/lib/wifiawared", "/var/lib/wirelessd"),
+            ("runtime", "/run/wifiawared", "/run/wirelessd"),
+            (
+                "supplicant",
+                "/usr/local/libexec/wifiawared",
+                "/usr/local/libexec/wirelessd",
+            ),
+            ("radio_profile", "/etc/wifiawared", "/etc/wirelessd"),
+        ] {
+            if let Some(suffix) = document
+                .get(key)
+                .and_then(Item::as_str)
+                .and_then(|path| path.strip_prefix(previous))
+                .filter(|suffix| suffix.is_empty() || suffix.starts_with('/'))
+            {
+                let path = format!("{current}{suffix}");
+                set(&mut document, key, value(path));
+            }
+        }
+    }
     if !publisher && !config.exists() && old.exists() {
         let previous: DocumentMut = fs::read_to_string(&old)?.parse()?;
         for (key, item) in previous.iter() {
@@ -134,25 +158,25 @@ pub fn service(root: &Path, cfg: &Settings, publisher: bool) -> Result<()> {
                 cfg.user_dir(root)
                     .join("hostap/wpa_supplicant")
                     .join(binary),
-                dest.join("usr/local/libexec/wifiawared").join(binary),
+                dest.join("usr/local/libexec/wirelessd").join(binary),
                 0o755,
             ));
         }
         for (from, to) in [
             (
-                "org.wifiawared.conf",
-                "etc/dbus-1/system.d/org.wifiawared.conf",
+                "org.wirelessd.conf",
+                "etc/dbus-1/system.d/org.wirelessd.conf",
             ),
             (
-                "NetworkManager-wifiawared.conf",
-                "etc/NetworkManager/conf.d/90-wifiawared.conf",
+                "NetworkManager-wirelessd.conf",
+                "etc/NetworkManager/conf.d/90-wirelessd.conf",
             ),
         ] {
             planned.push((component.join(from), dest.join(to), 0o644));
         }
         planned.push((
             root.join("components/hostap/LICENSE.hostap"),
-            dest.join("usr/local/share/licenses/wifiawared/hostap.txt"),
+            dest.join("usr/local/share/licenses/wirelessd/hostap.txt"),
             0o644,
         ));
         for hardware in Hardware::ALL {
@@ -179,12 +203,12 @@ pub fn service(root: &Path, cfg: &Settings, publisher: bool) -> Result<()> {
                 set(&mut document, "pci", value(&pci));
             }
             let rules = format!(
-                "# 所选 PCI 的物理控制接口交给 Wi-Fi Aware；udev 重新加载后生效。\nSUBSYSTEM==\"net\", KERNELS==\"{pci}\", ENV{{NM_UNMANAGED}}=\"1\"\n# 为所选 PCI 提供稳定的 systemd 设备依赖名称。\nSUBSYSTEM==\"pci\", KERNEL==\"{pci}\", TAG+=\"systemd\", ENV{{SYSTEMD_ALIAS}}+=\"/sys/subsystem/pci/devices/{pci}\"\n"
+                "# 所选 PCI 的物理控制接口交给 wirelessd；udev 重新加载后生效。\nSUBSYSTEM==\"net\", KERNELS==\"{pci}\", ENV{{NM_UNMANAGED}}=\"1\"\n# 为所选 PCI 提供稳定的 systemd 设备依赖名称。\nSUBSYSTEM==\"pci\", KERNEL==\"{pci}\", TAG+=\"systemd\", ENV{{SYSTEMD_ALIAS}}+=\"/sys/subsystem/pci/devices/{pci}\"\n"
             );
-            write(&generated.join("90-wifiawared.rules"), &rules)?;
+            write(&generated.join("90-wirelessd.rules"), &rules)?;
             planned.push((
-                generated.join("90-wifiawared.rules"),
-                dest.join("etc/udev/rules.d/90-wifiawared.rules"),
+                generated.join("90-wirelessd.rules"),
+                dest.join("etc/udev/rules.d/90-wirelessd.rules"),
                 0o644,
             ));
             let unit = format!(
@@ -193,12 +217,12 @@ pub fn service(root: &Path, cfg: &Settings, publisher: bool) -> Result<()> {
             write(&generated.join("device.conf"), &unit)?;
             planned.push((
                 generated.join("device.conf"),
-                dest.join("etc/systemd/system/wifiawared.service.d/device.conf"),
+                dest.join("etc/systemd/system/wirelessd.service.d/device.conf"),
                 0o644,
             ));
         }
     }
-    if !config.exists() || (publisher && cfg.explicit_pci) {
+    if !config.exists() || rename_daemon || (publisher && cfg.explicit_pci) {
         write(
             &generated.join(format!("{name}.toml")),
             &document.to_string(),
@@ -209,8 +233,94 @@ pub fn service(root: &Path, cfg: &Settings, publisher: bool) -> Result<()> {
             0o644,
         ));
     }
+    let mut renamed_units = Vec::new();
+    let mut dependent_units = Vec::new();
+    let mut moved_directories = Vec::new();
+    if rename_daemon {
+        for directory in [
+            "etc/wifiawared",
+            "var/lib/wifiawared",
+            "usr/local/libexec/wifiawared",
+            "usr/local/share/licenses/wifiawared",
+            "etc/systemd/system/wifiawared.service.d",
+            "etc/systemd/system/wifiawared-awdl.service.d",
+        ] {
+            let previous = dest.join(directory);
+            if previous.exists() {
+                let current = dest.join(directory.replace("wifiawared", "wirelessd"));
+                ensure!(
+                    !current.exists(),
+                    "{} 与 {} 同时存在，请先明确保留的部署目录",
+                    previous.display(),
+                    current.display()
+                );
+                moved_directories.push((previous, current));
+            }
+        }
+        for (previous, current) in [
+            ("wifiawared.service", "wirelessd.service"),
+            ("wifiawared-awdl.service", "wirelessd-awdl.service"),
+        ] {
+            if !dest.join("etc/systemd/system").join(previous).exists() {
+                continue;
+            }
+            let enabled = if live {
+                Command::new("systemctl")
+                    .args(["is-enabled", "--quiet", previous])
+                    .status()?
+                    .success()
+            } else {
+                dest.join("etc/systemd/system/multi-user.target.wants")
+                    .join(previous)
+                    .is_symlink()
+            };
+            let active = live
+                && Command::new("systemctl")
+                    .args(["is-active", "--quiet", previous])
+                    .status()?
+                    .success();
+            renamed_units.push((previous, current, enabled, active));
+            if current == "wirelessd-awdl.service" {
+                planned.push((
+                    component.join(current),
+                    dest.join("etc/systemd/system").join(current),
+                    0o644,
+                ));
+            }
+        }
+        for dependent in ["fileserver", "airdrop"] {
+            let unit = format!("{dependent}.service");
+            let target = dest.join("etc/systemd/system").join(&unit);
+            if !target.exists() {
+                continue;
+            }
+            let active = live
+                && Command::new("systemctl")
+                    .args(["is-active", "--quiet", &unit])
+                    .status()?
+                    .success();
+            dependent_units.push((unit.clone(), active));
+            planned.push((
+                root.join("components").join(dependent).join(&unit),
+                target,
+                0o644,
+            ));
+        }
+    }
     for (source, _, _) in &planned {
         ensure!(source.is_file(), "缺少构建产物 {}", source.display());
+    }
+    if live && rename_daemon {
+        for (unit, _) in &dependent_units {
+            run(Command::new("systemctl").args(["stop", unit]))?;
+        }
+        for (previous, _, _, _) in &renamed_units {
+            run(Command::new("systemctl").args(["disable", "--now", previous]))?;
+        }
+    }
+    for (previous, current) in moved_directories {
+        fs::rename(&previous, &current)
+            .with_context(|| format!("迁移 {} 到 {}", previous.display(), current.display()))?;
     }
     let old_unit = dest.join("etc/systemd/system/aware-fileserver.service");
     let takeover = !publisher && old_unit.exists();
@@ -241,6 +351,26 @@ pub fn service(root: &Path, cfg: &Settings, publisher: bool) -> Result<()> {
     if publisher {
         for obsolete in hardware::OBSOLETE_USERSPACE_FILES {
             remove(&dest.join(obsolete))?;
+        }
+        if rename_daemon {
+            for (previous, current, enabled, _) in &renamed_units {
+                remove(&dest.join("etc/systemd/system").join(previous))?;
+                let wants = dest.join("etc/systemd/system/multi-user.target.wants");
+                remove(&wants.join(previous))?;
+                if !live && *enabled {
+                    remove(&wants.join(current))?;
+                    std::os::unix::fs::symlink(format!("../{current}"), wants.join(current))?;
+                }
+            }
+            for obsolete in [
+                "usr/local/bin/wifiawared",
+                "etc/dbus-1/system.d/org.wifiawared.conf",
+                "etc/NetworkManager/conf.d/90-wifiawared.conf",
+                "etc/udev/rules.d/90-wifiawared.rules",
+                "etc/systemd/system/wirelessd.service.d/rtl.conf",
+            ] {
+                remove(&dest.join(obsolete))?;
+            }
         }
     } else {
         if takeover {
@@ -281,6 +411,19 @@ pub fn service(root: &Path, cfg: &Settings, publisher: bool) -> Result<()> {
                 .success()
             {
                 run(Command::new("nmcli").args(["general", "reload", "conf"]))?;
+            }
+            for (_, current, enabled, active) in &renamed_units {
+                if *enabled {
+                    run(Command::new("systemctl").args(["enable", current]))?;
+                }
+                if *active {
+                    run(Command::new("systemctl").args(["start", current]))?;
+                }
+            }
+            for (unit, active) in &dependent_units {
+                if *active {
+                    run(Command::new("systemctl").args(["start", unit]))?;
+                }
             }
         } else {
             if enabled {
@@ -424,17 +567,17 @@ pub fn awdl(root: &Path, cfg: &Settings) -> Result<()> {
         "aware-awdl",
         &[
             (
-                "components/wifiawared/wifiawared-awdl.service",
-                "etc/systemd/system/wifiawared-awdl.service",
+                "components/wirelessd/wirelessd-awdl.service",
+                "etc/systemd/system/wirelessd-awdl.service",
                 0o644,
             ),
             (
-                "components/wifiawared/NetworkManager-wifiawared.conf",
-                "etc/NetworkManager/conf.d/90-wifiawared.conf",
+                "components/wirelessd/NetworkManager-wirelessd.conf",
+                "etc/NetworkManager/conf.d/90-wirelessd.conf",
                 0o644,
             ),
         ],
-        &[("config/awdl.toml", "etc/wifiawared/awdl.toml")],
+        &[("config/awdl.toml", "etc/wirelessd/awdl.toml")],
     )?;
     for (source, destination) in hardware_files {
         copy(&source, &destination, 0o755)?;
