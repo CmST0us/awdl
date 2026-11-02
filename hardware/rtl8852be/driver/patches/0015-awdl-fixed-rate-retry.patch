@@ -1,0 +1,23 @@
+--- a/phl/wa_awdl_netdev.h
++++ b/phl/wa_awdl_netdev.h
+@@ -244,6 +244,8 @@
+   m->rts_en=reg->vrtl_carrier_sense==1 && reg->vcs_type==1;
+   m->cts2self=reg->vrtl_carrier_sense==1 && reg->vcs_type!=1;
+  }
++ /* Fixed PHY retries retain the descriptor rate; the native retry limit applies. */
++ m->dis_data_rate_fb=!group;
+  m->f_ldpc=!group && n->ldpc;
+  m->data_rty_lowest_rate=group ? RTW_DATA_RATE_OFDM6:RTW_DATA_RATE_VHT_NSS1_MCS0;
+  ready->x=x;ready->bytes=bytes;ready->packets=count;ready->group=group;
+--- a/phl/hal_g6/mac/mac_ax/mac_8852b/trx_desc_8852b.c
++++ b/phl/hal_g6/mac/mac_ax/mac_8852b/trx_desc_8852b.c
+@@ -291,6 +291,9 @@
+ 		pr_info_once("AWDL_WD_PROTECTION macid=%u rts=%u hw_rts=%u cts=%u raw=%08x\n",
+ 			info->macid, info->rts_en, info->hw_rts_en, info->cts2self,
+ 			le32_to_cpu(wdi->dword4));
++	if (!info->sec_type && info->userate_sel && info->ampdu_en && !info->bc && !info->mc)
++		pr_info_once("AWDL_WD_RATE macid=%u rate=%u bw=%u data_fb_disabled=%u info0=%08x\n",
++		 info->macid,info->f_rate,info->f_bw,info->dis_data_rate_fb,le32_to_cpu(wdi->dword0));
+ 
+ 	wdi->dword5 = 0;
+ 

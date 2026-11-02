@@ -142,3 +142,22 @@ pub fn clean_hostap(root: &Path, cfg: &Settings) -> Result<()> {
     }
     Ok(())
 }
+
+pub fn build_awdl(root: &Path, cfg: &Settings) -> Result<()> {
+    let output = cfg.user_dir(root).join("aware-awdl/rtl-awdl");
+    run(Command::new(&cfg.build.c_compiler)
+        .current_dir(root)
+        .args(["-O2", "-Wall", "-Wextra", "-Werror"])
+        .arg(root.join("hardware/rtl8852be/awdl/main.c"))
+        .arg(root.join("hardware/rtl8852be/hostap/backend.c"))
+        .arg(cfg.user_dir(root).join("aware-awdl/libaware_awdl.a"))
+        .args(["-lpthread", "-ldl", "-lm", "-o"])
+        .arg(output))
+}
+
+pub fn awdl_installation(root: &Path, cfg: &Settings) -> Vec<(PathBuf, PathBuf)> {
+    vec![(
+        cfg.user_dir(root).join("aware-awdl/rtl-awdl"),
+        cfg.dest.join("usr/local/libexec/wifiawared/rtl-awdl"),
+    )]
+}

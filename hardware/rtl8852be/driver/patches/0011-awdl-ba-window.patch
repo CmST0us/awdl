@@ -1,0 +1,58 @@
+--- a/phl/wa_awdl_netdev.h
++++ b/phl/wa_awdl_netdev.h
+@@ -34,7 +34,7 @@
+  wait_queue_head_t idle;
+  atomic_t pending;
+  atomic64_t airtime;
+- u64 opens, closes, ba_requested_ns;
++ u64 opens, closes, ba_requested_ns, ba_retry_after;
+  u16 sequence, group_sequence, awdl_sequence, rx_sequence[17], rx_ba_mask;
+  unsigned long rx_seen;
+  u8 peer[6], ba_token, ba_attempts;
+@@ -73,8 +73,11 @@
+    n->dev->stats.tx_packets+=tx->packets;n->dev->stats.tx_bytes+=tx->bytes;
+   } else n->dev->stats.tx_errors+=tx->packets;
+  }
+- if (tx->ba_request && tx->ba_token==n->ba_token && feedback->txsts!=TX_STATUS_TX_DONE)
+-  n->ba_requested=false;
++ if (tx->ba_request) {
++  pr_info("AWDL_BA complete token=%u status=%u primary=%u pending=%d\n",tx->ba_token,feedback->txsts,n->primary,atomic_read(&n->pending));
++  if(tx->ba_token==n->ba_token && feedback->txsts!=TX_STATUS_TX_DONE)
++   n->ba_requested=false;
++ }
+  atomic64_sub(tx->airtime,&n->airtime);
+  atomic_dec(&n->pending);
+  if (!n->stopping) schedule_work(&n->work);
+@@ -184,7 +187,7 @@
+  wa_awdl_prebuild(n);
+  if(!wa_awdl_plan_ready(n))return;
+  wa_awdl_ba_events(n);
+- while(!READ_ONCE(n->stopping) && atomic_read(&n->pending)<WA_AWDL_DATA_DEPTH) {
++ while(!READ_ONCE(n->stopping) && atomic_read(&n->pending)<(n->tx_ba ? min_t(u16,n->ba_size,WA_AWDL_DATA_DEPTH):WA_AWDL_DATA_DEPTH)) {
+   struct wa_awdl_ready *r;
+   struct rtw_t_meta_data *m;
+   u64 now=ktime_get_ns(),cost;
+@@ -268,7 +271,7 @@
+  /* VHT80 MCS7/8/9, in 100 kbit/s; intersect the peer's two-stream map. */
+  {const u16 long_gi[]={2925,3510,3900},short_gi[]={3250,3900,4333};
+   n->rate_100kbps=(n->sgi ? short_gi:long_gi)[mcs-7]*streams;}
+- n->amsdu_limit=(caps[0]&3) ? 7935:3839;
++ n->amsdu_limit=(caps[0]&3)==2 ? 11424:(caps[0]&3)==1 ? 7935:3839;
+  n->config.vht=true;n->config.channel.primary=149;n->config.channel.center=155;n->config.channel.width=2;
+  memcpy(n->config.vht_info,caps,4);memcpy(n->config.vht_mcs,caps+4,2);
+  memcpy(n->config.ht_info,caps+14,2);memcpy(n->config.ht_mcs,caps+17,2);
+--- a/phl/wa_awdl_ba.h
++++ b/phl/wa_awdl_ba.h
+@@ -83,8 +83,11 @@
+  u8 request[9]={3,0};
+  int ret;
+  if(n->tx_ba || READ_ONCE(n->ba_requested) || n->ba_attempts>=3 ||
+-    (!n->dev->stats.rx_packets && !n->rx_ba_mask) || atomic_read(&n->pending))return false;
++    (!n->dev->stats.rx_packets && !n->rx_ba_mask) || atomic_read(&n->pending) ||
++    ktime_get_ns()<n->ba_retry_after)return false;
+  request[2]=++n->ba_token;n->ba_attempts++;n->ba_requested_ns=ktime_get_ns();
++ /* A failed transmission cannot exhaust all attempts in one peer window. */
++ n->ba_retry_after=n->closes;
+  WRITE_ONCE(n->ba_requested,true);
+  put_unaligned_le16((64<<6)|3,request+3);put_unaligned_le16((n->sequence&4095)<<4,request+7);
+  ret=wa_awdl_ba_send(n,request,9);

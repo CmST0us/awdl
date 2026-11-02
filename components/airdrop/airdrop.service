@@ -1,0 +1,25 @@
+[Unit]
+# 系统服务显示名。
+Description=AirDrop File Transfer
+# AirDrop 通过公共管理器申请独占 AWDL 链路。
+Requires=wifiawared-awdl.service
+After=wifiawared-awdl.service
+PartOf=wifiawared-awdl.service
+
+[Service]
+# 管理接口就绪后启动完成。
+Type=dbus
+BusName=org.airdrop1
+# 常驻命令与接收确认服务；启动后空闲，由 CLI 明确发起操作。
+ExecStart=/usr/local/bin/airdrop serve
+# 回收失败保留现场，由操作者处理。
+Restart=no
+# 接收文件权限掩码。
+UMask=0077
+# 正常取消传输、关闭 BLE 并释放 AWDL 的退出兜底，单位秒。
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+# 明确选择 AirDrop 开机模式时启用。
+WantedBy=multi-user.target

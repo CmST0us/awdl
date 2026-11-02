@@ -1,0 +1,30 @@
+# AirDrop 应用配置；重启 airdrop.service 后生效，已有接收文件保留。
+# 任意字段省略时使用本文件列出的默认值。
+# TLS Discover 中的系统显示名，非空文本，与网卡型号及 Wi-Fi Aware 配对身份独立。
+name = "Wireless Service"
+# TLS Discover 中的产品型号展示名，非空文本。
+model = "Linux"
+# mDNS 主机标签，1–63 字节，仅字母、数字与连字符。
+hostname = "wireless-service"
+# 接收文件的目标绝对目录；缺失时创建，已有同名内容由协议库保留。
+directory = "/srv/airdrop"
+# 接收器在 AWDL IPv6 地址上监听的 TCP 端口，1–65535；发送端使用对端 SRV 端口。
+port = 8771
+# 是否自动接受收到的文件；false 时由 airdrop accept/decline 明确答复。
+auto_accept = false
+# 用于 AirDrop LE 唤醒的 Linux HCI 编号；必须为空闲、关闭的专用适配器，结束恢复关闭。
+hci = 0
+# 发现并选定系统设备名的总失败期限，正整数秒；收到匹配结果立即推进。
+discovery_seconds = 20
+# 单个候选的 mDNS 查询或 TLS Discover 失败期限，正整数秒。
+service_seconds = 5
+# 等待用户答复系统接收提示的最长时间，正整数秒；120 秒覆盖人工确认。
+accept_seconds = 120
+# 从用户接受到 Upload 成功响应的最长时间，正整数秒；75 秒覆盖 500 MB 约 24 秒的已测基线。
+upload_seconds = 75
+# 每轮 mDNS 重复公告数量，正整数；固定带宽接入用重复公告覆盖对端可用窗口。
+announcement_count = 64
+# 同轮相邻公告间隔，正整数微秒；这是协议广播周期，不用于等待流程完成。
+announcement_interval_us = 16400
+# 公告轮次间隔，正整数毫秒；持续接收期间按此周期重新公告。
+announcement_pause_ms = 3000

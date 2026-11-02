@@ -93,6 +93,28 @@ pub fn collect(root: &Path, name: &str, target: &str, destination: &Path) -> Res
             copy(&source, &output.join("package-license.txt"), 0o644)?;
             count += 1;
         }
+        // Git workspace packages can share the repository's root license.
+        if count == 0
+            && package["source"]
+                .as_str()
+                .is_some_and(|s| s.starts_with("git+"))
+        {
+            if let Some(repository) = directory.ancestors().find(|p| p.join(".git").exists()) {
+                for name in [
+                    "LICENSE",
+                    "LICENSE-MIT",
+                    "LICENSE-APACHE",
+                    "COPYING",
+                    "NOTICE",
+                ] {
+                    let file = repository.join(name);
+                    if file.is_file() {
+                        copy(&file, &output.join(name), 0o644)?;
+                        count += 1;
+                    }
+                }
+            }
+        }
         ensure!(count > 0, "依赖 {} 没有可交付的授权文件", package["name"]);
         inventory.push(serde_json::json!({"name": package["name"], "version":package["version"], "source":package["source"], "repository":package["repository"], "license":package["license"]}));
     }

@@ -1,0 +1,306 @@
+--- a/os_dep/linux/rtw_cfgvendor.c
++++ b/os_dep/linux/rtw_cfgvendor.c
+@@ -1851,7 +1851,7 @@
+ 		return -EPROTONOSUPPORT;
+ 	op = nla_get_u32(tb[WA_NAN_ATTR_OP]);
+ 	if (!link || !link->wrlink || !adapter->phl_role) return -ENODEV;
+-	if (op >= 0x100 && op <= 0x104) {
++	if (op >= 0x100 && op <= 0x106) {
+   u32 freq = tb[WA_NAN_ATTR_FREQ] ? nla_get_u32(tb[WA_NAN_ATTR_FREQ]) : 0;
+   if (op == 0x100) {
+    u8 ch = ieee80211_frequency_to_channel(freq);
+@@ -2078,6 +2078,7 @@
+ {
+ 	struct dvobj_priv *dvobj = drv;
+ 	_adapter *adapter = dvobj_get_primary_adapter(dvobj);
++ if (rtw_phl_awdl_net_rx(GET_PHL_INFO(dvobj),frame,len,flags)) return true;
+ 	if (rtw_phl_awdl_probe_active(GET_PHL_INFO(dvobj)) && len >= 30 &&
+      len <= WA_NAN_FRAME_MAX && !memcmp(frame+16, "\x00\x25\x00\xff\x94\x73", 6)) {
+   if (!(flags & (WA_NAN_RX_CRC_ERROR | WA_NAN_RX_ICV_ERROR)) &&
+--- /dev/null
++++ b/phl/wa_awdl_netdev.h
+@@ -0,0 +1,200 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Native IPv6 path; Owly supplies absolute CLOCK_MONOTONIC airtime windows. */
++#include <linux/etherdevice.h>
++#include <linux/hrtimer.h>
++#include <linux/rtnetlink.h>
++#include <linux/workqueue.h>
++
++struct wa_awdl_net {
++ struct net_device *dev;
++ void *phl;
++ struct sk_buff_head queue;
++ struct work_struct work;
++ struct hrtimer timer;
++ u64 opens, closes;
++ u16 sequence, rx_sequence[17];
++ unsigned long rx_seen;
++ u8 peer[6];
++ bool stopping;
++};
++static DEFINE_SPINLOCK(wa_awdl_net_lock);
++static struct wa_awdl_net *wa_awdl_net;
++static const u8 wa_awdl_snap[10]={0xaa,0xaa,3,0,0x17,0xf2,8,0,3,4};
++
++static void wa_awdl_net_done(bool data, u16 len, u32 status)
++{
++ unsigned long flags;
++ struct wa_awdl_net *n;
++ spin_lock_irqsave(&wa_awdl_net_lock,flags);
++ n=wa_awdl_net;
++ if (n && !n->stopping) {
++  if (data) {
++   if (status==TX_STATUS_TX_DONE) {
++    n->dev->stats.tx_packets++;
++    n->dev->stats.tx_bytes+=len-40+ETH_HLEN;
++   } else n->dev->stats.tx_errors++;
++  }
++  schedule_work(&n->work);
++ }
++ spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
++}
++
++static void wa_awdl_net_work(struct work_struct *work)
++{
++ struct wa_awdl_net *n=container_of(work,struct wa_awdl_net,work);
++ struct sk_buff *skb;
++ u8 *frame;
++ u64 cookie, now, close;
++ int ret;
++ unsigned long flags;
++ if (READ_ONCE(n->stopping) || !netif_running(n->dev)) return;
++ spin_lock_irqsave(&wa_awdl_net_lock,flags);
++ now=ktime_get_ns(); close=n->closes;
++ ret=now>=n->opens && now+3000000<close;
++ spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
++ if (!ret || atomic_read(&wa_sdf_state.outstanding)) return;
++ skb=skb_dequeue(&n->queue);
++ if (!skb) return;
++ frame=kmalloc(skb->len-ETH_HLEN+40,GFP_KERNEL);
++ if (!frame) {n->dev->stats.tx_dropped++;goto free_skb;}
++ memset(frame,0,40);frame[0]=8;
++ memcpy(frame+4,skb->data,6);memcpy(frame+10,n->dev->dev_addr,6);
++ memcpy(frame+16,wa_awdl_bssid,6);memcpy(frame+24,wa_awdl_snap,10);
++ frame[34]=n->sequence;frame[35]=n->sequence>>8;frame[38]=0x86;frame[39]=0xdd;
++ memcpy(frame+40,skb->data+ETH_HLEN,skb->len-ETH_HLEN);
++ ret=wa_nan_tx(n->phl,frame,skb->len-ETH_HLEN+40,&cookie,0,0,0,NULL,0);
++ kfree(frame);
++ if (ret==-EBUSY) {skb_queue_head(&n->queue,skb);return;}
++ if (ret) n->dev->stats.tx_errors++;
++ else n->sequence++;
++free_skb:
++ dev_kfree_skb(skb);
++ if (skb_queue_len(&n->queue)<32 && !READ_ONCE(n->stopping)) netif_wake_queue(n->dev);
++ if (!atomic_read(&wa_sdf_state.outstanding) && !skb_queue_empty(&n->queue)) schedule_work(&n->work);
++}
++static enum hrtimer_restart wa_awdl_net_timer(struct hrtimer *timer)
++{
++ struct wa_awdl_net *n=container_of(timer,struct wa_awdl_net,timer);
++ if (!READ_ONCE(n->stopping)) schedule_work(&n->work);
++ return HRTIMER_NORESTART;
++}
++static netdev_tx_t wa_awdl_net_xmit(struct sk_buff *skb,struct net_device *dev)
++{
++ struct wa_awdl_net *n=netdev_priv(dev);
++ if (skb->len<ETH_HLEN+40 || skb->protocol!=htons(ETH_P_IPV6) ||
++     (!(skb->data[0]&1) && memcmp(skb->data,n->peer,6)) ||
++     READ_ONCE(n->stopping) || skb_linearize(skb)) {
++  dev->stats.tx_dropped++;dev_kfree_skb_any(skb);return NETDEV_TX_OK;
++ }
++ if (skb_queue_len(&n->queue)>=64) {
++  netif_stop_queue(dev);
++  if (skb_queue_len(&n->queue)<32) netif_wake_queue(dev);
++  return NETDEV_TX_BUSY;
++ }
++ skb_queue_tail(&n->queue,skb);
++ if (skb_queue_len(&n->queue)>=64) {
++  netif_stop_queue(dev);
++  if (skb_queue_len(&n->queue)<32) netif_wake_queue(dev);
++ }
++ schedule_work(&n->work);
++ return NETDEV_TX_OK;
++}
++static int wa_awdl_net_open(struct net_device *dev) {netif_start_queue(dev);return 0;}
++static int wa_awdl_net_close(struct net_device *dev) {netif_stop_queue(dev);return 0;}
++static const struct net_device_ops wa_awdl_net_ops={
++ .ndo_open=wa_awdl_net_open,.ndo_stop=wa_awdl_net_close,.ndo_start_xmit=wa_awdl_net_xmit,
++ .ndo_validate_addr=eth_validate_addr,
++};
++static int wa_awdl_net_create(void *phl,const u8 *local,const u8 *peer)
++{
++ struct net_device *dev;
++ struct wa_awdl_net *n;
++ int ret;
++ if (wa_awdl_net) return -EEXIST;
++ if (!try_module_get(THIS_MODULE)) return -ENODEV;
++ dev=alloc_etherdev(sizeof(*n));
++ if (!dev) {module_put(THIS_MODULE);return -ENOMEM;}
++ strcpy(dev->name,"awdl0");eth_hw_addr_set(dev,local);
++ dev->netdev_ops=&wa_awdl_net_ops;dev->mtu=1280;dev->min_mtu=1280;dev->max_mtu=1500;
++ dev->tx_queue_len=64;dev->features=0;
++ n=netdev_priv(dev);n->dev=dev;n->phl=phl;memcpy(n->peer,peer,6);
++ skb_queue_head_init(&n->queue);INIT_WORK(&n->work,wa_awdl_net_work);
++ hrtimer_init(&n->timer,CLOCK_MONOTONIC,HRTIMER_MODE_ABS);n->timer.function=wa_awdl_net_timer;
++ if (!rtnl_trylock()) {ret=-EBUSY;goto fail;}
++ ret=register_netdevice(dev);rtnl_unlock();
++ if (ret) goto fail;
++ spin_lock_bh(&wa_awdl_net_lock);wa_awdl_net=n;spin_unlock_bh(&wa_awdl_net_lock);
++ netif_carrier_on(dev);
++ pr_info("AWDL_NET create ifindex=%u local=%pM peer=%pM\n",dev->ifindex,local,peer);
++ return 0;
++fail:
++ free_netdev(dev);module_put(THIS_MODULE);return ret;
++}
++static int wa_awdl_net_delete(void)
++{
++ struct wa_awdl_net *n=wa_awdl_net;
++ if (!n) return 0;
++ if (!rtnl_trylock()) return -EBUSY;
++ spin_lock_bh(&wa_awdl_net_lock);n->stopping=true;wa_awdl_net=NULL;spin_unlock_bh(&wa_awdl_net_lock);
++ netif_tx_disable(n->dev);hrtimer_cancel(&n->timer);cancel_work_sync(&n->work);
++ pr_info("AWDL_NET stop tx=%lu tx_errors=%lu rx=%lu rx_drop=%lu queued=%u\n",
++  n->dev->stats.tx_packets,n->dev->stats.tx_errors,n->dev->stats.rx_packets,n->dev->stats.rx_dropped,skb_queue_len(&n->queue));
++ skb_queue_purge(&n->queue);unregister_netdevice(n->dev);rtnl_unlock();
++ free_netdev(n->dev);module_put(THIS_MODULE);return 0;
++}
++static int wa_awdl_net_window(const u8 *data,u16 len)
++{
++ struct wa_awdl_net *n=wa_awdl_net;
++ u64 open,close;
++ if (!n) return -ENODEV;
++ if (len!=16) return -EINVAL;
++ open=get_unaligned_le64(data);close=get_unaligned_le64(data+8);
++ if (open>close) return -EINVAL;
++ hrtimer_cancel(&n->timer);
++ spin_lock_bh(&wa_awdl_net_lock);n->opens=open;n->closes=close;spin_unlock_bh(&wa_awdl_net_lock);
++ if (close>ktime_get_ns()) {
++  if (open>ktime_get_ns()) hrtimer_start(&n->timer,ns_to_ktime(open),HRTIMER_MODE_ABS);
++  else schedule_work(&n->work);
++ }
++ return 0;
++}
++bool rtw_phl_awdl_net_rx(void *phl,const u8 *f,u32 len,u32 flags)
++{
++ struct wa_awdl_net *n;
++ struct sk_buff *skb;
++ unsigned long irq;
++ u32 h,iplen;
++ u16 seq;
++ u8 tid;
++ bool handled=false;
++ if (len<24 || (f[0]&0x0c)!=8) return false;
++ spin_lock_irqsave(&wa_awdl_net_lock,irq);n=wa_awdl_net;
++ if (!n || n->phl!=phl) goto out;
++ handled=true;
++ h=f[0]==0x88 ? 26:24;
++ if (len<h) goto drop;
++ tid=h==26 ? f[24]&15:16;
++ if (!netif_running(n->dev) || len<h+56 || (f[1]&0x47) ||
++     flags&(WA_NAN_RX_CRC_ERROR|WA_NAN_RX_ICV_ERROR) ||
++     memcmp(f+16,wa_awdl_bssid,6) || memcmp(f+10,n->peer,6) ||
++     (!(f[4]&1) && memcmp(f+4,n->dev->dev_addr,6)) ||
++     (h==26 && (f[24]&0x80)) || memcmp(f+h,wa_awdl_snap,10) ||
++     f[h+14]!=0x86 || f[h+15]!=0xdd || (f[h+16]>>4)!=6) goto drop;
++ iplen=40+((u32)f[h+20]<<8)+f[h+21];
++ if (h+16+iplen>len || iplen>n->dev->mtu) goto drop;
++ seq=get_unaligned_le16(f+22)>>4;
++ if ((f[1]&8) && (n->rx_seen&BIT(tid)) && n->rx_sequence[tid]==seq) goto drop;
++ skb=netdev_alloc_skb_ip_align(n->dev,ETH_HLEN+iplen);
++ if (!skb) goto drop;
++ memcpy(skb_put(skb,6),f+4,6);memcpy(skb_put(skb,6),f+10,6);
++ memcpy(skb_put(skb,2),"\x86\xdd",2);
++ memcpy(skb_put(skb,iplen),f+h+16,iplen);
++ skb->protocol=eth_type_trans(skb,n->dev);skb->ip_summed=CHECKSUM_NONE;
++ n->rx_seen|=BIT(tid);n->rx_sequence[tid]=seq;
++ n->dev->stats.rx_packets++;n->dev->stats.rx_bytes+=iplen+ETH_HLEN;
++ netif_rx(skb);goto out;
++drop:
++ n->dev->stats.rx_dropped++;
++out:
++ spin_unlock_irqrestore(&wa_awdl_net_lock,irq);return handled;
++}
+--- a/phl/wa_awdl_probe.h
++++ b/phl/wa_awdl_probe.h
+@@ -21,6 +21,8 @@
+   start,rtw_hal_read32(hal,0xce24),rtw_hal_read32(hal,0xce34));
+ }
+ static const u8 wa_awdl_bssid[6] = {0x00,0x25,0x00,0xff,0x94,0x73};
++
++#include "wa_awdl_netdev.h"
+ 
+ static int wa_awdl_start(void *phl, struct rtw_wifi_role_t *role,
+  struct rtw_wifi_role_link_t *link, u32 freq)
+@@ -99,6 +101,11 @@
+  if (op==0x100) return wa_awdl_start(phl,role,link,freq);
+  if (!rtw_phl_awdl_probe_active(phl)) return -ENETDOWN;
+  if (op==0x101) { wa_awdl_control_diag(ctx->phl->hal,false); return rtw_phl_wa_nan_host_stop(phl); }
++ if (op==0x105) {
++  if (!ctx->peer_ready) return -ENOTCONN;
++  return wa_awdl_net_create(phl,link->mac_addr,ctx->peer->mac_addr);
++ }
++ if (op==0x106) return wa_awdl_net_window(frame,len);
+  if (op==0x104) {
+   u32 ctrl=rtw_hal_read32(ctx->phl->hal,0xce34);
+   u32 dis=rtw_hal_read32(ctx->phl->hal,0xce38);
+--- a/phl/wa_nan_sdf_tx.c
++++ b/phl/wa_nan_sdf_tx.c
+@@ -23,6 +23,7 @@
+ 	u64 request_cookie;
+ 	bool protected_tx;
+ 	bool unicast_ack;
++ bool native_awdl;
+ };
+ 
+ struct wa_nan_sdf_tx_state {
+@@ -39,6 +40,8 @@
+ 	u32 timeout;
+ };
+ 
++static void wa_awdl_net_done(bool data, u16 len, u32 status);
++static int wa_awdl_net_delete(void);
+ static bool wa_awdl_active;
+ static void *wa_awdl_phl;
+ static u8 wa_awdl_peer_macid;
+@@ -95,8 +98,9 @@
+ 	if (ctx->request_cookie)
+ 		wa_nan_vendor_tx_done(((struct phl_info_t *)ctx->phl)->phl_com->drv_priv,
+ 			ctx->request_cookie, txsts, acked);
+-	kfree(ctx);
+ 	atomic_set(&state->outstanding, 0);
++ wa_awdl_net_done(ctx->native_awdl,ctx->len,txsts);
++ kfree(ctx);
+ 	wake_up_all(&wa_sdf_wait);
+ }
+ 
+@@ -187,6 +191,7 @@
+ 	state->active_ns = ctx->submitted_ns;
+ 	spin_unlock_irqrestore(&state->lock, flags);
+ 	ctx->phl = phl;
++ ctx->native_awdl=awdl_data && !request_cookie;
+ 	ctx->request_cookie = request_cookie;
+ 	ctx->unicast_ack = !(frame[4] & 1) &&
+ 		((frame[0] & 0xfc) == 0xd0 || (frame[0] & 0xfc) == 0xb0 || awdl_data);
+--- a/phl/wa_nan_stageb.h
++++ b/phl/wa_nan_stageb.h
+@@ -714,7 +714,9 @@
+ static int wa_nan_host_cleanup(void *phl)
+ {
+ 	struct wa_nan_stageb_ctx *ctx = &wa_nan_stageb;
+-	int ret = wa_nan_sdf_quiesce();
++	int ret = wa_awdl_net_delete();
++ if (ret) return ret;
++ ret = wa_nan_sdf_quiesce();
+ 	if (ret) return ret;
+ 	ret = wa_ndi_quiesce(ctx->ndi);
+ 	if (ret) return ret;
+--- a/phl/wa_nan_vendor.h
++++ b/phl/wa_nan_vendor.h
+@@ -50,6 +50,7 @@
+  const u8 *key, bool add, u64 key_cookie);
+ 
+ bool rtw_phl_awdl_probe_active(void *phl);
++bool rtw_phl_awdl_net_rx(void *phl,const u8 *frame,u32 len,u32 flags);
+ int rtw_phl_awdl_probe(void *phl, struct rtw_wifi_role_t *role,
+  struct rtw_wifi_role_link_t *link, u32 op, u32 freq,
+  const u8 *frame, u16 len, u64 cookie);

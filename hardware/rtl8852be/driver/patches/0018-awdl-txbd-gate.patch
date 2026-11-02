@@ -1,0 +1,498 @@
+diff --git a/phl/hal_g6/wa_nan_hal.h b/phl/hal_g6/wa_nan_hal.h
+index 110f971..2f573cd 100644
+--- a/phl/hal_g6/wa_nan_hal.h
++++ b/phl/hal_g6/wa_nan_hal.h
+@@ -145,6 +145,37 @@ void rtw_hal_awdl_reports(void *hal,u8 band,bool enable,u32 *saved)
+   enable,band,hal_read8(h->hal_com,reg),hal_read32(h->hal_com,R_AX_HW_RPT_FWD));
+ }
+ 
++/* PCIe MMIO gate: no firmware command or sleep in the hrtimer path. */
++u32 rtw_hal_awdl_pause(void *hal,u16 macid,bool pause)
++{
++ struct hal_info_t *h=hal;
++ u32 reg=R_AX_SS_MACID_PAUSE_0+(macid/32)*4,bit=BIT(macid%32);
++ u32 value=hal_read32(h->hal_com,reg);
++ hal_write32(h->hal_com,reg,pause ? value|bit:value&~bit);
++ return hal_read32(h->hal_com,reg)&bit;
++}
++void rtw_hal_awdl_aggregate(void *hal,u8 band,bool enable,u32 *saved)
++{
++ struct hal_info_t *h=hal;
++ u32 regs[2]={band ? R_AX_AGG_LEN_VHT_0_C1:R_AX_AGG_LEN_VHT_0,
++              band ? R_AX_AGG_LEN_HE_0_C1:R_AX_AGG_LEN_HE_0};
++ for(u8 i=0;i<2;i++) {
++  u32 value=hal_read32(h->hal_com,regs[i]);
++  if(enable) {saved[i]=value;value=(value&~(i ? B_AX_AMPDU_MAX_LEN_HE_MSK:B_AX_AMPDU_MAX_LEN_VHT_MSK))|524288;}
++  else value=saved[i];
++  hal_write32(h->hal_com,regs[i],value);
++ }
++ pr_info("AWDL_AGG_LIMIT enabled=%u vht=%08x he=%08x saved=%08x/%08x\n",enable,
++  hal_read32(h->hal_com,regs[0]),hal_read32(h->hal_com,regs[1]),saved[0],saved[1]);
++}
++int rtw_hal_awdl_agg_descriptor(void *hal,struct rtw_phl_stainfo_t *sta)
++{
++ struct rtw_hal_mac_ax_cctl_info c={0},mask={0};
++ /* Select each WD's aggregate count so the tail deadline can shorten a PPDU. */
++ c.max_agg_num_sel=0;mask.max_agg_num_sel=1;
++ return rtw_hal_cmc_tbl_cfg(hal,&c,&mask,sta->macid)==RTW_HAL_STATUS_SUCCESS ? 0:-EIO;
++}
++
+ int rtw_hal_wa_nan_rate(void *hal, struct rtw_phl_stainfo_t *sta,
+                        const struct wa_nan_ndi_config *p, bool enable)
+ {
+diff --git a/phl/hci/phl_trx_pcie.c b/phl/hci/phl_trx_pcie.c
+index 7c036e4..6f6f4fc 100755
+--- a/phl/hci/phl_trx_pcie.c
++++ b/phl/hci/phl_trx_pcie.c
+@@ -2679,14 +2679,11 @@ static enum rtw_phl_status _phl_handle_xmit_ring_pcie
+ 	return pstatus;
+ }
+ 
+-static void _phl_tx_callback_pcie(void *context)
++static DEFINE_SPINLOCK(awdl_tx_batch_lock);
++
++static void phl_tx_drain_pcie(struct phl_info_t *phl_info)
+ {
+ 	enum rtw_phl_status pstatus = RTW_PHL_STATUS_FAILURE;
+-	struct rtw_phl_handler *phl_handler
+-		= (struct rtw_phl_handler *)phl_container_of(context,
+-							struct rtw_phl_handler,
+-							os_handler);
+-	struct phl_info_t *phl_info = (struct phl_info_t *)phl_handler->context;
+ 	struct phl_hci_trx_ops *hci_trx_ops = phl_info->hci_trx_ops;
+ 	struct phl_ring_status *ring_sts = NULL, *t;
+ 	void *drvpriv = phl_to_drvpriv(phl_info);
+@@ -2747,6 +2744,26 @@ end:
+ 	FUNCOUT_WSTS(pstatus);
+ }
+ 
++static void _phl_tx_callback_pcie(void *context)
++{
++ struct rtw_phl_handler *handler = phl_container_of(context, struct rtw_phl_handler, os_handler);
++ spin_lock_bh(&awdl_tx_batch_lock);
++ phl_tx_drain_pcie(handler->context);
++ spin_unlock_bh(&awdl_tx_batch_lock);
++}
++
++/* Serialize the AWDL producer with the native handler until TXBD publication. */
++void rtw_phl_awdl_batch_begin(void)
++{
++ spin_lock_bh(&awdl_tx_batch_lock);
++}
++void rtw_phl_awdl_batch_end(void *phl, bool flush)
++{
++ if (flush) phl_tx_drain_pcie(phl);
++ spin_unlock_bh(&awdl_tx_batch_lock);
++}
++
++
+ 
+ static u8 _phl_check_rx_hw_resource(struct phl_info_t *phl_info)
+ {
+@@ -3547,6 +3564,7 @@ phl_prepare_tx_pcie(struct phl_info_t *phl_info, struct rtw_xmit_req *tx_req)
+ 
+ void rtw_phl_wa_nan_txbd_ready(struct rtw_xmit_req *request);
+ void rtw_phl_awdl_txbd_ready(struct rtw_xmit_req *request);
++void rtw_phl_awdl_doorbell(u8 channel,u16 count,u32 bytes,bool success);
+ void rtw_phl_awdl_pool_recycle(struct rtw_xmit_req *request);
+ 
+ static enum rtw_phl_status
+@@ -3559,7 +3577,8 @@ phl_handle_pending_wd(struct phl_info_t *phl_info,
+ 	struct hci_info_t *hci_info = (struct hci_info_t *)phl_info->hci;
+ 	struct tx_base_desc *txbd = NULL;
+ 	struct rtw_wd_page *wd = NULL;
+-	u16 cnt = 0;
++	u16 cnt = 0, awdl_count = 0;
++	u32 awdl_bytes = 0;
+ 
+ #ifdef RTW_WKARD_DYNAMIC_LTR
+ 	if (true != _phl_judge_act_ltr_switching_conditions(phl_info, ch)) {
+@@ -3588,6 +3607,7 @@ phl_handle_pending_wd(struct phl_info_t *phl_info,
+ 			if (wd->wp_seq < WP_MAX_SEQ_NUMBER) {
+                 struct rtw_xmit_req *req = (struct rtw_xmit_req *)wd_ring->wp_tag[wd->wp_seq].ptr;
+                 rtw_phl_wa_nan_txbd_ready(req);
++                if (req && req->awdl_pool) { awdl_count++; awdl_bytes += req->total_len + 8; }
+                 rtw_phl_awdl_txbd_ready(req);
+             }
+ 			enqueue_busy_wd_page(phl_info, wd_ring, wd, _tail);
+@@ -3607,6 +3627,7 @@ phl_handle_pending_wd(struct phl_info_t *phl_info,
+ 		_phl_switch_act_ltr(phl_info, ch);
+ #endif
+ 		hstatus = rtw_hal_trigger_txstart(phl_info->hal, txbd, ch);
++        if (awdl_count) rtw_phl_awdl_doorbell(ch,awdl_count,awdl_bytes,hstatus == RTW_HAL_STATUS_SUCCESS);
+ 		if (RTW_HAL_STATUS_SUCCESS != hstatus) {
+ 			PHL_TRACE(COMP_PHL_DBG, _PHL_WARNING_, "update txbd idx fail!\n");
+ 			pstatus = RTW_PHL_STATUS_FAILURE;
+diff --git a/phl/wa_awdl_ba.h b/phl/wa_awdl_ba.h
+index 9da39bb..0983da3 100644
+--- a/phl/wa_awdl_ba.h
++++ b/phl/wa_awdl_ba.h
+@@ -70,6 +70,7 @@ static void wa_awdl_ba_events(struct wa_awdl_net *n)
+     ret=rtw_hal_wa_nan_command_begin(n->phl->hal);
+     if(!ret) {
+      ret=rtw_phl_cmd_cfg_ampdu(n->phl,n->sta->wrole,n->sta,PHL_CMD_DIRECTLY,0)==RTW_PHL_STATUS_SUCCESS ? 0:-EIO;
++     if(!ret)ret=rtw_hal_awdl_agg_descriptor(n->phl->hal,n->sta);
+      rtw_hal_wa_nan_command_end();
+     }
+     n->tx_ba=!ret;n->tx_ba_amsdu=!!(param&1);
+diff --git a/phl/wa_awdl_netdev.h b/phl/wa_awdl_netdev.h
+index a5dac8c..20d2b6f 100644
+--- a/phl/wa_awdl_netdev.h
++++ b/phl/wa_awdl_netdev.h
+@@ -8,11 +8,17 @@
+ #include <linux/dma-mapping.h>
+ int rtw_hal_awdl_primary(void *hal,u8 band,u8 primary);
+ void rtw_hal_awdl_reports(void *hal,u8 band,bool enable,u32 *saved);
++void rtw_phl_awdl_batch_begin(void);
++void rtw_phl_awdl_batch_end(void *phl,bool flush);
++u32 rtw_hal_awdl_pause(void *hal,u16 macid,bool pause);
++void rtw_hal_awdl_aggregate(void *hal,u8 band,bool enable,u32 *saved);
++int rtw_hal_awdl_agg_descriptor(void *hal,struct rtw_phl_stainfo_t *sta);
+ #define WA_AWDL_DATA_DEPTH 128
+ #define WA_AWDL_PREPARED 256
+ #define WA_AWDL_POOL_SIZE (WA_AWDL_PREPARED+WA_AWDL_DATA_DEPTH)
+ #define WA_AWDL_BUFFER_SIZE 12288
+-#define WA_AWDL_QUEUE_MAX 4096
++#define WA_AWDL_QUEUE_MAX 768
++#define WA_AWDL_QUEUE_BYTES (2U*512*1024)
+ #define WA_AWDL_MSDUS 8
+ struct wa_awdl_ready;
+ struct wa_awdl_net {
+@@ -22,12 +28,17 @@ struct wa_awdl_net {
+  struct rtw_phl_stainfo_t *sta;
+  struct wa_nan_ndi_config config;
+  struct sk_buff_head queue, ba_queue;
++ atomic_t queued_bytes;
+  struct list_head prepared, live, free_buffers;
+  struct wa_awdl_ready *pool;
+  struct device *dma_dev;
+  struct workqueue_struct *prepare_wq;
+  struct work_struct prepare_work;
+  bool preparing, phy_pending;
++ bool gate_open;
++ u32 gate_saved, agg_saved[2], gate_opens, gate_closes, gate_mismatch;
++ u32 doorbells, doorbell_fail, doorbell_max, doorbell_bytes_max;
++ u64 doorbell_bytes, gate_late_ns;
+  u8 phy_caps[28], nss, mcs;
+  struct completion phy_done;
+  int phy_result;
+@@ -86,6 +97,29 @@ struct wa_awdl_ready {
+ static DEFINE_SPINLOCK(wa_awdl_net_lock);
+ static struct wa_awdl_net *wa_awdl_net;
+ static const u8 wa_awdl_snap[10]={0xaa,0xaa,3,0,0x17,0xf2,8,0,3,4};
++/* Caller holds the AWDL state lock; only this owner changes its MACID bit. */
++static void wa_awdl_gate(struct wa_awdl_net *n,bool open)
++{
++ u32 bit;
++ if(n->gate_open==open)return;
++ bit=rtw_hal_awdl_pause(n->phl->hal,n->sta->macid,!open);
++ if(!!bit==open)n->gate_mismatch++;
++ n->gate_open=open;
++ if(open)n->gate_opens++;else n->gate_closes++;
++}
++void rtw_phl_awdl_doorbell(u8 channel,u16 count,u32 bytes,bool success)
++{
++ struct wa_awdl_net *n;unsigned long flags;
++ spin_lock_irqsave(&wa_awdl_net_lock,flags);n=wa_awdl_net;
++ if(n) {
++  n->doorbells++;n->doorbell_bytes+=bytes;n->doorbell_fail+=!success;
++  n->doorbell_max=max_t(u32,n->doorbell_max,count);n->doorbell_bytes_max=max(n->doorbell_bytes_max,bytes);
++  if(n->doorbells<=8 || !(n->doorbells&127) || !success)
++   pr_info("AWDL_TXBD batch=%u ns=%llu channel=%u count=%u bytes=%u gate=%u pending=%d prepared=%u success=%u\n",
++    n->doorbells,ktime_get_ns(),channel,count,bytes,n->gate_open,atomic_read(&n->pending),n->prepared_count,success);
++ }
++ spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
++}
+ static void wa_awdl_net_done(bool data,u16 len,u32 status)
+ {
+  unsigned long flags;
+@@ -346,6 +380,7 @@ static int wa_awdl_prepare(struct wa_awdl_net *n,struct sk_buff **packets,u8 cou
+  m->userate_sel=1;m->f_rate=group ? RTW_DATA_RATE_OFDM6:n->rate;
+  m->f_bw=group ? CHANNEL_WIDTH_20:CHANNEL_WIDTH_80;m->f_gi_ltf=group ? 0:n->gi;
+  m->no_ack=group;m->mc=group;m->bk=1;
++ m->spe_rpt=!group;m->sw_define=group ? 0:15;
+  if(!group) {
+   struct registry_priv *reg=&n->adapter->registrypriv;
+   m->hw_rts_en=reg->hw_rts_en==1;
+@@ -357,11 +392,11 @@ static int wa_awdl_prepare(struct wa_awdl_net *n,struct sk_buff **packets,u8 cou
+  m->f_ldpc=!group && n->ldpc;
+  m->data_rty_lowest_rate=group ? RTW_DATA_RATE_OFDM6:RTW_DATA_RATE_VHT_NSS1_MCS0;
+  ready->x=x;ready->bytes=bytes;ready->packets=count;ready->group=group;
+- spin_lock_bh(&wa_awdl_net_lock);
++ spin_lock_irq(&wa_awdl_net_lock);
+  list_add_tail(&ready->list,&n->prepared);n->prepared_count++;
+  n->prepared_peak=max(n->prepared_peak,n->prepared_count);n->awdl_sequence+=count;
+  if(!(n->prepared_count&31))schedule_work(&n->work);
+- spin_unlock_bh(&wa_awdl_net_lock);
++ spin_unlock_irq(&wa_awdl_net_lock);
+  return 0;
+ }
+ #include "wa_awdl_ba.h"
+@@ -370,9 +405,9 @@ static void wa_awdl_prebuild(struct work_struct *work)
+ {
+  struct wa_awdl_net *n=container_of(work,struct wa_awdl_net,prepare_work);
+  struct sk_buff *packets[WA_AWDL_MSDUS],*skb;
+- spin_lock_bh(&wa_awdl_net_lock);
+- if(n->stopping || n->phy_pending) {spin_unlock_bh(&wa_awdl_net_lock);return;}
+- n->preparing=true;spin_unlock_bh(&wa_awdl_net_lock);
++ spin_lock_irq(&wa_awdl_net_lock);
++ if(n->stopping || n->phy_pending) {spin_unlock_irq(&wa_awdl_net_lock);return;}
++ n->preparing=true;spin_unlock_irq(&wa_awdl_net_lock);
+  while(!READ_ONCE(n->stopping) && !READ_ONCE(n->phy_pending) &&
+        READ_ONCE(n->prepared_count)<WA_AWDL_PREPARED && (skb=skb_dequeue(&n->queue))) {
+   u8 count=1;u32 size=14+16+skb->len-ETH_HLEN;
+@@ -387,16 +422,12 @@ static void wa_awdl_prebuild(struct work_struct *work)
+   if(wa_awdl_prepare(n,packets,count)) {
+    while(count)skb_queue_head(&n->queue,packets[--count]);break;
+   }
+-  for(u8 i=0;i<count;i++)dev_kfree_skb(packets[i]);
++  for(u8 i=0;i<count;i++) {atomic_sub(packets[i]->len,&n->queued_bytes);dev_kfree_skb(packets[i]);}
+  }
+- spin_lock_bh(&wa_awdl_net_lock);n->preparing=false;
++ spin_lock_irq(&wa_awdl_net_lock);n->preparing=false;
+  if(!n->stopping)schedule_work(&n->work);
+- spin_unlock_bh(&wa_awdl_net_lock);
+- if(!READ_ONCE(n->phy_pending) && !READ_ONCE(n->stopping) && skb_queue_len(&n->queue)<WA_AWDL_QUEUE_MAX/2)netif_wake_queue(n->dev);
+-}
+-static void wa_awdl_kick(struct wa_awdl_net *n,u32 *batch)
+-{
+- if(*batch) {rtw_phl_tx_req_notify(n->phl);n->kicks++;*batch=0;}
++ spin_unlock_irq(&wa_awdl_net_lock);
++ if(!READ_ONCE(n->phy_pending) && !READ_ONCE(n->stopping) && (skb_queue_len(&n->queue)<WA_AWDL_QUEUE_MAX/2 && atomic_read(&n->queued_bytes)<WA_AWDL_QUEUE_BYTES/2))netif_wake_queue(n->dev);
+ }
+ static void wa_awdl_phy_config(struct wa_awdl_net *n,const u8 *caps)
+ {
+@@ -440,6 +471,7 @@ static bool wa_awdl_phy_apply(struct wa_awdl_net *n)
+   n->sta->asoc_cap.num_ampdu=n->ba_size;
+   ret=rtw_phl_cmd_cfg_ampdu(n->phl,n->sta->wrole,n->sta,PHL_CMD_DIRECTLY,0)==RTW_PHL_STATUS_SUCCESS ? 0:-EIO;
+  }
++ if(!ret)ret=rtw_hal_awdl_agg_descriptor(n->phl->hal,n->sta);
+  rtw_hal_wa_nan_command_end();
+  if(!ret) {
+   list_for_each_entry(r,&n->prepared,list) {
+@@ -452,7 +484,7 @@ static bool wa_awdl_phy_apply(struct wa_awdl_net *n)
+ done:
+  pr_info("AWDL_PHY_APPLY result=%d he=%u nss=%u mcs=%u gi=%u rate=%u updates=%u\n",ret,n->config.he,n->nss,n->mcs,n->gi,n->rate,n->phy_updates);
+  n->phy_result=ret;
+- spin_lock_bh(&wa_awdl_net_lock);n->phy_pending=false;spin_unlock_bh(&wa_awdl_net_lock);
++ spin_lock_irq(&wa_awdl_net_lock);n->phy_pending=false;spin_unlock_irq(&wa_awdl_net_lock);
+  if(!ret) {netif_wake_queue(n->dev);queue_work(n->prepare_wq,&n->prepare_work);}
+  complete_all(&n->phy_done);return !ret;
+ }
+@@ -462,10 +494,10 @@ static int wa_awdl_net_phy(const u8 *caps,u16 len)
+  if(!n)return -ENODEV;
+  if(len!=28 || !caps || (caps[4]&3)==3 || !(caps[17]|caps[18]) ||
+     (caps[20] && ((caps[21]&3)==3 || caps[23]>1 || caps[24]>3 || caps[25]>2 || caps[26]>2 || caps[27]>2)))return -EINVAL;
+- spin_lock_bh(&wa_awdl_net_lock);
+- if(n->stopping || n->phy_pending) {spin_unlock_bh(&wa_awdl_net_lock);return -EBUSY;}
++ spin_lock_irq(&wa_awdl_net_lock);
++ if(n->stopping || n->phy_pending) {spin_unlock_irq(&wa_awdl_net_lock);return -EBUSY;}
+  reinit_completion(&n->phy_done);memcpy(n->phy_caps,caps,28);n->phy_pending=true;
+- spin_unlock_bh(&wa_awdl_net_lock);
++ spin_unlock_irq(&wa_awdl_net_lock);
+  netif_stop_queue(n->dev);schedule_work(&n->work);
+  /* Same drain bound as STOP; completion, never the timeout, advances the PHY. */
+  if(!wait_for_completion_timeout(&n->phy_done,msecs_to_jiffies(1000)))return -ETIMEDOUT;
+@@ -482,23 +514,33 @@ static void wa_awdl_net_work(struct work_struct *work)
+ {
+  struct wa_awdl_net *n=container_of(work,struct wa_awdl_net,work);
+  u32 batch=0,sent=0;
+- if(READ_ONCE(n->stopping) || !netif_running(n->dev))return;
++ if(READ_ONCE(n->stopping)) {
++  if(atomic_read(&n->pending)) {
++   wa_awdl_plan_ready(n);
++   spin_lock_irq(&wa_awdl_net_lock);
++   wa_awdl_gate(n,ktime_get_ns()>=n->opens && ktime_get_ns()<n->closes && !READ_ONCE(wa_awdl_switching));
++   spin_unlock_irq(&wa_awdl_net_lock);
++  }
++  return;
++ }
++ if(!netif_running(n->dev))return;
+  wa_awdl_stall_account(n,ktime_get_ns());
+  if(READ_ONCE(n->phy_pending) && !wa_awdl_phy_apply(n))return;
+  if(n->phy_result || !n->rate_ready || !wa_awdl_plan_ready(n))return;
+  wa_awdl_ba_events(n);
++ rtw_phl_awdl_batch_begin();
+  while(!READ_ONCE(n->stopping) && !READ_ONCE(n->phy_pending) && sent<WA_AWDL_DATA_DEPTH &&
+        atomic_read(&n->pending)<WA_AWDL_DATA_DEPTH) {
+   struct wa_awdl_ready *r;
+   struct rtw_t_meta_data *m;
+   u64 now,raw,cost,remaining;
+   u16 seq;u8 packets;bool group;
+-  now=ktime_get_ns();if(now<n->opens || now+500000>=n->closes)break;
++  now=max(ktime_get_ns(),n->opens);if(now+500000>=n->closes)break;
+   if(wa_awdl_ba_request(n)) {batch++;break;}
+   if(READ_ONCE(n->ba_requested))break;
+-  spin_lock_bh(&wa_awdl_net_lock);
++  spin_lock_irq(&wa_awdl_net_lock);
+   r=list_first_entry_or_null(&n->prepared,struct wa_awdl_ready,list);
+-  spin_unlock_bh(&wa_awdl_net_lock);
++  spin_unlock_irq(&wa_awdl_net_lock);
+   if(!r) {n->feed_empty++;if(skb_queue_len(&n->queue) || READ_ONCE(n->preparing))n->empty_since=now;break;}
+   if(!r->group && !wa_awdl_baw_room(n))break;
+   m=&r->x->phl_txreq->mdata;
+@@ -517,10 +559,11 @@ static void wa_awdl_net_work(struct work_struct *work)
+    u32 aggregate=min_t(u64,5280000,remaining)/raw;
+    aggregate=min_t(u32,aggregate,((1U<<(13+n->config.ampdu_exp))-1)/(r->x->phl_txreq->total_len+8));
+    m->ampdu_en=1;m->bk=0;m->spe_rpt=1;m->sw_define=15;
++   aggregate=min_t(u32,aggregate,524288/(r->x->phl_txreq->total_len+8));
+    m->max_agg_num=max_t(u32,1,min_t(u32,n->config.he ? 64:48,min_t(u32,n->ba_size,aggregate)));
+    m->ampdu_density=n->config.ampdu_density;
+   }
+-  spin_lock_bh(&wa_awdl_net_lock);list_del_init(&r->list);n->prepared_count--;spin_unlock_bh(&wa_awdl_net_lock);
++  spin_lock_irq(&wa_awdl_net_lock);list_del_init(&r->list);n->prepared_count--;spin_unlock_irq(&wa_awdl_net_lock);
+   /* Copy metadata before submission: a native completion may recycle this slot. */
+   packets=r->packets;group=r->group;
+   if(wa_awdl_submit(n,r->x,packets,r->bytes,cost,false,0))break;
+@@ -528,9 +571,12 @@ static void wa_awdl_net_work(struct work_struct *work)
+   if(n->primary==149)n->tx149+=packets;else n->tx161+=packets;
+   if(group)n->group_sequence++;else n->sequence++;
+   if(packets>1)n->tx_amsdu++;if(!group&&n->tx_ba)n->tx_ampdu++;
+-  batch++;sent++;if(batch==32)wa_awdl_kick(n,&batch);
++  batch++;sent++;
+  }
+- wa_awdl_kick(n,&batch);
++ rtw_phl_awdl_batch_end(n->phl,batch!=0);if(batch)n->kicks++;
++ spin_lock_irq(&wa_awdl_net_lock);
++ wa_awdl_gate(n,ktime_get_ns()>=n->opens && ktime_get_ns()<n->closes && !READ_ONCE(wa_awdl_switching));
++ spin_unlock_irq(&wa_awdl_net_lock);
+  if(!READ_ONCE(n->phy_pending) && skb_queue_len(&n->queue) && READ_ONCE(n->prepared_count)<WA_AWDL_PREPARED)
+   queue_work(n->prepare_wq,&n->prepare_work);
+  if(sent==WA_AWDL_DATA_DEPTH)schedule_work(&n->work);
+@@ -538,7 +584,12 @@ static void wa_awdl_net_work(struct work_struct *work)
+ static enum hrtimer_restart wa_awdl_net_timer(struct hrtimer *timer)
+ {
+  struct wa_awdl_net *n=container_of(timer,struct wa_awdl_net,timer);
+- if(!READ_ONCE(n->stopping))schedule_work(&n->work);
++ unsigned long flags;u64 now=ktime_get_ns();
++ spin_lock_irqsave(&wa_awdl_net_lock,flags);
++ if(n->closes && now>=n->closes && n->gate_open)n->gate_late_ns=max(n->gate_late_ns,now-n->closes);
++ wa_awdl_gate(n,now>=n->opens && now<n->closes && !READ_ONCE(wa_awdl_switching));
++ if(!n->stopping || atomic_read(&n->pending))schedule_work(&n->work);
++ spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
+  return HRTIMER_NORESTART;
+ }
+ static netdev_tx_t wa_awdl_net_xmit(struct sk_buff *skb,struct net_device *dev)
+@@ -548,13 +599,13 @@ static netdev_tx_t wa_awdl_net_xmit(struct sk_buff *skb,struct net_device *dev)
+     (!(skb->data[0]&1)&&memcmp(skb->data,n->peer,6)) || READ_ONCE(n->stopping) || skb_linearize(skb)) {
+   dev->stats.tx_dropped++;dev_kfree_skb_any(skb);return NETDEV_TX_OK;
+  }
+- if(skb_queue_len(&n->queue)>=WA_AWDL_QUEUE_MAX) {
+-  netif_stop_queue(dev);if(skb_queue_len(&n->queue)<WA_AWDL_QUEUE_MAX/2)netif_wake_queue(dev);
++ if(skb_queue_len(&n->queue)>=WA_AWDL_QUEUE_MAX || atomic_read(&n->queued_bytes)>=WA_AWDL_QUEUE_BYTES) {
++  netif_stop_queue(dev);if((skb_queue_len(&n->queue)<WA_AWDL_QUEUE_MAX/2 && atomic_read(&n->queued_bytes)<WA_AWDL_QUEUE_BYTES/2))netif_wake_queue(dev);
+   return NETDEV_TX_BUSY;
+  }
+- skb_queue_tail(&n->queue,skb);
+- if(skb_queue_len(&n->queue)>=WA_AWDL_QUEUE_MAX) {
+-  netif_stop_queue(dev);if(skb_queue_len(&n->queue)<WA_AWDL_QUEUE_MAX/2)netif_wake_queue(dev);
++ atomic_add(skb->len,&n->queued_bytes);skb_queue_tail(&n->queue,skb);
++ if(skb_queue_len(&n->queue)>=WA_AWDL_QUEUE_MAX || atomic_read(&n->queued_bytes)>=WA_AWDL_QUEUE_BYTES) {
++  netif_stop_queue(dev);if((skb_queue_len(&n->queue)<WA_AWDL_QUEUE_MAX/2 && atomic_read(&n->queued_bytes)<WA_AWDL_QUEUE_BYTES/2))netif_wake_queue(dev);
+  }
+  queue_work(n->prepare_wq,&n->prepare_work);return NETDEV_TX_OK;
+ }
+@@ -587,16 +638,24 @@ static int wa_awdl_net_create(void *phl,const u8 *local,const u8 *peer,const u8
+  hrtimer_init(&n->timer,CLOCK_MONOTONIC,HRTIMER_MODE_ABS);n->timer.function=wa_awdl_net_timer;
+  ret=rtw_hal_wa_nan_command_begin(n->phl->hal);if(ret)goto fail;
+  ret=rtw_hal_wa_nan_rate(n->phl->hal,n->sta,&n->config,true);
+- if(!ret)rtw_hal_awdl_reports(n->phl->hal,n->sta->rlink->hw_band,true,n->report_saved);
++ if(!ret)ret=rtw_hal_awdl_agg_descriptor(n->phl->hal,n->sta);
++ if(!ret) {
++  rtw_hal_awdl_reports(n->phl->hal,n->sta->rlink->hw_band,true,n->report_saved);
++  rtw_hal_awdl_aggregate(n->phl->hal,n->sta->rlink->hw_band,true,n->agg_saved);
++  n->gate_saved=rtw_hal_read32(n->phl->hal,0x9eb0+(n->sta->macid/32)*4)&BIT(n->sta->macid%32);
++  rtw_hal_awdl_pause(n->phl->hal,n->sta->macid,true);
++ }
+  if(!ret) {n->ba_filter_before=rtw_hal_read32(n->phl->hal,0xce24);rtw_hal_write32(n->phl->hal,0xce24,(n->ba_filter_before&~(3U<<18))|BIT(18));}
+  rtw_hal_wa_nan_command_end();
+  if(ret)goto fail;n->rate_ready=true;
+  if(!rtnl_trylock()){ret=-EBUSY;goto disable_rate;}
+  ret=register_netdevice(dev);rtnl_unlock();if(ret)goto disable_rate;
+- spin_lock_bh(&wa_awdl_net_lock);wa_awdl_net=n;spin_unlock_bh(&wa_awdl_net_lock);netif_carrier_on(dev);
++ spin_lock_irq(&wa_awdl_net_lock);wa_awdl_net=n;spin_unlock_irq(&wa_awdl_net_lock);netif_carrier_on(dev);
+  pr_info("AWDL_NATIVE create depth=128 prepared=256 pool=384 nss=%u mcs=%u sgi=%u rate_100kbps=%u amsdu_limit=%u he=%u gi=%u quota=90 agg_max=%u\n",n->nss,n->mcs,n->sgi,n->rate_100kbps,n->amsdu_limit,n->config.he,n->gi,n->config.he ? 64:48);
+  return 0;
+ disable_rate:
++ rtw_hal_awdl_pause(n->phl->hal,n->sta->macid,!!n->gate_saved);
++ rtw_hal_awdl_aggregate(n->phl->hal,n->sta->rlink->hw_band,false,n->agg_saved);
+  rtw_hal_awdl_reports(n->phl->hal,n->sta->rlink->hw_band,false,n->report_saved);
+  rtw_hal_write32(n->phl->hal,0xce24,n->ba_filter_before);
+  rtw_hal_wa_nan_rate(n->phl->hal,n->sta,NULL,false);
+@@ -607,10 +666,15 @@ static int wa_awdl_net_delete(void)
+  struct wa_awdl_net *n=wa_awdl_net;
+  int ret;
+  if(!n)return 0;
+- spin_lock_bh(&wa_awdl_net_lock);n->stopping=true;spin_unlock_bh(&wa_awdl_net_lock);
+- netif_tx_disable(n->dev);hrtimer_cancel(&n->timer);cancel_delayed_work_sync(&n->ba_expiry);cancel_work_sync(&n->prepare_work);cancel_work_sync(&n->work);
+- if(!wait_event_timeout(n->idle,!atomic_read(&n->pending),msecs_to_jiffies(1000)))return -ETIMEDOUT;
++ spin_lock_irq(&wa_awdl_net_lock);n->stopping=true;spin_unlock_irq(&wa_awdl_net_lock);
++ netif_tx_disable(n->dev);cancel_delayed_work_sync(&n->ba_expiry);cancel_work_sync(&n->prepare_work);
++ schedule_work(&n->work);
++ /* A paused request may need the next published same-channel opportunity (1024 TU). */
++ if(!wait_event_timeout(n->idle,!atomic_read(&n->pending),msecs_to_jiffies(1500)))return -ETIMEDOUT;
++ hrtimer_cancel(&n->timer);cancel_work_sync(&n->work);
+  ret=rtw_hal_wa_nan_command_begin(n->phl->hal);if(ret)return ret;
++ rtw_hal_awdl_pause(n->phl->hal,n->sta->macid,!!n->gate_saved);
++ rtw_hal_awdl_aggregate(n->phl->hal,n->sta->rlink->hw_band,false,n->agg_saved);
+  for(u8 tid=0;tid<16;tid++)if(n->rx_ba_mask&BIT(tid))rtw_phl_stop_rx_ba_session(n->phl,n->sta,tid);
+  rtw_hal_awdl_reports(n->phl->hal,n->sta->rlink->hw_band,false,n->report_saved);
+  n->rx_ba_mask=0;rtw_hal_write32(n->phl->hal,0xce24,n->ba_filter_before);
+@@ -618,7 +682,7 @@ static int wa_awdl_net_delete(void)
+  rtw_hal_wa_nan_command_end();if(ret)return ret;n->rate_ready=false;
+  if(!rtnl_trylock())return -EBUSY;
+  WRITE_ONCE(wa_awdl_switching,false);
+- spin_lock_bh(&wa_awdl_net_lock);wa_awdl_net=NULL;spin_unlock_bh(&wa_awdl_net_lock);
++ spin_lock_irq(&wa_awdl_net_lock);wa_awdl_net=NULL;spin_unlock_irq(&wa_awdl_net_lock);
+  pr_info("AWDL_NATIVE stop peak=%u pending=%d tx=%lu tx_error=%lu rx=%lu drop=%lu queued=%u tx_amsdu=%u tx_ampdu=%u rx_amsdu=%u rx_ampdu=%u alloc_fail=%u wrong_peer=%u format=%u duplicate=%u\n",
+  n->peak,atomic_read(&n->pending),n->dev->stats.tx_packets,n->dev->stats.tx_errors,n->dev->stats.rx_packets,n->dev->stats.rx_dropped,
+  skb_queue_len(&n->queue),n->tx_amsdu,n->tx_ampdu,n->rx_amsdu,n->rx_ampdu,n->tx_alloc_failed,n->rx_wrong_peer,n->rx_format,n->rx_duplicate);
+@@ -630,6 +694,8 @@ static int wa_awdl_net_delete(void)
+  pr_info("AWDL_CREDITS ba_returns=%u airtime_returned_ns=%llu dma_recycles=%u pool_reuses=%u pool_free=%u airtime=%lld unposted=%llu phy_updates=%u he_reports=%u vht_reports=%u prepare_wait_us=%llu tail_wait_us=%llu agg_hist=%u/%u/%u/%u/%u/%u/%u/%u\n",
+  n->ba_credit_returns,n->ba_airtime_returned,n->dma_recycles,n->pool_reuses,n->pool_free,atomic64_read(&n->airtime),n->unposted_airtime,n->phy_updates,n->ccx_he,n->ccx_vht,n->empty_ns/1000,n->tail_ns/1000,
+  n->agg_hist[0],n->agg_hist[1],n->agg_hist[2],n->agg_hist[3],n->agg_hist[4],n->agg_hist[5],n->agg_hist[6],n->agg_hist[7]);
++ pr_info("AWDL_BATCH doorbells=%u failed=%u bytes=%llu max_count=%u max_bytes=%u gate_opens=%u gate_closes=%u gate_mismatch=%u close_late_ns=%llu\n",
++ n->doorbells,n->doorbell_fail,n->doorbell_bytes,n->doorbell_max,n->doorbell_bytes_max,n->gate_opens,n->gate_closes,n->gate_mismatch,n->gate_late_ns);
+  wa_awdl_pool_destroy(n);destroy_workqueue(n->prepare_wq);
+  skb_queue_purge(&n->queue);skb_queue_purge(&n->ba_queue);unregister_netdevice(n->dev);rtnl_unlock();free_netdev(n->dev);module_put(THIS_MODULE);return 0;
+ }
+diff --git a/phl/wa_awdl_plan.h b/phl/wa_awdl_plan.h
+index fadde32..fedf82b 100644
+--- a/phl/wa_awdl_plan.h
++++ b/phl/wa_awdl_plan.h
+@@ -23,7 +23,9 @@ static bool wa_awdl_plan_ready(struct wa_awdl_net *n)
+  spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
+  if(!planned)return false;
+  if(now<base) {hrtimer_start(&n->timer,ns_to_ktime(base),HRTIMER_MODE_ABS);return false;}
+- slot=(now-base)/WA_AWDL_SLOT_NS;if(slot>=16)return false;
++ slot=(now-base)/WA_AWDL_SLOT_NS;if(slot>=16) {
++  spin_lock_irqsave(&wa_awdl_net_lock,flags);wa_awdl_gate(n,false);n->opens=n->closes=0;spin_unlock_irqrestore(&wa_awdl_net_lock,flags);return false;
++ }
+  start=base+slot*WA_AWDL_SLOT_NS;channel=channels[slot];end=slot+1;
+  while(end<16 && channels[end]==channel)end++;
+  close=base+end*WA_AWDL_SLOT_NS;
+@@ -32,8 +34,12 @@ static bool wa_awdl_plan_ready(struct wa_awdl_net *n)
+  wake=now<open && channel ? open:close;
+  if(now>=wake)wake=base+end*WA_AWDL_SLOT_NS;
+  hrtimer_start(&n->timer,ns_to_ktime(wake),HRTIMER_MODE_ABS);
+- if(!channel) {n->opens=n->closes=0;WRITE_ONCE(wa_awdl_switching,false);return false;}
++ if(!channel) {
++  spin_lock_irqsave(&wa_awdl_net_lock,flags);wa_awdl_gate(n,false);n->opens=n->closes=0;spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
++  WRITE_ONCE(wa_awdl_switching,false);return false;
++ }
+  if(channel!=n->primary) {
++  spin_lock_irqsave(&wa_awdl_net_lock,flags);wa_awdl_gate(n,false);n->opens=n->closes=0;spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
+   /* Gate new SDF submissions before checking both native ownership domains.
+    * Their completion callbacks resume this worker; no timed drain loop. */
+   spin_lock_irqsave(&wa_sdf_state.lock,flags);wa_awdl_switching=true;
+@@ -59,6 +65,8 @@ static bool wa_awdl_plan_ready(struct wa_awdl_net *n)
+  if(!n->budget_close || open>n->budget_close) {
+   n->budget_open=max(now,open);n->budget_close=close;n->budget_used=0;
+  }
+- n->budget_close=close;n->opens=open;n->closes=close;
+- return now>=open && now+500000<close;
++ n->budget_close=close;
++ spin_lock_irqsave(&wa_awdl_net_lock,flags);n->opens=open;n->closes=close;spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
++ /* Preload TXBD during the start guard while the MACID remains paused. */
++ return max(now,open)+500000<close;
+ }

@@ -12,6 +12,17 @@ mod be200;
 mod rtl8852be;
 
 impl Backend {
+    pub fn awdl_program(self) -> Result<&'static str> {
+        match self {
+            Self::Rtl8852be => Ok("/usr/local/libexec/wifiawared/rtl-awdl"),
+            _ => anyhow::bail!("{} 尚不支持 AWDL", self.name()),
+        }
+    }
+    pub fn awdl_channel(self) -> Result<u8> {
+        self.awdl_program()?;
+        // RTL 当前固定在 149 启动，随后跟随同一 80 MHz 块内的 149/161。
+        Ok(149)
+    }
     pub fn driver(self) -> &'static str {
         match self {
             Self::Be200 => "nl80211",

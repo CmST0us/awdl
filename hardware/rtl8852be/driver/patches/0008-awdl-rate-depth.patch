@@ -1,0 +1,123 @@
+--- a/phl/wa_nan_sdf_tx.c
++++ b/phl/wa_nan_sdf_tx.c
+@@ -40,7 +40,8 @@
+ 	u32 timeout;
+ };
+ 
+-#define WA_AWDL_TX_DEPTH 4
++#define WA_AWDL_TX_DEPTH 8
++static bool wa_awdl_vht80;
+ static atomic_t wa_awdl_pending = ATOMIC_INIT(0);
+ static bool wa_sdf_mgmt_pending;
+ static u32 wa_awdl_peak;
+@@ -244,7 +245,7 @@
+ 		(unsigned int)macid, (unsigned int)wa_sdf_macid, (unsigned int)len,
+ 		(unsigned int)cur_ch, (unsigned int)protection,
+ 		(unsigned int)(adapter->phl_role ? adapter->phl_role->type : 0xff));
+-	attr->rate = MGN_6M;
++	attr->rate = (native_awdl && !(frame[4]&1)) ? MGN_VHT1SS_MCS3 : MGN_6M;
+ 	attr->retry_ctrl = (frame[4] & 1) ? _FALSE : _TRUE;
+ 	attr->pktlen = attr->last_txcmdsz = len;
+ 	payload = xframe->buf_addr + TXDESC_OFFSET;
+@@ -303,8 +304,9 @@
+   xframe->phl_txreq->mdata.sec_cam_idx = 0;
+   xframe->phl_txreq->mdata.no_ack = !!(frame[4] & 1);
+   xframe->phl_txreq->mdata.userate_sel = 1;
+-  xframe->phl_txreq->mdata.f_rate = RTW_DATA_RATE_OFDM6;
+-  xframe->phl_txreq->mdata.f_bw = CHANNEL_WIDTH_20;
++  xframe->phl_txreq->mdata.f_rate = (native_awdl && !(frame[4]&1)) ? RTW_DATA_RATE_VHT_NSS1_MCS3 : RTW_DATA_RATE_OFDM6;
++  xframe->phl_txreq->mdata.f_bw = (native_awdl && !(frame[4]&1)) ? CHANNEL_WIDTH_80 : CHANNEL_WIDTH_20;
++  xframe->phl_txreq->mdata.f_gi_ltf = 0;
+   xframe->phl_txreq->mdata.ampdu_en = 0;
+   xframe->phl_txreq->mdata.bk = 1;
+  }
+@@ -344,7 +346,7 @@
+ 	pr_info("WA_PROBE sdf-submit result=0 cookie=%llu len=%u macid=%u channel=%u rate=%u retry=%u\n",
+ 		(unsigned long long)*cookie, (unsigned int)len,
+ 		(unsigned int)wa_sdf_macid, (unsigned int)cur_ch,
+-		(unsigned int)MGN_6M, (unsigned int)!(frame[4] & 1));
++		(unsigned int)((native_awdl && !(frame[4]&1)) ? MGN_VHT1SS_MCS3 : MGN_6M), (unsigned int)!(frame[4] & 1));
+ 	return 0;
+ release:
+  spin_lock_irqsave(&state->lock, flags);
+--- a/phl/wa_awdl_netdev.h
++++ b/phl/wa_awdl_netdev.h
+@@ -31,7 +31,7 @@
+   if (data) {
+    if (status==TX_STATUS_TX_DONE) {
+     n->dev->stats.tx_packets++;
+-    n->dev->stats.tx_bytes+=len-40+ETH_HLEN;
++    n->dev->stats.tx_bytes+=len-42+ETH_HLEN;
+    } else n->dev->stats.tx_errors++;
+   }
+   schedule_work(&n->work);
+@@ -51,19 +51,20 @@
+  if (READ_ONCE(n->stopping) || !netif_running(n->dev)) return;
+  spin_lock_irqsave(&wa_awdl_net_lock,flags);
+  now=ktime_get_ns(); close=n->closes;
+- ret=now>=n->opens && now+(u64)(atomic_read(&wa_awdl_pending)+1)*3000000<close;
++ /* VHT80 payload budget plus ACK/contention and a fixed end guard. */
++ ret=now>=n->opens && now+3000000+(u64)(atomic_read(&wa_awdl_pending)+1)*1000000<close;
+  spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
+  if (!ret || atomic_read(&wa_awdl_pending)>=WA_AWDL_TX_DEPTH) return;
+  skb=skb_dequeue(&n->queue);
+  if (!skb) return;
+- frame=kmalloc(skb->len-ETH_HLEN+40,GFP_KERNEL);
++ frame=kmalloc(skb->len-ETH_HLEN+42,GFP_KERNEL);
+  if (!frame) {n->dev->stats.tx_dropped++;goto free_skb;}
+- memset(frame,0,40);frame[0]=8;
++ memset(frame,0,42);frame[0]=0x88;
+  memcpy(frame+4,skb->data,6);memcpy(frame+10,n->dev->dev_addr,6);
+- memcpy(frame+16,wa_awdl_bssid,6);memcpy(frame+24,wa_awdl_snap,10);
+- frame[34]=n->sequence;frame[35]=n->sequence>>8;frame[38]=0x86;frame[39]=0xdd;
+- memcpy(frame+40,skb->data+ETH_HLEN,skb->len-ETH_HLEN);
+- ret=wa_nan_tx(n->phl,frame,skb->len-ETH_HLEN+40,&cookie,0,0,0,NULL,0);
++ memcpy(frame+16,wa_awdl_bssid,6);memcpy(frame+26,wa_awdl_snap,10);
++ frame[36]=n->sequence;frame[37]=n->sequence>>8;frame[40]=0x86;frame[41]=0xdd;
++ memcpy(frame+42,skb->data+ETH_HLEN,skb->len-ETH_HLEN);
++ ret=wa_nan_tx(n->phl,frame,skb->len-ETH_HLEN+42,&cookie,0,0,0,NULL,0);
+  kfree(frame);
+  if (ret==-EBUSY) {skb_queue_head(&n->queue,skb);return;}
+  if (ret) n->dev->stats.tx_errors++;
+@@ -139,7 +140,7 @@
+  if (!rtnl_trylock()) return -EBUSY;
+  spin_lock_bh(&wa_awdl_net_lock);n->stopping=true;wa_awdl_net=NULL;spin_unlock_bh(&wa_awdl_net_lock);
+  netif_tx_disable(n->dev);hrtimer_cancel(&n->timer);cancel_work_sync(&n->work);
+- pr_info("AWDL_NET depth peak=%u pending=%d\n",wa_awdl_peak,atomic_read(&wa_awdl_pending));
++ pr_info("AWDL_NET depth peak=%u pending=%d limit=%u phy=vht80-nss1-mcs3\n",wa_awdl_peak,atomic_read(&wa_awdl_pending),WA_AWDL_TX_DEPTH);
+  pr_info("AWDL_NET stop tx=%lu tx_errors=%lu rx=%lu rx_drop=%lu queued=%u\n",
+   n->dev->stats.tx_packets,n->dev->stats.tx_errors,n->dev->stats.rx_packets,n->dev->stats.rx_dropped,skb_queue_len(&n->queue));
+  skb_queue_purge(&n->queue);unregister_netdevice(n->dev);rtnl_unlock();
+--- a/phl/wa_awdl_probe.h
++++ b/phl/wa_awdl_probe.h
+@@ -51,9 +51,11 @@
+  ch.chan=ch.center_ch=freq==2437 ? 6 : (freq-5000)/5;
+  ch.band=freq==2437 ? BAND_ON_24G : BAND_ON_5G;
+  ch.bw=CHANNEL_WIDTH_20; ch.offset=CHAN_OFFSET_NO_EXT; ch.is_dfs=false;
++ if (freq==5745) {ch.bw=CHANNEL_WIDTH_80;ch.center_ch=155;ch.offset=CHAN_OFFSET_UPPER;}
+  ctx->channel_changed=true;
+  ret=wa_nan_restore_channel(phl,&ch);
+  if (ret) goto fail;
++ wa_awdl_vht80=ch.bw==CHANNEL_WIDTH_80;
+  ret=phl_wifi_role_change(ctx->phl,role,link,WR_CHG_TYPE,&type);
+  ctx->role_changed=role->type==PHL_RTYPE_NAN;
+  if (ret!=RTW_PHL_STATUS_SUCCESS) { ret=-EIO; goto fail; }
+@@ -77,8 +79,8 @@
+  wa_nan_sdf_open();
+  wa_awdl_control_diag(ctx->phl->hal,true);
+  WRITE_ONCE(wa_awdl_active,true);
+- pr_info("AWDL_START freq=%u rx_filter=%08x sniffer=0 macid=%u local=%pM bssid=%pM nan_fw_started=0\n",
+-   freq,after,ctx->mgmt->macid,link->mac_addr,wa_awdl_bssid);
++ pr_info("AWDL_START freq=%u bw=%u center=%u offset=%u rx_filter=%08x sniffer=0 macid=%u local=%pM bssid=%pM nan_fw_started=0\n",
++   freq,ch.bw,ch.center_ch,ch.offset,after,ctx->mgmt->macid,link->mac_addr,wa_awdl_bssid);
+  ret=0;
+  goto command_end;
+ fail:
+@@ -102,6 +104,7 @@
+  if (!rtw_phl_awdl_probe_active(phl)) return -ENETDOWN;
+  if (op==0x101) { wa_awdl_control_diag(ctx->phl->hal,false); return rtw_phl_wa_nan_host_stop(phl); }
+  if (op==0x105) {
++  if (!wa_awdl_vht80) return -EOPNOTSUPP;
+   if (!ctx->peer_ready) return -ENOTCONN;
+   return wa_awdl_net_create(phl,link->mac_addr,ctx->peer->mac_addr);
+  }

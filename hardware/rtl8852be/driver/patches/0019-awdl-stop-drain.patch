@@ -1,0 +1,13 @@
+--- a/phl/wa_nan_stageb.h
++++ b/phl/wa_nan_stageb.h
+@@ -776,6 +776,10 @@
+ 	int ret;
+ 	if (!atomic_read(&wa_nan_stageb_state)) return 0;
+ 	if (ctx->phl != phl) return -ENODEV;
++ /* AWDL workers own the command lane while changing primary channel.
++  * Drain and cancel them before taking that lane for radio cleanup. */
++ ret = wa_awdl_net_delete();
++ if (ret) return ret;
+ 	ret = rtw_hal_wa_nan_command_begin(ctx->phl->hal);
+ 	if (ret) return ret;
+ 	ret = wa_nan_host_cleanup(phl);

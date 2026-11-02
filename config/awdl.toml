@@ -1,0 +1,8 @@
+# AWDL 管理配置；重启 wifiawared-awdl.service 后生效。
+# 任意字段省略时使用本文件列出的默认值。
+# AWDL 管理帧中的本机节点名，1–63 字节单行文本；与 AirDrop 系统显示名独立。
+name = "Wireless Service"
+# 等待原生启动完成事件的最长时间，正整数秒；缺省为 5 秒。
+start_seconds = 5
+# 等待发送排空、STOP 与接口删除的最长时间，正整数秒；缺省为 5 秒。
+stop_seconds = 5

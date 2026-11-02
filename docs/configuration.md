@@ -400,3 +400,11 @@ systemd 单元拥有进程启动、重启策略和外部停止期限；D-Bus 策
 - 默认的 60 秒文件 I/O 期限容纳 BE200 已记录的约 19.7 秒停顿。已有部署的较短期限保留其实际行为；传输容忍期限不改变性能验收标准。
 - 客户端声明的发现服务名随应用构建交付。服务端单独改名会导致现有客户端无法发现。
 - 地区安装配置和期望频率不构成硬件实际可用信道或带宽的声明。
+
+## AWDL 与 AirDrop 配置
+
+`config/awdl.toml` 提供公共 AWDL 节点名与启动、停止失败期限，安装到 `/etc/wifiawared/awdl.toml`；设备选择沿用 `/etc/wifiawared/config.toml`。当前 RTL 启动信道和支持的同块跟随范围属于硬件实现。
+
+`config/airdrop.toml` 提供 AirDrop 的产品显示名、mDNS 主机标签、接收目录和端口、手工或自动接受策略、专用 HCI 选择、发现/接受/传输期限及公告周期，安装到 `/etc/airdrop/config.toml`。每项配置就地注明单位、约束与作用；已有文件不被安装器覆盖。
+
+模式由 systemd 单元选择，配置文件不保存瞬时会话、对端选择和传输进度。AirDrop 的新会话身份与 Wi-Fi Aware 持久配对身份各自独立。运行操作见 [AirDrop 与 AWDL](airdrop.md)。

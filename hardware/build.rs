@@ -167,3 +167,11 @@ pub const OBSOLETE_USERSPACE_FILES: &[&str] = &[
     "etc/systemd/system/wifiawared.service.d/rtl.conf",
     "etc/NetworkManager/conf.d/91-wifiawared-rtl.conf",
 ];
+
+pub fn build_awdl(root: &Path, cfg: &Settings) -> Result<()> {
+    rtl8852be::build_awdl(root, cfg)
+}
+
+pub fn awdl_installation(root: &Path, cfg: &Settings) -> Vec<(PathBuf, PathBuf)> {
+    rtl8852be::awdl_installation(root, cfg)
+}

@@ -7,3 +7,5 @@ PCI `10ec:b852`，hostap 使用 rtl_nan。保留未关联的物理控制接口�
 驱动只支持一个活动数据站点，活动站点不能在线更换为不同密钥。构建安装见[公共入口](../../docs/build.md)，固件能力见[能力说明](firmware/NAN-CAPABILITIES.md)。
 
 `diagnostics/control.py` 负责依赖 RTL 内核事件的双端观测。`driver_events.py` 按同一 cookie 关联发送提交和完成记录，并依据实际帧长确认结果；服务名和配对信息的长度不固定。
+
+`awdl` 提供公共 AWDL 状态机的原生硬件宿主。驱动补丁 0005–0021 增加原生 awdl0、BA64、HE80、发送窗口门控和真实 DMA 回收，与 NAN 独占。U2 镜像保持原版本，限制见 [AirDrop 与 AWDL](../../docs/airdrop.md)。

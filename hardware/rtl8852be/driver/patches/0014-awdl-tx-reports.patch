@@ -1,0 +1,130 @@
+--- a/phl/wa_awdl_netdev.h
++++ b/phl/wa_awdl_netdev.h
+@@ -5,6 +5,7 @@
+ #include <linux/rtnetlink.h>
+ #include <linux/workqueue.h>
+ int rtw_hal_awdl_primary(void *hal,u8 band,u8 primary);
++void rtw_hal_awdl_reports(void *hal,u8 band,bool enable,u32 *saved);
+ #define WA_AWDL_DATA_DEPTH 128
+ #define WA_AWDL_QUEUE_MAX 1024
+ #define WA_AWDL_MSDUS 8
+@@ -23,6 +24,7 @@
+  struct wa_nan_ndi_config config;
+  struct sk_buff_head queue, ba_queue;
+  struct list_head prepared, live;
++ u32 report_saved[2], ccx_reports;
+  u32 ba_filter_before, ba_reports, ba_acked, ba_done, tx_done, baw_stops;
+  u16 ba_ssn;
+  u64 ba_bitmap, ba_last_ns;
+@@ -161,12 +163,30 @@
+  }
+  spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
+ }
++/* Special reports describe hardware attempts; WP still owns completion. */
++void rtw_phl_wa_awdl_tx_report(const u8 *data,u32 len)
++{
++ struct wa_awdl_net *n;unsigned long flags;u32 word;
++ if(len!=24)return;
++ word=get_unaligned_le32(data);
++ if(((word>>8)&15)!=15)return;
++ spin_lock_irqsave(&wa_awdl_net_lock,flags);n=wa_awdl_net;
++ if(n && ((word>>16)&127)==n->sta->macid) {
++  n->ccx_reports++;
++  pr_info("AWDL_CCX count=%u ns=%llu primary=%u pending=%d bytes=%u report=%*phN\n",
++   n->ccx_reports,ktime_get_ns(),n->primary,atomic_read(&n->pending),len,24,data);
++ }
++ spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
++}
+ void rtw_phl_wa_awdl_ba_snapshot(void)
+ {
+  struct wa_awdl_net *n;struct wa_awdl_tx *tx;unsigned long flags;
+  u32 live=0,acked=0;u16 oldest=0,newest=0;u64 age=0;
+  spin_lock_irqsave(&wa_awdl_net_lock,flags);n=wa_awdl_net;
+  if(n) {
++  {u64 now=ktime_get_ns();u64 slot=now>=n->plan_base ? div_u64(now-n->plan_base,65536000):16;
++   pr_info("AWDL_TX_STATE ns=%llu primary=%u target=%u slot=%llu switches=%u ccx=%u pending=%d open=%llu close=%llu\n",
++    now,n->primary,slot<16 ? n->channels[slot]:0,slot,n->switches,n->ccx_reports,atomic_read(&n->pending),n->opens,n->closes);}
+   list_for_each_entry(tx,&n->live,live) {
+    if(!live) {oldest=tx->sequence;age=ktime_get_ns()-tx->submitted_ns;}
+    newest=tx->sequence;live++;if(tx->ack_ns)acked++;
+@@ -279,7 +299,7 @@
+   seq=(r->group ? n->group_sequence:n->sequence)&4095;
+   SetSeqNum(r->x->buf_addr,seq);m->sw_seq=seq;
+   if(!r->group && n->tx_ba) {
+-   m->ampdu_en=1;m->bk=0;
++   m->ampdu_en=1;m->bk=0;m->spe_rpt=1;m->sw_define=15;
+    m->max_agg_num=min_t(u32,n->ba_size,max_t(u32,1,min_t(u32,
+     ((1U<<(13+n->config.ampdu_exp))-1)/(r->x->phl_txreq->total_len+8),4000000/cost)));
+    m->ampdu_density=n->config.ampdu_density;
+@@ -355,6 +375,7 @@
+  hrtimer_init(&n->timer,CLOCK_MONOTONIC,HRTIMER_MODE_ABS);n->timer.function=wa_awdl_net_timer;
+  ret=rtw_hal_wa_nan_command_begin(n->phl->hal);if(ret)goto fail;
+  ret=rtw_hal_wa_nan_rate(n->phl->hal,n->sta,&n->config,true);
++ if(!ret)rtw_hal_awdl_reports(n->phl->hal,n->sta->rlink->hw_band,true,n->report_saved);
+  if(!ret) {n->ba_filter_before=rtw_hal_read32(n->phl->hal,0xce24);rtw_hal_write32(n->phl->hal,0xce24,(n->ba_filter_before&~(3U<<18))|BIT(18));}
+  rtw_hal_wa_nan_command_end();
+  if(ret)goto fail;n->rate_ready=true;
+@@ -364,6 +385,7 @@
+  pr_info("AWDL_NATIVE create depth=128 nss=%u mcs=%u sgi=%u rate_100kbps=%u amsdu_limit=%u\n",streams,mcs,n->sgi,n->rate_100kbps,n->amsdu_limit);
+  return 0;
+ disable_rate:
++ rtw_hal_awdl_reports(n->phl->hal,n->sta->rlink->hw_band,false,n->report_saved);
+  rtw_hal_write32(n->phl->hal,0xce24,n->ba_filter_before);
+  rtw_hal_wa_nan_rate(n->phl->hal,n->sta,NULL,false);
+ fail:free_netdev(dev);module_put(THIS_MODULE);return ret;
+@@ -378,6 +400,7 @@
+  if(!wait_event_timeout(n->idle,!atomic_read(&n->pending),msecs_to_jiffies(1000)))return -ETIMEDOUT;
+  ret=rtw_hal_wa_nan_command_begin(n->phl->hal);if(ret)return ret;
+  for(u8 tid=0;tid<16;tid++)if(n->rx_ba_mask&BIT(tid))rtw_phl_stop_rx_ba_session(n->phl,n->sta,tid);
++ rtw_hal_awdl_reports(n->phl->hal,n->sta->rlink->hw_band,false,n->report_saved);
+  n->rx_ba_mask=0;rtw_hal_write32(n->phl->hal,0xce24,n->ba_filter_before);
+  ret=n->rate_ready ? rtw_hal_wa_nan_rate(n->phl->hal,n->sta,NULL,false):0;
+  rtw_hal_wa_nan_command_end();if(ret)return ret;n->rate_ready=false;
+--- a/phl/hal_g6/wa_nan_hal.h
++++ b/phl/hal_g6/wa_nan_hal.h
+@@ -114,6 +114,27 @@
+  mask.data_ldpc=mask.bsr_queue_size_format=1;
+  mask.nominal_pkt_padding=mask.nominal_pkt_padding40=mask.nominal_pkt_padding80=3;
+  return rtw_hal_cmc_tbl_cfg(hal,&c,&mask,sta->macid)==RTW_HAL_STATUS_SUCCESS ? 0 : -EIO;
++}
++
++/* Only the AWDL owner redirects special reports; ordinary RA reports remain native. */
++void rtw_hal_awdl_reports(void *hal,u8 band,bool enable,u32 *saved)
++{
++ struct hal_info_t *h=hal;
++ u32 reg=band ? R_AX_PTCLRPT_FULL_HDL_C1:R_AX_PTCLRPT_FULL_HDL;
++ u32 mask=B_AX_FWD_TX_RPT_MSK<<B_AX_FWD_TX_RPT_SH;
++ u32 forward=hal_read32(h->hal_com,R_AX_HW_RPT_FWD);
++ u8 path=hal_read8(h->hal_com,reg);
++ if(enable) {
++  saved[0]=forward&mask;saved[1]=path&GET_MSK(B_AX_SPE_RPT_PATH);
++  forward=(forward&~mask)|(MAC_AX_FWD_TO_HOST<<B_AX_FWD_TX_RPT_SH);
++  path=SET_CLR_WORD(path,FWD_TO_HOST,B_AX_SPE_RPT_PATH);
++ } else {
++  forward=(forward&~mask)|saved[0];
++  path=(path&~GET_MSK(B_AX_SPE_RPT_PATH))|saved[1];
++ }
++ hal_write32(h->hal_com,R_AX_HW_RPT_FWD,forward);hal_write8(h->hal_com,reg,path);
++ pr_info("AWDL_CCX_ROUTE enabled=%u band=%u path=%02x forward=%08x\n",
++  enable,band,hal_read8(h->hal_com,reg),hal_read32(h->hal_com,R_AX_HW_RPT_FWD));
+ }
+ 
+ int rtw_hal_wa_nan_rate(void *hal, struct rtw_phl_stainfo_t *sta,
+--- a/phl/hal_g6/rtl8852b/hal_trx_8852b.c
++++ b/phl/hal_g6/rtl8852b/hal_trx_8852b.c
+@@ -14,6 +14,7 @@
+  *****************************************************************************/
+ #define _HAL_TRX_8852B_C_
+ #include "rtl8852b_hal.h"
++void rtw_phl_wa_awdl_tx_report(const u8 *,u32);
+ 
+ static void _hal_trx_8852b_dump_rxcnt(struct hal_ppdu_sts *ppdu_sts)
+ {
+@@ -732,6 +733,7 @@
+ 	case RX_8852B_DESC_PKT_T_TX_RPT:
+ 	{
+ 		phl_rx->type = RTW_RX_TYPE_TX_RPT;
++		rtw_phl_wa_awdl_tx_report(pkt->vir_addr,mdata->pktlen);
+ 	}
+ 	break;
+ 

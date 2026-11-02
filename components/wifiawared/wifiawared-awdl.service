@@ -1,0 +1,29 @@
+[Unit]
+# 同一公共管理器的 AWDL 运行模式。
+Description=Wireless Service AWDL Manager
+# 使用系统 D-Bus。
+Requires=dbus.service
+# 等待文件系统、设备管理与总线就绪。
+After=local-fs.target NetworkManager.service dbus.service
+
+[Service]
+# 公共 D-Bus 接口注册完成并取得服务名后发送就绪通知。
+Type=notify
+# 接受管理器启动的 systemd-notify 子进程发送的就绪消息。
+NotifyAccess=all
+# 复用设备选择与所有权，AWDL 使用独立接口。
+ExecStart=/usr/local/bin/wifiawared serve --protocol awdl
+# 回收错误保留现场，不自动重启或更换内核模块。
+Restart=no
+# 与 NAN 模式共用临时运行目录和锁。
+RuntimeDirectory=wifiawared
+RuntimeDirectoryMode=0700
+# 新文件权限掩码。
+UMask=0077
+# 先由管理器请求原生 STOP，再使用进程组退出兜底。
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+# 仅在明确选择 AWDL 开机模式时启用。
+WantedBy=multi-user.target

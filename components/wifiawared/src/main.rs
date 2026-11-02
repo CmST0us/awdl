@@ -1,4 +1,5 @@
 mod api;
+mod awdl;
 #[path = "../../../hardware/radio.rs"]
 mod backend;
 mod configuration;
@@ -77,6 +78,7 @@ async fn run() -> Result<()> {
     let mut config = "/etc/wifiawared/config.toml".to_string();
     let mut seconds = 120;
     let mut operation = None;
+    let mut protocol = "nan".to_string();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let (key, inline) = arg
@@ -85,7 +87,7 @@ async fn run() -> Result<()> {
         match key {
             "--help" | "-h" => {
                 println!(
-                    "用法: wifiawared [--config PATH] {{serve|status|pair|close-pairing}} [--seconds 30..600]"
+                    "用法: wifiawared [--config PATH] [--protocol nan|awdl] {{serve|status|pair|close-pairing}} [--seconds 30..600]"
                 );
                 return Ok(());
             }
@@ -93,6 +95,15 @@ async fn run() -> Result<()> {
                 config = inline
                     .or_else(|| args.next())
                     .ok_or_else(|| anyhow::anyhow!("缺少配置路径"))?
+            }
+            "--protocol" => {
+                protocol = inline
+                    .or_else(|| args.next())
+                    .ok_or_else(|| anyhow::anyhow!("缺少协议"))?;
+                ensure!(
+                    ["nan", "awdl"].contains(&protocol.as_str()),
+                    "协议必须为 nan 或 awdl"
+                );
             }
             "--seconds" | "-s" => {
                 seconds = inline
@@ -112,6 +123,15 @@ async fn run() -> Result<()> {
     let operation = operation
         .ok_or_else(|| anyhow::anyhow!("命令必须是 serve、status、pair 或 close-pairing"))?;
     if operation != "serve" {
+        if protocol == "awdl" {
+            ensure!(operation == "status", "AWDL 配对与传输由 airdrop 管理");
+            let connection = bus::connect().await?;
+            let proxy =
+                bus::proxy(&connection, bus::NAME, bus::PATH, "org.wifiawared1.Awdl").await?;
+            let status: String = proxy.get_property("Status").await?;
+            println!("{status}");
+            return Ok(());
+        }
         return client(&operation, seconds).await;
     }
     let cfg = configuration::Configuration::load(&config)?;
@@ -120,6 +140,9 @@ async fn run() -> Result<()> {
     let mut radio = radio::Radio::new(cfg);
     let shutdown = aware_common::unix::shutdown()?;
     tokio::pin!(shutdown);
+    if protocol == "awdl" {
+        return awdl::run(radio, shutdown).await;
+    }
     let start = tokio::select! {
         result = radio.start() => result,
         _ = &mut shutdown => return radio.close().await,

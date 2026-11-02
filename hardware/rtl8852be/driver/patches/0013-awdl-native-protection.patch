@@ -1,0 +1,30 @@
+--- a/phl/wa_awdl_netdev.h
++++ b/phl/wa_awdl_netdev.h
+@@ -218,6 +218,12 @@
+  m->userate_sel=1;m->f_rate=group ? RTW_DATA_RATE_OFDM6:n->rate;
+  m->f_bw=group ? CHANNEL_WIDTH_20:CHANNEL_WIDTH_80;m->f_gi_ltf=group ? 0:n->sgi;
+  m->no_ack=group;m->mc=group;m->bk=1;
++ if(!group) {
++  struct registry_priv *reg=&n->adapter->registrypriv;
++  m->hw_rts_en=reg->hw_rts_en==1;
++  m->rts_en=reg->vrtl_carrier_sense==1 && reg->vcs_type==1;
++  m->cts2self=reg->vrtl_carrier_sense==1 && reg->vcs_type!=1;
++ }
+  m->f_ldpc=!group && n->ldpc;
+  m->data_rty_lowest_rate=group ? RTW_DATA_RATE_OFDM6:RTW_DATA_RATE_VHT_NSS1_MCS0;
+  ready->x=x;ready->bytes=bytes;ready->packets=count;ready->group=group;
+--- a/phl/hal_g6/mac/mac_ax/mac_8852b/trx_desc_8852b.c
++++ b/phl/hal_g6/mac/mac_ax/mac_8852b/trx_desc_8852b.c
+@@ -286,6 +286,12 @@
+ 			    (info->hw_rts_en ? AX_TXD_HW_RTS_EN : 0) |
+ 			    SET_WORD(info->sw_define, AX_TXD_SW_DEFINE));
+ 
++	if (info->userate_sel && info->ampdu_en && !info->sec_hw_enc &&
++	    !info->bc && !info->mc)
++		pr_info_once("AWDL_WD_PROTECTION macid=%u rts=%u hw_rts=%u cts=%u raw=%08x\n",
++			info->macid, info->rts_en, info->hw_rts_en, info->cts2self,
++			le32_to_cpu(wdi->dword4));
++
+ 	wdi->dword5 = 0;
+ 
+ #if MAC_AX_FEATURE_HV

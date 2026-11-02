@@ -360,3 +360,115 @@ pub fn driver(root: &Path, cfg: &Settings) -> Result<()> {
     }
     Ok(())
 }
+
+fn extra_component(
+    root: &Path,
+    cfg: &Settings,
+    package: &str,
+    entries: &[(&str, &str, u32)],
+    defaults: &[(&str, &str)],
+) -> Result<()> {
+    cfg.linux()?;
+    let mut planned = Vec::new();
+    for (from, to, mode) in entries {
+        planned.push((root.join(from), cfg.dest.join(to), *mode));
+    }
+    for (from, to) in defaults {
+        if !cfg.dest.join(to).exists() {
+            planned.push((root.join(from), cfg.dest.join(to), 0o644));
+        }
+    }
+    let licenses = cfg.user_dir(root).join(package).join("licenses");
+    ensure!(
+        licenses.join("dependencies.json").is_file(),
+        "缺少 {package} 构建与依赖授权"
+    );
+    for source in files(&licenses)? {
+        let target = cfg
+            .dest
+            .join("usr/local/share/licenses")
+            .join(package)
+            .join(source.strip_prefix(&licenses)?);
+        planned.push((source, target, 0o644));
+    }
+    for (source, _, _) in &planned {
+        ensure!(source.is_file(), "缺少 {}", source.display());
+    }
+    for (source, destination, mode) in planned {
+        copy(&source, &destination, mode)?;
+    }
+    if cfg.dest == Path::new("/") {
+        run(Command::new("systemctl").arg("daemon-reload"))?;
+        run(Command::new("dbus-send").args([
+            "--system",
+            "--type=method_call",
+            "--dest=org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus.ReloadConfig",
+        ]))?;
+    }
+    Ok(())
+}
+pub fn awdl(root: &Path, cfg: &Settings) -> Result<()> {
+    let hardware_files = hardware::awdl_installation(root, cfg);
+    for (source, _) in &hardware_files {
+        ensure!(
+            source.is_file(),
+            "缺少 {}，请先 build-awdl",
+            source.display()
+        );
+    }
+    extra_component(
+        root,
+        cfg,
+        "aware-awdl",
+        &[
+            (
+                "components/wifiawared/wifiawared-awdl.service",
+                "etc/systemd/system/wifiawared-awdl.service",
+                0o644,
+            ),
+            (
+                "components/wifiawared/NetworkManager-wifiawared.conf",
+                "etc/NetworkManager/conf.d/90-wifiawared.conf",
+                0o644,
+            ),
+        ],
+        &[("config/awdl.toml", "etc/wifiawared/awdl.toml")],
+    )?;
+    for (source, destination) in hardware_files {
+        copy(&source, &destination, 0o755)?;
+    }
+    if cfg.dest == Path::new("/") {
+        run(Command::new("nmcli").args(["general", "reload"]))?;
+    }
+    Ok(())
+}
+pub fn airdrop(root: &Path, cfg: &Settings) -> Result<()> {
+    let binary = cfg.user_dir(root).join("airdrop/airdrop");
+    ensure!(binary.is_file(), "请先 build-airdrop");
+    extra_component(
+        root,
+        cfg,
+        "airdrop",
+        &[
+            (
+                "components/airdrop/airdrop.service",
+                "etc/systemd/system/airdrop.service",
+                0o644,
+            ),
+            (
+                "components/airdrop/org.airdrop.conf",
+                "etc/dbus-1/system.d/org.airdrop.conf",
+                0o644,
+            ),
+            (
+                "components/airdrop/ble.py",
+                "usr/local/libexec/airdrop/ble.py",
+                0o755,
+            ),
+        ],
+        &[("config/airdrop.toml", "etc/airdrop/config.toml")],
+    )?;
+    copy(&binary, &cfg.dest.join("usr/local/bin/airdrop"), 0o755)
+}

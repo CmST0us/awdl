@@ -32,6 +32,7 @@ pub struct Radio {
     pci: String,
     bootstrap: String,
     owns_bootstrap: bool,
+    device_lock: Option<std::fs::File>,
     pub address: String,
 }
 
@@ -51,6 +52,7 @@ impl Radio {
             pci: String::new(),
             bootstrap: String::new(),
             owns_bootstrap: false,
+            device_lock: None,
             address: String::new(),
         }
     }
@@ -118,7 +120,10 @@ impl Radio {
         self.phy = phy;
         self.pci = pci;
         self.backend = Some(backend);
-        self.profile = Some(backend.profile(&self.cfg)?);
+        self.device_lock = Some(aware_common::unix::lock(
+            &Path::new("/run/lock").join(format!("wireless-service-{}.lock", self.pci)),
+            false,
+        )?);
         Ok(())
     }
 
@@ -199,13 +204,16 @@ impl Radio {
         Ok(())
     }
 
-    pub async fn start(&mut self) -> Result<()> {
+    async fn prepare(&mut self, awdl: bool) -> Result<bool> {
         std::fs::create_dir_all(&self.cfg.state)?;
         std::fs::create_dir_all(&self.cfg.runtime)?;
         self.links = Some(Events::links()?);
         self.select_phy()?;
         let backend = self.backend.unwrap();
-        for name in ["nan0", "ndi0"] {
+        if awdl {
+            backend.awdl_program()?;
+        }
+        for name in ["nan0", "ndi0", "awdl0"] {
             ensure!(!interface_exists(name)?, "接口名 {name} 已被占用");
         }
         let entries = self.interfaces().await?;
@@ -259,6 +267,22 @@ impl Radio {
             self.phy,
             self.bootstrap
         );
+        Ok(network_manager)
+    }
+
+    pub async fn prepare_awdl(&mut self) -> Result<(String, String, u8)> {
+        self.prepare(true).await?;
+        Ok((
+            self.backend.unwrap().awdl_program()?.into(),
+            self.bootstrap.clone(),
+            self.backend.unwrap().awdl_channel()?,
+        ))
+    }
+
+    pub async fn start(&mut self) -> Result<()> {
+        let network_manager = self.prepare(false).await?;
+        let backend = self.backend.unwrap();
+        self.profile = Some(self.backend.unwrap().profile(&self.cfg)?);
         let nan = self.cfg.state.join("nan.conf");
         let nik_path = self.cfg.state.join("local-nik");
         let bootstrap = self.cfg.runtime.join("bootstrap.conf");

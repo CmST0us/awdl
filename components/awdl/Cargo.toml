@@ -1,0 +1,13 @@
+[package]
+name = "aware-awdl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+owly-awdl = { git = "https://github.com/t4t5/owly.git", rev = "0f2ca4087e6d938d823e76c856fcd04d0a0162b6" }
+serde_json.workspace = true

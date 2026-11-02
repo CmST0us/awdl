@@ -1,0 +1,188 @@
+--- a/phl/wa_awdl_netdev.h
++++ b/phl/wa_awdl_netdev.h
+@@ -22,7 +22,10 @@
+  struct rtw_phl_stainfo_t *sta;
+  struct wa_nan_ndi_config config;
+  struct sk_buff_head queue, ba_queue;
+- struct list_head prepared;
++ struct list_head prepared, live;
++ u32 ba_filter_before, ba_reports, ba_acked, ba_done, tx_done, baw_stops;
++ u16 ba_ssn;
++ u64 ba_bitmap, ba_last_ns;
+  u32 tx149, tx161;
+  u32 prepared_count, prepared_peak, switches, switch_fail, budget_stops;
+  u64 plan_base, budget_open, budget_close, budget_used, switch_max_ns;
+@@ -45,6 +48,10 @@
+ };
+ struct wa_awdl_tx {
+  struct rtw_txfb_t feedback;
++ struct list_head live;
++ u16 sequence;
++ bool unicast;
++ u64 submitted_ns, ack_ns;
+  struct wa_awdl_net *owner;
+  u64 airtime;
+  u32 bytes;
+@@ -68,6 +75,11 @@
+  struct wa_awdl_net *n=tx->owner;
+  unsigned long flags;
+  spin_lock_irqsave(&wa_awdl_net_lock,flags);
++ if (tx->unicast) {
++  list_del(&tx->live);n->tx_done++;if(tx->ack_ns)n->ba_done++;
++  if(feedback->txsts!=TX_STATUS_TX_DONE || !(n->tx_done&255))
++   pr_info("AWDL_TX_DONE seq=%u status=%u ack_ns=%llu age_us=%llu pending=%d done=%u\n",tx->sequence,feedback->txsts,tx->ack_ns,(ktime_get_ns()-tx->submitted_ns)/1000,atomic_read(&n->pending),n->tx_done);
++ }
+  if (tx->packets) {
+   if (feedback->txsts==TX_STATUS_TX_DONE) {
+    n->dev->stats.tx_packets+=tx->packets;n->dev->stats.tx_bytes+=tx->bytes;
+@@ -94,21 +106,76 @@
+ static int wa_awdl_submit(struct wa_awdl_net *n,struct xmit_frame *x,
+  u8 packets,u32 bytes,u64 airtime,bool ba_request,u8 token)
+ {
++ unsigned long flags;
+  struct wa_awdl_tx *tx=kzalloc(sizeof(*tx),GFP_KERNEL);
+  if (!tx) {core_tx_free_xmitframe(n->adapter,x);return -ENOMEM;}
++ tx->unicast=packets && !x->phl_txreq->mdata.mc;
++ tx->sequence=x->phl_txreq->mdata.sw_seq;tx->submitted_ns=ktime_get_ns();
++ INIT_LIST_HEAD(&tx->live);
+  tx->owner=n;tx->packets=packets;tx->bytes=bytes;tx->airtime=airtime;
+  tx->ba_request=ba_request;tx->ba_token=token;
+  tx->feedback.ctx=tx;tx->feedback.txfb_cb=wa_awdl_data_done;
+  x->phl_txreq->txfb=&tx->feedback;
+  rtw_core_wa_nan_map(n->adapter,x);
++ spin_lock_irqsave(&wa_awdl_net_lock,flags);
++ if(tx->unicast)list_add_tail(&tx->live,&n->live);
+  atomic_inc(&n->pending);atomic64_add(airtime,&n->airtime);
++ spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
+  if (rtw_phl_add_tx_req(n->phl,x->phl_txreq)!=RTW_PHL_STATUS_SUCCESS) {
++  spin_lock_irqsave(&wa_awdl_net_lock,flags);
++  if(tx->unicast)list_del(&tx->live);
+   atomic_dec(&n->pending);atomic64_sub(airtime,&n->airtime);
++  spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
+   core_recycle_txreq_phyaddr(n->adapter,x->phl_txreq);
+   core_tx_free_xmitframe(n->adapter,x);kfree(tx);return -ENOBUFS;
+  }
+  n->peak=max_t(u32,n->peak,atomic_read(&n->pending));
+  return 0;
++}
++/* Completion ownership bounds the sequence span, including out-of-order holes. */
++static bool wa_awdl_baw_room(struct wa_awdl_net *n)
++{
++ unsigned long flags;bool room=true;
++ spin_lock_irqsave(&wa_awdl_net_lock,flags);
++ if(n->tx_ba && !list_empty(&n->live)) {
++  struct wa_awdl_tx *oldest=list_first_entry(&n->live,struct wa_awdl_tx,live);
++  room=((n->sequence-oldest->sequence)&4095)<n->ba_size;
++  if(!room)n->baw_stops++;
++ }
++ spin_unlock_irqrestore(&wa_awdl_net_lock,flags);return room;
++}
++/* A received BA records acknowledgement only; hardware completion owns release. */
++void rtw_phl_wa_awdl_ba_observe(const u8 *ra,const u8 *ta,u16 tid,u16 ssn,u64 bitmap,u64 now)
++{
++ struct wa_awdl_net *n;struct wa_awdl_tx *tx;unsigned long flags;
++ if(tid)return;
++ spin_lock_irqsave(&wa_awdl_net_lock,flags);n=wa_awdl_net;
++ if(n && !memcmp(ra,n->dev->dev_addr,6) && !memcmp(ta,n->peer,6)) {
++  n->ba_reports++;n->ba_ssn=ssn;n->ba_bitmap=bitmap;n->ba_last_ns=now;
++  list_for_each_entry(tx,&n->live,live) {
++   u16 offset=(tx->sequence-ssn)&4095;
++   if(offset<64 && (bitmap&BIT_ULL(offset)) && !tx->ack_ns) {
++    tx->ack_ns=now;n->ba_acked++;
++   }
++  }
++ }
++ spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
++}
++void rtw_phl_wa_awdl_ba_snapshot(void)
++{
++ struct wa_awdl_net *n;struct wa_awdl_tx *tx;unsigned long flags;
++ u32 live=0,acked=0;u16 oldest=0,newest=0;u64 age=0;
++ spin_lock_irqsave(&wa_awdl_net_lock,flags);n=wa_awdl_net;
++ if(n) {
++  list_for_each_entry(tx,&n->live,live) {
++   if(!live) {oldest=tx->sequence;age=ktime_get_ns()-tx->submitted_ns;}
++   newest=tx->sequence;live++;if(tx->ack_ns)acked++;
++  }
++  pr_info("AWDL_BAW reports=%u ssn=%u bitmap=%016llx last_ns=%llu next=%u oldest=%u newest=%u span=%u live=%u acked_live=%u acked=%u done_acked=%u done=%u stops=%u age_us=%llu filter=%08x\n",
++   n->ba_reports,n->ba_ssn,n->ba_bitmap,n->ba_last_ns,n->sequence&4095,oldest,newest,
++   live ? (n->sequence-oldest)&4095:0,live,acked,n->ba_acked,n->ba_done,n->tx_done,n->baw_stops,age/1000,rtw_hal_read32(n->phl->hal,0xce24));
++ }
++ spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
+ }
+ static void wa_awdl_msdu(u8 *out,const struct sk_buff *skb,u16 seq)
+ {
+@@ -196,6 +263,7 @@
+   if(wa_awdl_ba_request(n)) {notify=true;break;}
+   if(READ_ONCE(n->ba_requested) || list_empty(&n->prepared))break;
+   r=list_first_entry(&n->prepared,struct wa_awdl_ready,list);
++  if(!r->group && !wa_awdl_baw_room(n))break;
+   m=&r->x->phl_txreq->mdata;
+   cost=wa_awdl_airtime(n,r->x->phl_txreq->total_len,r->group,n->tx_ba&&!r->group);
+   /* Window quota is consumed once. Completion releases descriptors and only
+@@ -265,7 +333,7 @@
+  dev->mtu=1280;dev->min_mtu=1280;dev->max_mtu=1500;dev->tx_queue_len=WA_AWDL_QUEUE_MAX;
+  n=netdev_priv(dev);n->dev=dev;n->phl=phl;n->sta=wa_nan_stageb.peer;
+  n->adapter=dvobj_get_primary_adapter((struct dvobj_priv *)n->phl->phl_com->drv_priv);
+- INIT_LIST_HEAD(&n->prepared);n->primary=149;n->ldpc=!!(caps[0]&BIT(4));
++ INIT_LIST_HEAD(&n->live);INIT_LIST_HEAD(&n->prepared);n->primary=149;n->ldpc=!!(caps[0]&BIT(4));
+  memcpy(n->peer,peer,6);n->sgi=!!(caps[0]&BIT(5));
+  n->rate=(streams==2 ? RTW_DATA_RATE_VHT_NSS2_MCS0:RTW_DATA_RATE_VHT_NSS1_MCS0)+mcs;
+  /* VHT80 MCS7/8/9, in 100 kbit/s; intersect the peer's two-stream map. */
+@@ -280,7 +348,9 @@
+  INIT_DELAYED_WORK(&n->ba_expiry,wa_awdl_ba_expired);init_waitqueue_head(&n->idle);atomic_set(&n->pending,0);atomic64_set(&n->airtime,0);
+  hrtimer_init(&n->timer,CLOCK_MONOTONIC,HRTIMER_MODE_ABS);n->timer.function=wa_awdl_net_timer;
+  ret=rtw_hal_wa_nan_command_begin(n->phl->hal);if(ret)goto fail;
+- ret=rtw_hal_wa_nan_rate(n->phl->hal,n->sta,&n->config,true);rtw_hal_wa_nan_command_end();
++ ret=rtw_hal_wa_nan_rate(n->phl->hal,n->sta,&n->config,true);
++ if(!ret) {n->ba_filter_before=rtw_hal_read32(n->phl->hal,0xce24);rtw_hal_write32(n->phl->hal,0xce24,(n->ba_filter_before&~(3U<<18))|BIT(18));}
++ rtw_hal_wa_nan_command_end();
+  if(ret)goto fail;n->rate_ready=true;
+  if(!rtnl_trylock()){ret=-EBUSY;goto disable_rate;}
+  ret=register_netdevice(dev);rtnl_unlock();if(ret)goto disable_rate;
+@@ -288,6 +358,7 @@
+  pr_info("AWDL_NATIVE create depth=128 nss=%u mcs=%u sgi=%u rate_100kbps=%u amsdu_limit=%u\n",streams,mcs,n->sgi,n->rate_100kbps,n->amsdu_limit);
+  return 0;
+ disable_rate:
++ rtw_hal_write32(n->phl->hal,0xce24,n->ba_filter_before);
+  rtw_hal_wa_nan_rate(n->phl->hal,n->sta,NULL,false);
+ fail:free_netdev(dev);module_put(THIS_MODULE);return ret;
+ }
+@@ -301,7 +372,7 @@
+  if(!wait_event_timeout(n->idle,!atomic_read(&n->pending),msecs_to_jiffies(1000)))return -ETIMEDOUT;
+  ret=rtw_hal_wa_nan_command_begin(n->phl->hal);if(ret)return ret;
+  for(u8 tid=0;tid<16;tid++)if(n->rx_ba_mask&BIT(tid))rtw_phl_stop_rx_ba_session(n->phl,n->sta,tid);
+- n->rx_ba_mask=0;
++ n->rx_ba_mask=0;rtw_hal_write32(n->phl->hal,0xce24,n->ba_filter_before);
+  ret=n->rate_ready ? rtw_hal_wa_nan_rate(n->phl->hal,n->sta,NULL,false):0;
+  rtw_hal_wa_nan_command_end();if(ret)return ret;n->rate_ready=false;
+  if(!rtnl_trylock())return -EBUSY;
+--- a/phl/phl_rx.c
++++ b/phl/phl_rx.c
+@@ -1151,6 +1151,8 @@
+ static struct wa_nan_ba_observation wa_nan_ba_observed;
+ static DEFINE_SPINLOCK(wa_nan_ba_observed_lock);
+ 
++void rtw_phl_wa_awdl_ba_observe(const u8 *,const u8 *,u16,u16,u64,u64);
++void rtw_phl_wa_awdl_ba_snapshot(void);
+ void rtw_phl_wa_nan_ba_snapshot(void)
+ {
+  struct wa_nan_ba_observation value;
+@@ -1158,6 +1160,7 @@
+  spin_lock_irqsave(&wa_nan_ba_observed_lock, flags);
+  value = wa_nan_ba_observed;
+  spin_unlock_irqrestore(&wa_nan_ba_observed_lock, flags);
++ rtw_phl_wa_awdl_ba_snapshot();
+  pr_info("WA_NAN_BA_TOTAL count=%u good=%u bad_crc=%u other=%u macid=%u control=%04x ssn=%u bitmap=%08x:%08x last_ns=%llu\n",
+          value.count, value.good, value.bad_crc, value.other, value.macid,
+          value.control, value.ssn, value.bitmap_high, value.bitmap_low,
+@@ -1182,6 +1185,9 @@
+  length = pkt->r.pkt_list[0].length;
+  if (!f || length < 20 || f[0] != 0x94)
+   return;
++ if(!pkt->r.mdata.crc32 && length==28 && (get_unaligned_le16(f+16)&6)==4)
++  rtw_phl_wa_awdl_ba_observe(f+4,f+10,get_unaligned_le16(f+16)>>12,
++   get_unaligned_le16(f+18)>>4,get_unaligned_le64(f+20),ktime_get_ns());
+  sta = rtw_phl_get_stainfo_by_addr_ex(phl, (u8 *)f + 10);
+  if (!sta || !sta->wrole || sta->wrole->type != PHL_RTYPE_NAN ||
+      !sta->rlink || memcmp(f + 4, sta->rlink->mac_addr, 6))

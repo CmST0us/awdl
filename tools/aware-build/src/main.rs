@@ -50,7 +50,7 @@ pub fn copy(source: &Path, destination: &Path, mode: u32) -> Result<()> {
 pub fn env_or(name: &str, fallback: impl Into<String>) -> String {
     env::var(name).unwrap_or_else(|_| fallback.into())
 }
-fn build_rust(root: &Path, cfg: &settings::Settings, package: &str) -> Result<()> {
+fn build_rust(root: &Path, cfg: &settings::Settings, package: &str, artifact: &str) -> Result<()> {
     cfg.linux()?;
     let target = &cfg.target;
     let cargo = env_or("CARGO", "cargo");
@@ -72,8 +72,8 @@ fn build_rust(root: &Path, cfg: &settings::Settings, package: &str) -> Result<()
             .join(".build/rust")
             .join(&target)
             .join("release")
-            .join(package),
-        &destination.join(package),
+            .join(artifact),
+        &destination.join(artifact),
         0o755,
     )?;
     licenses::collect(root, package, &target, &destination.join("licenses"))
@@ -94,7 +94,7 @@ fn execute(root: &Path, action: &str, args: &[String]) -> Result<()> {
             .collect::<Vec<_>>()
             .join("|");
         println!(
-            "用法: scripts/aware-build <命令> [参数]\nprepare-source hostap|{hardware}\nbuild-hostap | build-publisher | build-fileserver | build-ios\nbuild-driver {hardware}\ninstall-driver {hardware} | install-publisher | install-fileserver | install-platform\ngenerate-ios-config\n构建: --platform --target --kernel-release --headers --cc --mips-cc --cross-compile --kernel-arch --jobs --archive\n安装: --hardware --pci --country --cn --destdir\n配置: config/local/build.toml、config/local/install.toml"
+            "用法: scripts/aware-build <命令> [参数]\nprepare-source hostap|{hardware}\nbuild-hostap | build-publisher | build-fileserver | build-awdl | build-airdrop | build-ios\nbuild-driver {hardware}\ninstall-driver {hardware} | install-publisher | install-fileserver | install-awdl | install-airdrop | install-platform\ngenerate-ios-config\n构建: --platform --target --kernel-release --headers --cc --mips-cc --cross-compile --kernel-arch --jobs --archive\n安装: --hardware --pci --country --cn --destdir\n配置: config/local/build.toml、config/local/install.toml"
         );
         return Ok(());
     }
@@ -115,6 +115,13 @@ fn execute(root: &Path, action: &str, args: &[String]) -> Result<()> {
             hardware::prepare(root, component, &directory, cfg.archive.as_deref())?;
         }
         "build-driver" => cfg.build_driver(root)?,
+        "build-airdrop" => build_rust(root, &cfg, "airdrop", "airdrop")?,
+        "install-awdl" => install::awdl(root, &cfg)?,
+        "install-airdrop" => install::airdrop(root, &cfg)?,
+        "build-awdl" => {
+            build_rust(root, &cfg, "aware-awdl", "libaware_awdl.a")?;
+            hardware::build_awdl(root, &cfg)?;
+        }
         "build-hostap" => {
             cfg.linux()?;
             let source = hardware::prepare(
@@ -149,8 +156,8 @@ fn execute(root: &Path, action: &str, args: &[String]) -> Result<()> {
                 .args(["wpa_supplicant", "wpa_cli"]))?;
             fs::write(toolchain_path, toolchain)?;
         }
-        "build-publisher" => build_rust(root, &cfg, "wifiawared")?,
-        "build-fileserver" => build_rust(root, &cfg, "fileserver")?,
+        "build-publisher" => build_rust(root, &cfg, "wifiawared", "wifiawared")?,
+        "build-fileserver" => build_rust(root, &cfg, "fileserver", "fileserver")?,
         "generate-ios-config" | "build-ios" => {
             ios::generate(root)?;
             if action == "build-ios" {

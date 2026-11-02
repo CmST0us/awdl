@@ -1,0 +1,50 @@
+--- a/phl/wa_awdl_netdev.h
++++ b/phl/wa_awdl_netdev.h
+@@ -716,19 +716,21 @@
+  if(len<56 || memcmp(p,wa_awdl_snap,10) || p[14]!=0x86 || p[15]!=0xdd || p[16]>>4!=6)return false;
+  bytes=40+get_unaligned_be16(p+20);return bytes+16<=len && bytes<=n->dev->mtu;
+ }
+-static void wa_awdl_deliver(struct wa_awdl_net *n,const u8 *dst,const u8 *src,const u8 *p)
++static void wa_awdl_rx_copy(struct wa_awdl_net *n,struct sk_buff_head *received,const u8 *dst,const u8 *src,const u8 *p)
+ {
+  u32 bytes=40+get_unaligned_be16(p+20);
+  struct sk_buff *skb=netdev_alloc_skb_ip_align(n->dev,ETH_HLEN+bytes);
+  if(!skb){n->dev->stats.rx_dropped++;return;}
+  memcpy(skb_put(skb,6),dst,6);memcpy(skb_put(skb,6),src,6);memcpy(skb_put(skb,2),"\x86\xdd",2);
+  memcpy(skb_put(skb,bytes),p+16,bytes);skb->protocol=eth_type_trans(skb,n->dev);skb->ip_summed=CHECKSUM_NONE;
+- n->dev->stats.rx_packets++;n->dev->stats.rx_bytes+=bytes+ETH_HLEN;netif_rx(skb);
++ n->dev->stats.rx_packets++;n->dev->stats.rx_bytes+=bytes+ETH_HLEN;__skb_queue_tail(received,skb);
+ }
+ bool rtw_phl_awdl_net_rx(void *phl,const u8 *f,u32 len,u32 flags)
+ {
+- struct wa_awdl_net *n;unsigned long irq;u32 h,at;u16 seq;u8 tid;bool handled=false,amsdu;
++ struct wa_awdl_net *n;struct net_device *dev=NULL;struct sk_buff_head received;struct sk_buff *skb;
++ unsigned long irq;u32 h,at;u16 seq;u8 tid;bool handled=false,amsdu;
+  if(len<24)return false;
++ __skb_queue_head_init(&received);
+  spin_lock_irqsave(&wa_awdl_net_lock,irq);n=wa_awdl_net;if(!n||n->phl!=phl)goto out;
+  if(f[0]==0xd0 && len>=30 && f[24]==3 && f[25]<=2 && !memcmp(f+10,n->peer,6) && !memcmp(f+16,wa_awdl_bssid,6)) {
+   struct sk_buff *event;handled=true;
+@@ -752,12 +754,18 @@
+    if(size>len-at-14 || memcmp(f+at+6,n->peer,6) || (!(f[at]&1)&&memcmp(f+at,n->dev->dev_addr,6)) || !wa_awdl_msdu_valid(n,f+at+14,size))goto format;
+    at+=14+size;if(at==len)break;at=h+ALIGN(at-h,4);if(at>=len)goto format;
+   }
+-  at=h;while(at<len) {u32 size=get_unaligned_be16(f+at+12);wa_awdl_deliver(n,f+at,f+at+6,f+at+14);at+=14+size;if(at<len)at=h+ALIGN(at-h,4);}
++  at=h;while(at<len) {u32 size=get_unaligned_be16(f+at+12);wa_awdl_rx_copy(n,&received,f+at,f+at+6,f+at+14);at+=14+size;if(at<len)at=h+ALIGN(at-h,4);}
+   n->rx_amsdu++;
+- } else {if(!wa_awdl_msdu_valid(n,f+h,len-h))goto format;wa_awdl_deliver(n,f+4,f+10,f+h);}
++ } else {if(!wa_awdl_msdu_valid(n,f+h,len-h))goto format;wa_awdl_rx_copy(n,&received,f+4,f+10,f+h);}
+  if(flags&WA_NAN_RX_AMPDU)n->rx_ampdu++;
+  n->rx_seen|=BIT(tid);n->rx_sequence[tid]=seq;goto out;
+ format:n->rx_format++;
+ drop:n->dev->stats.rx_dropped++;
+-out:spin_unlock_irqrestore(&wa_awdl_net_lock,irq);return handled;
+-}
++out:
++ /* netif_rx may run softirqs and reenter TX/timers; retain only the device. */
++ if(!skb_queue_empty(&received)){dev=n->dev;dev_hold(dev);}
++ spin_unlock_irqrestore(&wa_awdl_net_lock,irq);
++ while((skb=__skb_dequeue(&received)))netif_rx(skb);
++ if(dev)dev_put(dev);
++ return handled;
++}

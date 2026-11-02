@@ -1,0 +1,189 @@
+--- a/phl/wa_nan_sdf_tx.c
++++ b/phl/wa_nan_sdf_tx.c
+@@ -40,6 +40,11 @@
+ 	u32 timeout;
+ };
+ 
++#define WA_AWDL_TX_DEPTH 4
++static atomic_t wa_awdl_pending = ATOMIC_INIT(0);
++static bool wa_sdf_mgmt_pending;
++static u32 wa_awdl_peak;
++
+ static void wa_awdl_net_done(bool data, u16 len, u32 status);
+ static int wa_awdl_net_delete(void);
+ static bool wa_awdl_active;
+@@ -87,7 +92,7 @@
+ 		state->done++;
+ 	else
+ 		state->failed++;
+-	state->active_cookie = 0;
++	if (!ctx->native_awdl) state->active_cookie = 0;
+ 	spin_unlock_irqrestore(&state->lock, flags);
+ 	pr_info("WA_PROBE sdf-done cookie=%llu len=%u txsts=%u elapsed_ns=%llu submitted=%u done=%u failed=%u timeout=%u\n",
+ 		(unsigned long long)ctx->cookie, (unsigned int)ctx->len,
+@@ -98,7 +103,11 @@
+ 	if (ctx->request_cookie)
+ 		wa_nan_vendor_tx_done(((struct phl_info_t *)ctx->phl)->phl_com->drv_priv,
+ 			ctx->request_cookie, txsts, acked);
+-	atomic_set(&state->outstanding, 0);
++	spin_lock_irqsave(&state->lock, flags);
++ if (ctx->native_awdl) atomic_dec(&wa_awdl_pending);
++ else wa_sdf_mgmt_pending = false;
++ atomic_dec(&state->outstanding);
++ spin_unlock_irqrestore(&state->lock, flags);
+  wa_awdl_net_done(ctx->native_awdl,ctx->len,txsts);
+  kfree(ctx);
+ 	wake_up_all(&wa_sdf_wait);
+@@ -119,6 +128,17 @@
+ 	spin_unlock_irq(&wa_sdf_state.lock);
+ 	return wait_event_timeout(wa_sdf_wait,
+ 		!atomic_read(&wa_sdf_state.outstanding), msecs_to_jiffies(1000)) ? 0 : -ETIMEDOUT;
++}
++
++static void wa_nan_tx_unreserve(bool native_awdl)
++{
++ unsigned long flags;
++ spin_lock_irqsave(&wa_sdf_state.lock, flags);
++ if (native_awdl) atomic_dec(&wa_awdl_pending);
++ else wa_sdf_mgmt_pending = false;
++ atomic_dec(&wa_sdf_state.outstanding);
++ spin_unlock_irqrestore(&wa_sdf_state.lock, flags);
++ wake_up_all(&wa_sdf_wait);
+ }
+ 
+ static int wa_nan_tx(void *phl, const u8 *frame, u16 len, u64 *cookie,
+@@ -141,6 +161,7 @@
+ 	int result = -EIO;
+ 	enum rtw_phl_status add_ret, notify_ret;
+ 	bool mapped = false;
++ bool native_awdl;
+  bool awdl_data = frame && rtw_phl_awdl_probe_active(phl) && (frame[0] & 0x0c) == 8;
+ 
+ 	if (!phl_info || !frame || !cookie || len < 30 || len > WA_NAN_FRAME_MAX)
+@@ -162,36 +183,46 @@
+ 	if (freq && freq != (cur_ch == 14 ? 2484 :
+ 		(cur_ch <= 13 ? 2407 + cur_ch * 5 : 5000 + cur_ch * 5)))
+ 		return -EBUSY;
+-	spin_lock_irqsave(&state->lock, flags);
+-	if (!wa_sdf_accepting || atomic_cmpxchg(&state->outstanding, 0, 1) != 0) {
++ native_awdl = awdl_data && !request_cookie;
++ spin_lock_irqsave(&state->lock, flags);
++ if (!wa_sdf_accepting ||
++     (native_awdl ? atomic_read(&wa_awdl_pending) >= WA_AWDL_TX_DEPTH :
++      (wa_sdf_mgmt_pending || (!rtw_phl_awdl_probe_active(phl) && atomic_read(&state->outstanding))))) {
+ 		spin_unlock_irqrestore(&state->lock, flags);
+ 		return -EBUSY;
+ 	}
+-	spin_unlock_irqrestore(&state->lock, flags);
+-	if (!rtw_get_bcmc_stainfo(adapter, link)) {
+-		atomic_set(&state->outstanding, 0);
++ atomic_inc(&state->outstanding);
++ if (native_awdl) {
++  atomic_inc(&wa_awdl_pending);
++  wa_awdl_peak = max_t(u32, wa_awdl_peak, atomic_read(&wa_awdl_pending));
++ } else wa_sdf_mgmt_pending = true;
++ spin_unlock_irqrestore(&state->lock, flags);
++ if (!rtw_get_bcmc_stainfo(adapter, link)) {
++		wa_nan_tx_unreserve(native_awdl);
+ 		return -ENODEV;
+ 	}
+ 	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+ 	if (!ctx) {
+-		atomic_set(&state->outstanding, 0);
++		wa_nan_tx_unreserve(native_awdl);
+ 		return -ENOMEM;
+ 	}
+ 	xframe = alloc_mgtxmitframe(&adapter->xmitpriv);
+ 	if (!xframe) {
+ 		kfree(ctx);
+-		atomic_set(&state->outstanding, 0);
++		wa_nan_tx_unreserve(native_awdl);
+ 		return -ENOMEM;
+ 	}
+ 	spin_lock_irqsave(&state->lock, flags);
+ 	ctx->cookie = ++state->next_cookie;
+ 	ctx->submitted_ns = ktime_get_ns();
+ 	ctx->len = len;
+-	state->active_cookie = ctx->cookie;
+-	state->active_ns = ctx->submitted_ns;
++	if (!native_awdl) {
++  state->active_cookie = ctx->cookie;
++  state->active_ns = ctx->submitted_ns;
++ }
+ 	spin_unlock_irqrestore(&state->lock, flags);
+ 	ctx->phl = phl;
+- ctx->native_awdl=awdl_data && !request_cookie;
++ ctx->native_awdl=native_awdl;
+ 	ctx->request_cookie = request_cookie;
+ 	ctx->unicast_ack = !(frame[4] & 1) &&
+ 		((frame[0] & 0xfc) == 0xd0 || (frame[0] & 0xfc) == 0xb0 || awdl_data);
+@@ -228,7 +259,9 @@
+ 		if (result) { result = -EIO; goto release; }
+ 		attr->pktlen = attr->last_txcmdsz = len + 16;
+ 	} else memcpy(payload + 24, frame + 24, len - 24);
++	spin_lock_irqsave(&state->lock, flags);
+ 	attr->seqnum = adapter->mlmeextpriv.mgnt_seq++;
++	spin_unlock_irqrestore(&state->lock, flags);
+ 	SetSeqNum(xframe->buf_addr + TXDESC_OFFSET, attr->seqnum);
+ 	update_mgntframe_attrib_addr(adapter, xframe);
+ 	xframe->xftype = RTW_TX_DRV_MGMT;
+@@ -314,11 +347,11 @@
+ 		(unsigned int)MGN_6M, (unsigned int)!(frame[4] & 1));
+ 	return 0;
+ release:
+-	spin_lock_irqsave(&state->lock, flags);
+-	state->active_cookie = 0;
+-	state->failed++;
+-	atomic_set(&state->outstanding, 0);
+-	spin_unlock_irqrestore(&state->lock, flags);
++ spin_lock_irqsave(&state->lock, flags);
++ if (!native_awdl) state->active_cookie = 0;
++ state->failed++;
++ spin_unlock_irqrestore(&state->lock, flags);
++ wa_nan_tx_unreserve(native_awdl);
+ 	if (mapped)
+ 		core_recycle_txreq_phyaddr(adapter, xframe->phl_txreq);
+ 	core_tx_free_xmitframe(adapter, xframe);
+--- a/phl/wa_awdl_netdev.h
++++ b/phl/wa_awdl_netdev.h
+@@ -47,12 +47,13 @@
+  u64 cookie, now, close;
+  int ret;
+  unsigned long flags;
++next:
+  if (READ_ONCE(n->stopping) || !netif_running(n->dev)) return;
+  spin_lock_irqsave(&wa_awdl_net_lock,flags);
+  now=ktime_get_ns(); close=n->closes;
+- ret=now>=n->opens && now+3000000<close;
++ ret=now>=n->opens && now+(u64)(atomic_read(&wa_awdl_pending)+1)*3000000<close;
+  spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
+- if (!ret || atomic_read(&wa_sdf_state.outstanding)) return;
++ if (!ret || atomic_read(&wa_awdl_pending)>=WA_AWDL_TX_DEPTH) return;
+  skb=skb_dequeue(&n->queue);
+  if (!skb) return;
+  frame=kmalloc(skb->len-ETH_HLEN+40,GFP_KERNEL);
+@@ -70,7 +71,7 @@
+ free_skb:
+  dev_kfree_skb(skb);
+  if (skb_queue_len(&n->queue)<32 && !READ_ONCE(n->stopping)) netif_wake_queue(n->dev);
+- if (!atomic_read(&wa_sdf_state.outstanding) && !skb_queue_empty(&n->queue)) schedule_work(&n->work);
++ if (!skb_queue_empty(&n->queue)) goto next;
+ }
+ static enum hrtimer_restart wa_awdl_net_timer(struct hrtimer *timer)
+ {
+@@ -118,6 +119,7 @@
+  dev->netdev_ops=&wa_awdl_net_ops;dev->mtu=1280;dev->min_mtu=1280;dev->max_mtu=1500;
+  dev->tx_queue_len=64;dev->features=0;
+  n=netdev_priv(dev);n->dev=dev;n->phl=phl;memcpy(n->peer,peer,6);
++ wa_awdl_peak=0;
+  skb_queue_head_init(&n->queue);INIT_WORK(&n->work,wa_awdl_net_work);
+  hrtimer_init(&n->timer,CLOCK_MONOTONIC,HRTIMER_MODE_ABS);n->timer.function=wa_awdl_net_timer;
+  if (!rtnl_trylock()) {ret=-EBUSY;goto fail;}
+@@ -137,6 +139,7 @@
+  if (!rtnl_trylock()) return -EBUSY;
+  spin_lock_bh(&wa_awdl_net_lock);n->stopping=true;wa_awdl_net=NULL;spin_unlock_bh(&wa_awdl_net_lock);
+  netif_tx_disable(n->dev);hrtimer_cancel(&n->timer);cancel_work_sync(&n->work);
++ pr_info("AWDL_NET depth peak=%u pending=%d\n",wa_awdl_peak,atomic_read(&wa_awdl_pending));
+  pr_info("AWDL_NET stop tx=%lu tx_errors=%lu rx=%lu rx_drop=%lu queued=%u\n",
+   n->dev->stats.tx_packets,n->dev->stats.tx_errors,n->dev->stats.rx_packets,n->dev->stats.rx_dropped,skb_queue_len(&n->queue));
+  skb_queue_purge(&n->queue);unregister_netdevice(n->dev);rtnl_unlock();

@@ -1,0 +1,334 @@
+--- a/include/wa_nan_vendor.h
++++ b/include/wa_nan_vendor.h
+@@ -48,4 +48,9 @@
+  u32 flags, struct wa_nan_verified_rx *out);
+ int rtw_phl_wa_nan_key_owned(void *phl, const u8 *address,
+  const u8 *key, bool add, u64 key_cookie);
++
++bool rtw_phl_awdl_probe_active(void *phl);
++int rtw_phl_awdl_probe(void *phl, struct rtw_wifi_role_t *role,
++ struct rtw_wifi_role_link_t *link, u32 op, u32 freq,
++ const u8 *frame, u16 len, u64 cookie);
+ #endif
+--- a/os_dep/linux/rtw_cfgvendor.c
++++ b/os_dep/linux/rtw_cfgvendor.c
+@@ -1851,7 +1851,20 @@
+ 		return -EPROTONOSUPPORT;
+ 	op = nla_get_u32(tb[WA_NAN_ATTR_OP]);
+ 	if (!link || !link->wrlink || !adapter->phl_role) return -ENODEV;
+-	if (op == WA_NAN_OP_GET_CAPS) {
++	if (op >= 0x100 && op <= 0x104) {
++  u32 freq = tb[WA_NAN_ATTR_FREQ] ? nla_get_u32(tb[WA_NAN_ATTR_FREQ]) : 0;
++  if (op == 0x100) {
++   u8 ch = ieee80211_frequency_to_channel(freq);
++   struct wa_nan_channel c = {ch, ch, 0};
++   if ((ch != 6 && ch != 44 && ch != 149) || !wa_nan_channel_usable(wiphy, &c))
++    return -EINVAL;
++  }
++  return rtw_phl_awdl_probe(phl, adapter->phl_role, link->wrlink, op, freq,
++   tb[WA_NAN_ATTR_FRAME] ? nla_data(tb[WA_NAN_ATTR_FRAME]) : NULL,
++   tb[WA_NAN_ATTR_FRAME] ? nla_len(tb[WA_NAN_ATTR_FRAME]) : 0,
++   tb[WA_NAN_ATTR_COOKIE] ? nla_get_u64(tb[WA_NAN_ATTR_COOKIE]) : 0);
++ }
++ if (op == WA_NAN_OP_GET_CAPS) {
+ 		u8 cluster[6] = {0x50,0x6f,0x9a,0x01,0,0};
+ 		struct ieee80211_supported_band *band = wiphy->bands[NL80211_BAND_2GHZ];
+ 		struct ieee80211_ht_cap ht = {0};
+@@ -2065,8 +2078,18 @@
+ {
+ 	struct dvobj_priv *dvobj = drv;
+ 	_adapter *adapter = dvobj_get_primary_adapter(dvobj);
+-	if (adapter && adapter->phl_role && adapter->phl_role->type == PHL_RTYPE_NAN &&
+-	    len >= 36 && len <= WA_NAN_FRAME_MAX && frame[0] == 0x80 &&
++	if (rtw_phl_awdl_probe_active(GET_PHL_INFO(dvobj)) && len >= 30 &&
++     len <= WA_NAN_FRAME_MAX && !memcmp(frame+16, "\x00\x25\x00\xff\x94\x73", 6)) {
++  if (!(flags & (WA_NAN_RX_CRC_ERROR | WA_NAN_RX_ICV_ERROR)) &&
++      !(frame[1] & 0x43) && ((frame[4] & 1) ||
++      !memcmp(frame+4, GET_PRIMARY_LINK(adapter)->wrlink->mac_addr, 6)))
++   wa_nan_emit(adapter, WA_NAN_EVENT_RX, 0, frame, len,
++    wa_nan_frequency(channel), flags | WA_NAN_RX_RAW,
++    counter, 0, WA_NAN_ACK_UNKNOWN, NULL);
++  return true;
++ }
++ if (adapter && adapter->phl_role && adapter->phl_role->type == PHL_RTYPE_NAN &&
++     len >= 36 && len <= WA_NAN_FRAME_MAX && frame[0] == 0x80 &&
+ 	    !memcmp(frame+16, "\x50\x6f\x9a\x01", 4)) {
+ 		wa_nan_emit(adapter, WA_NAN_EVENT_RX, 0, frame, len,
+ 			wa_nan_frequency(channel), flags | WA_NAN_RX_RAW,
+--- a/phl/hci/phl_trx_pcie.c
++++ b/phl/hci/phl_trx_pcie.c
+@@ -4299,6 +4299,18 @@
+ 	phl_info->rx_stats.rx_type_all++;
+ #endif
+ 
++ if (rtw_phl_awdl_probe_active(phl_info) && phl_rx->type == RTW_RX_TYPE_WIFI) {
++  struct rtw_r_meta_data *m = &phl_rx->r.mdata;
++  u8 *f = phl_rx->r.pkt_list[0].vir_addr;
++  u16 n = phl_rx->r.pkt_list[0].length;
++  if (n >= 10 && (f[0]&0x0c)==4)
++   pr_info("AWDL_CTRL fc=%02x%02x ra=%pM len=%u cam=%u valid=%u match=%u macid=%u crc=%u\n",
++    f[0],f[1],f+4,n,m->addr_cam,m->addr_cam_vld,m->a1_match,m->macid,m->crc32);
++  if (n >= 24 && ((f[0]&0x0c)==8 || m->hdr_cnv))
++   pr_info("AWDL_DMA fc=%02x%02x a1=%pM a2=%pM a3=%pM len=%u cam=%u valid=%u match=%u macid=%u crc=%u icv=%u conv=%u qos=%u amsdu=%u seq=%u\n",
++    f[0],f[1],f+4,f+10,f+16,n,m->addr_cam,m->addr_cam_vld,m->a1_match,m->macid,
++    m->crc32,m->icverr,m->hdr_cnv,m->qos,m->amsdu,m->seq);
++ }
+ 	switch (phl_rx->type) {
+ 	case RTW_RX_TYPE_WIFI:
+ #ifdef DEBUG_PHL_RX
+--- a/phl/phl_api_drv.c
++++ b/phl/phl_api_drv.c
+@@ -72,6 +72,7 @@
+ #include "wa_nan_radio.h"
+ #include "wa_nan_sdf_tx.c"
+ #include "wa_nan_stageb.h"
++#include "wa_awdl_probe.h"
+ 
+ void rtw_phl_wa_nan_role_release(void *phl, struct rtw_wifi_role_t *wrole)
+ {
+--- a/phl/phl_rx.c
++++ b/phl/phl_rx.c
+@@ -616,7 +616,13 @@
+ 				hci_trx_ops->recycle_rx_pkt(phl_info, pos);
+ 				continue;
+ 			}
+-			if (kind && kind != 3)
++			if (rtw_phl_awdl_probe_active(phl_info) &&
++     !memcmp(frame+16, "\x00\x25\x00\xff\x94\x73", 6) && !(frame[4]&1))
++    pr_info("AWDL_RX seq=%u retry=%u cam=%u valid=%u a1_match=%u macid=%u counter=%u len=%u\n",
++     (frame[22] | (frame[23]<<8))>>4, !!(frame[1]&8),
++     pos->r.mdata.addr_cam,pos->r.mdata.addr_cam_vld,pos->r.mdata.a1_match,
++     pos->r.mdata.macid,pos->r.mdata.freerun_cnt,pos->r.pkt_list[0].length);
++   if (kind && kind != 3)
+ 				pr_info("WA_PROBE nan-mgmt-rx kind=%u counter=%u port=%u macid=%u cam=%u valid=%u a1_match=%u seq=%u len=%u channel=%u flags=%x ra=%pM ta=%pM bssid=%pM\n",
+ 					kind, pos->r.mdata.freerun_cnt, pos->r.mdata.hal_port,
+ 					pos->r.mdata.macid, pos->r.mdata.addr_cam,
+--- /dev/null
++++ b/phl/wa_awdl_probe.h
+@@ -0,0 +1,139 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Fixed-channel AWDL hardware probe. The existing U2 image is unchanged. */
++#ifndef WA_AWDL_PROBE_H
++#define WA_AWDL_PROBE_H
++static u32 wa_awdl_ctrl_before, wa_awdl_cam_before, wa_awdl_dis_before;
++static void wa_awdl_control_diag(void *hal, bool start)
++{
++ if (start) {
++  wa_awdl_ctrl_before=rtw_hal_read32(hal,0xce24);
++  wa_awdl_cam_before=rtw_hal_read32(hal,0xce34);
++  wa_awdl_dis_before=rtw_hal_read32(hal,0xce38);
++  /* CTRL_FLTR: route RTS, CTS and ACK to host, retaining normal RX admission. */
++  rtw_hal_write32(hal,0xce24,(wa_awdl_ctrl_before & ~0x0fc00000) | 0x05400000);
++ } else {
++  pr_info("AWDL_RESPONSE final_cam=%08x\n",rtw_hal_read32(hal,0xce34));
++  rtw_hal_write32(hal,0xce34,wa_awdl_cam_before);
++  rtw_hal_write32(hal,0xce38,wa_awdl_dis_before);
++  rtw_hal_write32(hal,0xce24,wa_awdl_ctrl_before);
++ }
++ pr_info("AWDL_CONTROL_DIAG start=%u filter=%08x ack_cam=%08x\n",
++  start,rtw_hal_read32(hal,0xce24),rtw_hal_read32(hal,0xce34));
++}
++static const u8 wa_awdl_bssid[6] = {0x00,0x25,0x00,0xff,0x94,0x73};
++
++static int wa_awdl_start(void *phl, struct rtw_wifi_role_t *role,
++ struct rtw_wifi_role_link_t *link, u32 freq)
++{
++ struct wa_nan_stageb_ctx *ctx = &wa_nan_stageb;
++ struct rtw_chan_def ch;
++ enum role_type type = PHL_RTYPE_NAN;
++ u32 before, after;
++ int ret, cleanup;
++ if (!mutex_trylock(&wa_nan_lifecycle_lock)) return -EBUSY;
++ if (atomic_read(&wa_nan_stageb_state)) { ret=-EBUSY; goto unlock; }
++ ret=rtw_hal_wa_nan_command_begin(((struct phl_info_t *)phl)->hal);
++ if (ret) goto unlock;
++ ret=rtw_phl_wa_nan_radio_acquire(phl);
++ if (ret) goto command_end;
++ memset(ctx,0,sizeof(*ctx));
++ ctx->phl=phl;
++ atomic_set(&wa_nan_stageb_state,1);
++ ret=wa_nan_stageb_precondition(ctx,role,link);
++ if (ret) goto fail;
++ ctx->rx_before=rtw_hal_get_rxfltr_opt_mode(ctx->phl->hal,ctx->band);
++ if (ctx->rx_before!=RX_FLTR_OPT_MODE_STA_NORMAL) { ret=-EBUSY; goto fail; }
++ ctx->channel_before=GET_PRIMARY_LINK(dvobj_get_primary_adapter(
++   (struct dvobj_priv *)ctx->phl->phl_com->drv_priv))->mlmeextpriv.chandef;
++ ch=ctx->channel_before;
++ ch.chan=ch.center_ch=freq==2437 ? 6 : (freq-5000)/5;
++ ch.band=freq==2437 ? BAND_ON_24G : BAND_ON_5G;
++ ch.bw=CHANNEL_WIDTH_20; ch.offset=CHAN_OFFSET_NO_EXT; ch.is_dfs=false;
++ ctx->channel_changed=true;
++ ret=wa_nan_restore_channel(phl,&ch);
++ if (ret) goto fail;
++ ret=phl_wifi_role_change(ctx->phl,role,link,WR_CHG_TYPE,&type);
++ ctx->role_changed=role->type==PHL_RTYPE_NAN;
++ if (ret!=RTW_PHL_STATUS_SUCCESS) { ret=-EIO; goto fail; }
++ ctx->rx_changed=true;
++ ret=rtw_hal_wa_nan_rx_filter(ctx->phl->hal,ctx->band,1,&before,&after);
++ if (ret) goto fail;
++ /* RX_FLTR_OPT bit0 is SNIFFER_MODE on 8852B. */
++ if (after&1) { ret=-EPERM; goto fail; }
++ ctx->mgmt=wa_nan_mgmt_alloc(ctx->phl,role,link,&ctx->mgmt_ready);
++ if (!ctx->mgmt) { ret=-ENOMEM; goto fail; }
++ ctx->mgmt_allocated=true;
++ if (!ctx->mgmt_ready) { ret=-EIO; goto fail; }
++ ctx->plan.macid_mgn=ctx->mgmt->macid;
++ memcpy(ctx->plan.nmi,link->mac_addr,6);
++ memcpy(ctx->plan.cluster,wa_awdl_bssid,6);
++ rtw_phl_wa_nan_sdf_set_macid(ctx->mgmt->macid);
++ wa_awdl_peer_macid=ctx->mgmt->macid;
++ wa_awdl_phl=phl;
++ ctx->entered=true;
++ wa_nan_host_owned=true;
++ wa_nan_sdf_open();
++ wa_awdl_control_diag(ctx->phl->hal,true);
++ WRITE_ONCE(wa_awdl_active,true);
++ pr_info("AWDL_START freq=%u rx_filter=%08x sniffer=0 macid=%u local=%pM bssid=%pM nan_fw_started=0\n",
++   freq,after,ctx->mgmt->macid,link->mac_addr,wa_awdl_bssid);
++ ret=0;
++ goto command_end;
++fail:
++ cleanup=wa_nan_host_cleanup(phl);
++ if (cleanup) { ctx->held=true; ret=-EUCLEAN; }
++command_end:
++ rtw_hal_wa_nan_command_end();
++unlock:
++ mutex_unlock(&wa_nan_lifecycle_lock);
++ return ret;
++}
++
++int rtw_phl_awdl_probe(void *phl, struct rtw_wifi_role_t *role,
++ struct rtw_wifi_role_link_t *link, u32 op, u32 freq,
++ const u8 *frame, u16 len, u64 cookie)
++{
++ struct wa_nan_stageb_ctx *ctx=&wa_nan_stageb;
++ int ret;
++ u64 internal_cookie;
++ if (op==0x100) return wa_awdl_start(phl,role,link,freq);
++ if (!rtw_phl_awdl_probe_active(phl)) return -ENETDOWN;
++ if (op==0x101) { wa_awdl_control_diag(ctx->phl->hal,false); return rtw_phl_wa_nan_host_stop(phl); }
++ if (op==0x104) {
++  u32 ctrl=rtw_hal_read32(ctx->phl->hal,0xce34);
++  u32 dis=rtw_hal_read32(ctx->phl->hal,0xce38);
++  if (freq>1) return -EINVAL;
++  /* mac_ax/addr_cam.c::_set_mac_resp_ack: disable ACK via address CAM. */
++  if (!freq) {
++   rtw_hal_write32(ctx->phl->hal,0xce34,ctrl & ~BIT(0));
++   rtw_hal_write32(ctx->phl->hal,0xce38,(dis & ~0x3ff) | 0xff);
++  } else {
++   rtw_hal_write32(ctx->phl->hal,0xce38,wa_awdl_dis_before);
++   rtw_hal_write32(ctx->phl->hal,0xce34,ctrl | BIT(0));
++  }
++  ctrl=rtw_hal_read32(ctx->phl->hal,0xce34);
++  pr_info("AWDL_RESPONSE enabled=%u cam=%08x dis=%08x\n",freq,ctrl,rtw_hal_read32(ctx->phl->hal,0xce38));
++  return !!(ctrl & BIT(0))==freq ? 0 : -EIO;
++ }
++ if (op==0x103) {
++  if (len!=6 || !is_valid_ether_addr(frame)) return -EINVAL;
++  ret=rtw_hal_wa_nan_command_begin(ctx->phl->hal);
++  if (ret) return ret;
++  ret=rtw_phl_wa_nan_peer(phl,frame,true);
++  if (!ret) ret=rtw_hal_wa_nan_data_rx_mode(ctx->phl->hal,ctx->peer->macid,wa_awdl_bssid);
++  if (!ret) ret=rtw_hal_wa_nan_mgmt_match(ctx->phl->hal,ctx->mgmt->macid,false);
++  if (!ret) wa_awdl_peer_macid=ctx->peer->macid;
++  rtw_hal_wa_nan_command_end();
++  pr_info("AWDL_PEER peer=%pM macid=%u result=%d\n",frame,wa_awdl_peer_macid,ret);
++  return ret;
++ }
++ if (op!=0x102 || !cookie || !frame || len<30 || len>WA_NAN_FRAME_MAX)
++  return -EINVAL;
++ if ((frame[1]&0x43) || memcmp(frame+10,link->mac_addr,6) ||
++     memcmp(frame+16,wa_awdl_bssid,6)) return -EINVAL;
++ if (frame[0]!=0xd0 && frame[0]!=0x08 && frame[0]!=0x88) return -EINVAL;
++ if ((frame[0]&0x0c)==8 && !(frame[4]&1) &&
++     (!ctx->peer_ready || memcmp(frame+4,ctx->peer->mac_addr,6))) return -ENOTCONN;
++ return wa_nan_tx(phl,frame,len,&internal_cookie,cookie,freq,0,NULL,0);
++}
++#endif
+--- a/phl/wa_nan_sdf_tx.c
++++ b/phl/wa_nan_sdf_tx.c
+@@ -39,6 +39,13 @@
+ 	u32 timeout;
+ };
+ 
++static bool wa_awdl_active;
++static void *wa_awdl_phl;
++static u8 wa_awdl_peer_macid;
++bool rtw_phl_awdl_probe_active(void *phl)
++{
++ return READ_ONCE(wa_awdl_active) && READ_ONCE(wa_awdl_phl) == phl;
++}
+ static u8 wa_sdf_macid;
+ static bool wa_sdf_accepting;
+ static DECLARE_WAIT_QUEUE_HEAD(wa_sdf_wait);
+@@ -130,6 +137,7 @@
+ 	int result = -EIO;
+ 	enum rtw_phl_status add_ret, notify_ret;
+ 	bool mapped = false;
++ bool awdl_data = frame && rtw_phl_awdl_probe_active(phl) && (frame[0] & 0x0c) == 8;
+ 
+ 	if (!phl_info || !frame || !cookie || len < 30 || len > WA_NAN_FRAME_MAX)
+ 		return -EINVAL;
+@@ -181,7 +189,7 @@
+ 	ctx->phl = phl;
+ 	ctx->request_cookie = request_cookie;
+ 	ctx->unicast_ack = !(frame[4] & 1) &&
+-		((frame[0] & 0xfc) == 0xd0 || (frame[0] & 0xfc) == 0xb0);
++		((frame[0] & 0xfc) == 0xd0 || (frame[0] & 0xfc) == 0xb0 || awdl_data);
+ 	ctx->feedback.ctx = ctx;
+ 	ctx->feedback.txsts = TX_STATUS_TX_FAIL_SW_DROP;
+ 	ctx->feedback.txfb_cb = wa_nan_sdf_tx_feedback;
+@@ -241,7 +249,28 @@
+ 			(unsigned long long)request_cookie, (unsigned long long)key_cookie,
+ 			(unsigned long long)pn, macid, cam, attr->pktlen);
+ 	}
+-	xframe->phl_txreq->txfb = &ctx->feedback;
++	if (awdl_data) {
++  /* Probe data uses the normal TID0 queue, plaintext AWDL and hardware ACK. */
++  macid = wa_awdl_peer_macid;
++  xframe->phl_txreq->mdata.type = RTW_PHL_PKT_TYPE_DATA;
++  xframe->phl_txreq->mdata.cat = rtw_phl_cvt_tid_to_cat(0);
++  xframe->phl_txreq->mdata.tid = 0;
++  xframe->phl_txreq->mdata.macid = macid;
++  xframe->phl_txreq->mdata.hdr_len = (frame[0] == 0x88) ? 13 : 12;
++  xframe->phl_txreq->mdata.smh_en = 0;
++  xframe->phl_txreq->mdata.hw_sec_iv = 0;
++  xframe->phl_txreq->mdata.sw_sec_iv = 0;
++  xframe->phl_txreq->mdata.sec_hw_enc = 0;
++  xframe->phl_txreq->mdata.sec_type = RTW_ENC_NONE;
++  xframe->phl_txreq->mdata.sec_cam_idx = 0;
++  xframe->phl_txreq->mdata.no_ack = !!(frame[4] & 1);
++  xframe->phl_txreq->mdata.userate_sel = 1;
++  xframe->phl_txreq->mdata.f_rate = RTW_DATA_RATE_OFDM6;
++  xframe->phl_txreq->mdata.f_bw = CHANNEL_WIDTH_20;
++  xframe->phl_txreq->mdata.ampdu_en = 0;
++  xframe->phl_txreq->mdata.bk = 1;
++ }
++ xframe->phl_txreq->txfb = &ctx->feedback;
+ 	if (!(frame[4] & 1)) {
+ 		/* Optional CCX diagnostics accompany the authoritative WP completion. */
+ 		xframe->phl_txreq->mdata.spe_rpt = 1;
+--- a/phl/wa_nan_stageb.h
++++ b/phl/wa_nan_stageb.h
+@@ -760,7 +760,8 @@
+ 		if (ret) return ret;
+ 		ctx->channel_changed = false;
+ 	}
+-	ctx->entered = ctx->held = false;
++	WRITE_ONCE(wa_awdl_active, false);
++ ctx->entered = ctx->held = false;
+ 	wa_nan_host_owned = false;
+ 	atomic_set(&wa_nan_stageb_state, 0);
+ 	rtw_phl_wa_nan_radio_release(phl);
+--- a/phl/wa_nan_vendor.h
++++ b/phl/wa_nan_vendor.h
+@@ -48,4 +48,9 @@
+  u32 flags, struct wa_nan_verified_rx *out);
+ int rtw_phl_wa_nan_key_owned(void *phl, const u8 *address,
+  const u8 *key, bool add, u64 key_cookie);
++
++bool rtw_phl_awdl_probe_active(void *phl);
++int rtw_phl_awdl_probe(void *phl, struct rtw_wifi_role_t *role,
++ struct rtw_wifi_role_link_t *link, u32 op, u32 freq,
++ const u8 *frame, u16 len, u64 cookie);
+ #endif
