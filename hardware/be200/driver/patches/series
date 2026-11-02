@@ -8,3 +8,5 @@
 0008-nan-peer-tlc-order.patch
 0009-tso-amsdu-fragments.patch
 0010-iwl-err-ratelimit.patch
+0011-native-awdl-management.patch
+0012-native-awdl-data.patch

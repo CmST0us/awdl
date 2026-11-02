@@ -53,7 +53,27 @@ BE200、RTL8852BE 通过实际安装器完成接管，均运行 `wirelessd.servi
 
 本轮完成 Linux → iPad 系统 AirDrop 发送。iPad → Linux 接收、接收确认与连续接收、双向逐字节回传，以及与其他无线协议并行运行尚未完成验收。
 
+## BE200 原生 AWDL
+
+2026-11-03，BE200 七个 backport 模块、ARM64 公共 AWDL 库、两个硬件控制后端、wirelessd 与安装工具完成构建。BE200 AWDL / AirDrop 暂存安装生成对 `wirelessd.service` 的依赖。实机继续使用 c108 / PNVM；所选 PHY 只出现 NAN / NAN_DATA 接口。
+
+| 项目 | 结果 |
+| --- | --- |
+| 管理帧 | BE200 与 RTL 双向发现，BE200 收到 Apple AWDL 帧 |
+| 正式管理入口 | `org.wirelessd1.Awdl` 申请、选择 RTL 对端、释放均通过 |
+| 原生链路 | 149 / VHT80，双向各 16,777,216 字节 TCP 完整传输，合计 11.275 秒 |
+| BE200 → RTL | 16,777,216 字节，10.599 秒，12.663 Mbit/s |
+| 服务共存 | 传输期间 wirelessd 与 fileserver 均 active |
+| 正常释放 | `cleanup=0`，awdl0 删除，管理器回到 idle |
+| 后端异常退出 | 强制终止控制进程后 awdl0 与 NMI 对端均已删除，NAN/fileserver 继续运行 |
+| BLE | 关闭的 BE200 HCI 经复位后成功开启 LE 广播，结束恢复关闭 |
+| AirDrop 服务生命周期 | BE200、RTL 均通过接收发现、取消与释放；BE200 活动接收期间重启 wirelessd 后三项服务恢复，AirDrop 回到 idle |
+| 配置保留 | BE200 现有 wirelessd 与 fileserver 配置逐字节不变 |
+
 ## 已知限制
+
+- BE200 的 iPad 系统 AirDrop、大文件持续传输及活动 NDP 与 AWDL 并发传输尚未完成验收。
+- BE200 原生 AWDL 的发送吞吐低于 RTL 已测 AirDrop 基线；当前链路固定 149，不跟随其他信道。
 
 - BE200 backport 在 hostap 被强制终止后，异步销毁 NAN 接口的群组密钥清理可触发 `iwl_mld_get_key_sta_mask` 内核警告；该异常清理路径尚未修复。正常停止及立即重启已通过。
 - 同一 iPad 保持 RTL 客户端连接时，BE200 服务发现存在超过 5 秒验收窗口的情况。两个客户端安装身份分别连接与重连已通过，并发连接尚未完成验收。

@@ -15,8 +15,11 @@ impl Backend {
     pub fn awdl_program(self) -> Result<&'static str> {
         match self {
             Self::Rtl8852be => Ok("/usr/local/libexec/wirelessd/rtl-awdl"),
-            _ => anyhow::bail!("{} 尚不支持 AWDL", self.name()),
+            Self::Be200 => Ok("/usr/local/libexec/wirelessd/be200-awdl"),
         }
+    }
+    pub fn shared_awdl(self) -> bool {
+        matches!(self, Self::Be200)
     }
     pub fn awdl_channel(self) -> Result<u8> {
         self.awdl_program()?;
@@ -47,9 +50,10 @@ impl Backend {
         entries: &[(String, String)],
         bootstrap: &str,
         require_data: bool,
+        owns_awdl: bool,
     ) -> Result<()> {
         match self {
-            Self::Be200 => be200::check(entries, require_data),
+            Self::Be200 => be200::check(entries, require_data, owns_awdl),
             Self::Rtl8852be => rtl8852be::check(entries, bootstrap, require_data),
         }
     }

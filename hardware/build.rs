@@ -169,9 +169,19 @@ pub const OBSOLETE_USERSPACE_FILES: &[&str] = &[
 ];
 
 pub fn build_awdl(root: &Path, cfg: &Settings) -> Result<()> {
+    be200::build_awdl(root, cfg)?;
     rtl8852be::build_awdl(root, cfg)
 }
 
-pub fn awdl_installation(root: &Path, cfg: &Settings) -> Vec<(PathBuf, PathBuf)> {
-    rtl8852be::awdl_installation(root, cfg)
+pub fn awdl_installation(root: &Path, cfg: &Settings) -> Result<Vec<(PathBuf, PathBuf)>> {
+    Ok(match cfg.hardware()? {
+        Hardware::Be200 => be200::awdl_installation(root, cfg),
+        Hardware::Rtl8852be => rtl8852be::awdl_installation(root, cfg),
+    })
+}
+pub fn awdl_service(cfg: &Settings) -> Result<&'static str> {
+    Ok(match cfg.hardware()? {
+        Hardware::Be200 => "wirelessd.service",
+        Hardware::Rtl8852be => "wirelessd-awdl.service",
+    })
 }

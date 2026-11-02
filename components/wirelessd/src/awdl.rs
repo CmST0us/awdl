@@ -9,7 +9,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     process::Stdio,
-    sync::{Arc, RwLock},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
@@ -97,6 +100,8 @@ struct Manager {
     owner: Option<String>,
     state: Arc<RwLock<Value>>,
     connection: zbus::Connection,
+    owned: Arc<AtomicBool>,
+    constraint: Option<String>,
 }
 fn valid_mac(mac: &str) -> bool {
     let parts: Vec<_> = mac.split(':').collect();
@@ -134,12 +139,16 @@ impl Manager {
         Ok(Some(kind))
     }
     async fn acquire(&mut self, owner: String, target: String) -> Result<(), Error> {
+        if let Some(reason) = &self.constraint {
+            return Err(Error::NotSupported(reason.clone()));
+        }
         if self.owner.is_some() {
             return Err(Error::Busy("AWDL 已被应用占用".into()));
         }
         if !(target.is_empty() || target == "*" || valid_mac(&target)) {
             return Err(Error::InvalidArgs("目标必须为空、* 或 MAC 地址".into()));
         }
+        self.owned.store(true, Ordering::Release);
         let mut child = tokio::process::Command::new(&self.program)
             .args([
                 &self.interface,
@@ -151,7 +160,10 @@ impl Manager {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
-            .map_err(|e| Error::Radio(e.to_string()))?;
+            .map_err(|e| {
+                self.owned.store(false, Ordering::Release);
+                Error::Radio(e.to_string())
+            })?;
         let lines = BufReader::new(child.stdout.take().unwrap()).lines();
         self.session = Some(Session {
             child,
@@ -254,14 +266,57 @@ impl Manager {
         }
         self.session = None;
         self.owner = None;
+        self.owned.store(false, Ordering::Release);
         *self.state.write().unwrap() = json!({"state":"idle"});
         self.emit(json!({"event":"released"})).await
     }
 }
-pub async fn run(mut radio: Radio, shutdown: impl std::future::Future<Output = ()>) -> Result<()> {
+pub struct Service {
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    task: Option<tokio::task::JoinHandle<Result<()>>>,
+    finished: tokio::sync::watch::Receiver<Option<String>>,
+    failure: Option<String>,
+}
+impl Service {
+    pub async fn failed(&mut self) -> String {
+        if self.finished.borrow().is_none() {
+            let _ = self.finished.changed().await;
+        }
+        self.finished
+            .borrow()
+            .clone()
+            .unwrap_or_else(|| "AWDL 管理器已退出".into())
+    }
+    pub async fn close(&mut self) -> Result<()> {
+        if let Some(tx) = self.shutdown.take() {
+            let _ = tx.send(());
+        }
+        if let Some(task) = self.task.take() {
+            if let Err(error) = task.await.map_err(anyhow::Error::from).and_then(|r| r) {
+                self.failure = Some(format!("{error:#}"));
+            }
+        }
+        if let Some(error) = &self.failure {
+            bail!("{error}");
+        }
+        Ok(())
+    }
+}
+pub async fn attach(
+    connection: &zbus::Connection,
+    program: String,
+    interface: String,
+    channel: u8,
+    owned: Arc<AtomicBool>,
+    constraint: Option<String>,
+) -> Result<Service> {
     let cfg: Configuration = aware_common::configuration::load(
         include_str!("../../../config/awdl.toml"),
-        &std::fs::read_to_string("/etc/wirelessd/awdl.toml")?,
+        &match std::fs::read_to_string("/etc/wirelessd/awdl.toml") {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error.into()),
+        },
     )?;
     ensure!(
         !cfg.name.is_empty() && cfg.name.len() <= 63 && !cfg.name.contains(['\n', '\r']),
@@ -271,9 +326,7 @@ pub async fn run(mut radio: Radio, shutdown: impl std::future::Future<Output = (
         cfg.start_seconds > 0 && cfg.stop_seconds > 0,
         "AWDL 期限必须为正整数秒"
     );
-    let (program, interface, channel) = radio.prepare_awdl().await?;
-    let connection = bus::connect().await?;
-    let (tx, mut rx) = mpsc::channel(16);
+    let (tx, rx) = mpsc::channel(16);
     let state = Arc::new(RwLock::new(json!({"state":"idle"})));
     connection
         .object_server()
@@ -285,20 +338,7 @@ pub async fn run(mut radio: Radio, shutdown: impl std::future::Future<Output = (
             },
         )
         .await?;
-    let dbus = zbus::fdo::DBusProxy::new(&connection).await?;
-    let mut owners = dbus.receive_name_owner_changed().await?;
-    connection.request_name(bus::NAME).await?;
-    if std::env::var_os("NOTIFY_SOCKET").is_some() {
-        let ready = tokio::process::Command::new("systemd-notify")
-            .arg("--ready")
-            .status()
-            .await;
-        if !matches!(ready, Ok(status) if status.success()) {
-            radio.close().await?;
-            bail!("AWDL 就绪通知失败: {ready:?}");
-        }
-    }
-    let mut manager = Manager {
+    let manager = Manager {
         cfg,
         program,
         interface,
@@ -307,7 +347,38 @@ pub async fn run(mut radio: Radio, shutdown: impl std::future::Future<Output = (
         owner: None,
         state,
         connection: connection.clone(),
+        owned,
+        constraint,
     };
+    // Subscribe before exposing the service so owner loss cannot precede the subscription.
+    let dbus = zbus::fdo::DBusProxy::new(connection).await?;
+    let owners = dbus.receive_name_owner_changed().await?;
+    let (shutdown, stop) = tokio::sync::oneshot::channel();
+    let (finished_tx, finished) = tokio::sync::watch::channel(None);
+    let task = tokio::spawn(async move {
+        let result = serve(manager, rx, owners, async {
+            let _ = stop.await;
+        })
+        .await;
+        let _ = finished_tx.send(Some(match &result {
+            Ok(()) => "AWDL 管理器已退出".into(),
+            Err(e) => format!("{e:#}"),
+        }));
+        result
+    });
+    Ok(Service {
+        shutdown: Some(shutdown),
+        task: Some(task),
+        finished,
+        failure: None,
+    })
+}
+async fn serve(
+    mut manager: Manager,
+    mut rx: mpsc::Receiver<Request>,
+    mut owners: zbus::fdo::NameOwnerChangedStream,
+    shutdown: impl std::future::Future<Output = ()>,
+) -> Result<()> {
     tokio::pin!(shutdown);
     let result = loop {
         let line = async {
@@ -339,6 +410,30 @@ pub async fn run(mut radio: Radio, shutdown: impl std::future::Future<Output = (
         }
     };
     let cleanup = manager.stop().await;
+    result.and(cleanup)
+}
+pub async fn run(mut radio: Radio, shutdown: impl std::future::Future<Output = ()>) -> Result<()> {
+    let (program, interface, channel) = radio.prepare_awdl().await?;
+    let connection = bus::connect().await?;
+    let mut service = attach(
+        &connection,
+        program,
+        interface,
+        channel,
+        radio.awdl_owned.clone(),
+        None,
+    )
+    .await?;
+    let result = async {
+        connection.request_name(bus::NAME).await?;
+        if std::env::var_os("NOTIFY_SOCKET").is_some() {
+            let status = tokio::process::Command::new("systemd-notify").arg("--ready").status().await?;
+            ensure!(status.success(), "AWDL 就绪通知失败");
+        }
+        tokio::pin!(shutdown);
+        tokio::select! { _ = &mut shutdown => Ok(()), error = service.failed() => Err(anyhow::anyhow!(error)) }
+    }.await;
+    let cleanup = service.close().await;
     let radio_cleanup = radio.close().await;
     result.and(cleanup).and(radio_cleanup)
 }

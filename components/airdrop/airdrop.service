@@ -1,10 +1,10 @@
 [Unit]
 # 系统服务显示名。
 Description=AirDrop File Transfer
-# AirDrop 通过公共管理器申请独占 AWDL 链路。
-Requires=wirelessd-awdl.service
-After=wirelessd-awdl.service
-PartOf=wirelessd-awdl.service
+# AirDrop 通过公共管理器申请 AWDL 链路。
+Requires=@WIRELESS_PROVIDER@
+After=@WIRELESS_PROVIDER@
+PartOf=@WIRELESS_PROVIDER@
 
 [Service]
 # 管理接口就绪后启动完成。

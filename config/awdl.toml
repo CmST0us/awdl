@@ -1,4 +1,4 @@
-# AWDL 管理配置；重启 wirelessd-awdl.service 后生效。
+# AWDL 管理配置；重启承载 AWDL 的 wirelessd 服务后生效。
 # 任意字段省略时使用本文件列出的默认值。
 # AWDL 管理帧中的本机节点名，1–63 字节单行文本；与 AirDrop 系统显示名独立。
 name = "Wireless Service"

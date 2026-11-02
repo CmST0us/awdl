@@ -57,6 +57,7 @@ pub struct Publisher {
     pin: String,
     pair_until: u64,
     schedule_until: u64,
+    awdl: Option<crate::awdl::Service>,
 }
 
 impl Publisher {
@@ -81,10 +82,24 @@ impl Publisher {
                 .object_server()
                 .at(bus::PATH, zbus::fdo::ObjectManager)
                 .await?;
-            Ok::<_, anyhow::Error>((connection, sender, receiver, state))
+            let awdl = match radio.shared_awdl()? {
+                Some((program, interface, channel, constraint)) => Some(
+                    crate::awdl::attach(
+                        &connection,
+                        program,
+                        interface,
+                        channel,
+                        radio.awdl_owned.clone(),
+                        constraint,
+                    )
+                    .await?,
+                ),
+                None => None,
+            };
+            Ok::<_, anyhow::Error>((connection, sender, receiver, state, awdl))
         }
         .await;
-        let (connection, sender, receiver, state) = match prepared {
+        let (connection, sender, receiver, state, awdl) = match prepared {
             Ok(values) => values,
             Err(error) => {
                 if let Err(cleanup) = radio.close().await {
@@ -103,6 +118,7 @@ impl Publisher {
             pin: String::new(),
             pair_until: 0,
             schedule_until: 0,
+            awdl,
             peers: BTreeMap::new(),
             sessions: vec![],
             services: BTreeMap::new(),
@@ -727,7 +743,14 @@ impl Publisher {
                     None => std::future::pending::<()>().await,
                 }
             };
+            let awdl_failed = async {
+                match &mut self.awdl {
+                    Some(service) => service.failed().await,
+                    None => std::future::pending().await,
+                }
+            };
             tokio::select! {
+                error = awdl_failed => bail!("AWDL: {error}"),
                 _ = &mut shutdown => return Ok(()),
                 result = self.radio.events.as_ref().unwrap().socket.recv(&mut buffer) => { let n = result?; ensure!(n > 0, "hostap 事件通道已关闭"); self.event(std::str::from_utf8(&buffer[..n])?).await?; wireless_changed = true; }
                 request = self.receiver.recv() => { if let Some(request) = request { self.handle(request).await?; } }
@@ -745,7 +768,12 @@ impl Publisher {
         }
     }
     pub async fn close(&mut self) -> Result<()> {
+        let awdl = match &mut self.awdl {
+            Some(service) => service.close().await,
+            None => Ok(()),
+        };
         let _ = self.bus.release_name(bus::NAME).await;
-        self.radio.close().await
+        let radio = self.radio.close().await;
+        awdl.and(radio)
     }
 }

@@ -553,7 +553,7 @@ fn extra_component(
     Ok(())
 }
 pub fn awdl(root: &Path, cfg: &Settings) -> Result<()> {
-    let hardware_files = hardware::awdl_installation(root, cfg);
+    let hardware_files = hardware::awdl_installation(root, cfg)?;
     for (source, _) in &hardware_files {
         ensure!(
             source.is_file(),
@@ -561,22 +561,23 @@ pub fn awdl(root: &Path, cfg: &Settings) -> Result<()> {
             source.display()
         );
     }
+    let mut entries = vec![(
+        "components/wirelessd/NetworkManager-wirelessd.conf",
+        "etc/NetworkManager/conf.d/90-wirelessd.conf",
+        0o644,
+    )];
+    if hardware::awdl_service(cfg)? == "wirelessd-awdl.service" {
+        entries.push((
+            "components/wirelessd/wirelessd-awdl.service",
+            "etc/systemd/system/wirelessd-awdl.service",
+            0o644,
+        ));
+    }
     extra_component(
         root,
         cfg,
         "aware-awdl",
-        &[
-            (
-                "components/wirelessd/wirelessd-awdl.service",
-                "etc/systemd/system/wirelessd-awdl.service",
-                0o644,
-            ),
-            (
-                "components/wirelessd/NetworkManager-wirelessd.conf",
-                "etc/NetworkManager/conf.d/90-wirelessd.conf",
-                0o644,
-            ),
-        ],
+        &entries,
         &[("config/awdl.toml", "etc/wirelessd/awdl.toml")],
     )?;
     for (source, destination) in hardware_files {
@@ -590,16 +591,22 @@ pub fn awdl(root: &Path, cfg: &Settings) -> Result<()> {
 pub fn airdrop(root: &Path, cfg: &Settings) -> Result<()> {
     let binary = cfg.user_dir(root).join("airdrop/airdrop");
     ensure!(binary.is_file(), "请先 build-airdrop");
+    let unit = root
+        .join(".build/config")
+        .join(format!("airdrop-{}.service", cfg.hardware()?.name()));
+    std::fs::create_dir_all(unit.parent().unwrap())?;
+    std::fs::write(
+        &unit,
+        std::fs::read_to_string(root.join("components/airdrop/airdrop.service"))?
+            .replace("@WIRELESS_PROVIDER@", hardware::awdl_service(cfg)?),
+    )?;
+    let unit = unit.to_str().context("AirDrop unit 路径不是 UTF-8")?;
     extra_component(
         root,
         cfg,
         "airdrop",
         &[
-            (
-                "components/airdrop/airdrop.service",
-                "etc/systemd/system/airdrop.service",
-                0o644,
-            ),
+            (unit, "etc/systemd/system/airdrop.service", 0o644),
             (
                 "components/airdrop/org.airdrop.conf",
                 "etc/dbus-1/system.d/org.airdrop.conf",

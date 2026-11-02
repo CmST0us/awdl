@@ -1,31 +1,51 @@
 # AirDrop 与 AWDL
 
-RTL8852BE 使用原生 `awdl0` 承载系统 AirDrop。公共 `wirelessd` 管理硬件所有权和 AWDL 会话；`airdrop` 管理 BLE 唤醒、发现、用户接受与传输。BE200 尚不支持 AWDL。
+BE200 与 RTL8852BE 通过原生 `awdl0` 接入公共 AWDL 控制栈。`wirelessd` 管理硬件所有权和 AWDL 会话；`airdrop` 管理 BLE 唤醒、发现、用户接受与传输。数据直接经过内核 IPv6。
 
 ## 构建与安装
 
 ```sh
+scripts/aware-build prepare-source hostap --platform rock5b
 scripts/build-wirelessd.sh --platform rock5b
 scripts/build-awdl.sh --platform rock5b
 scripts/build-airdrop.sh --platform rock5b
 scripts/build-driver.sh rtl8852be --platform rock5b
 
 sudo scripts/install-wirelessd.sh
-sudo scripts/install-awdl.sh
-sudo scripts/install-airdrop.sh
+sudo scripts/install-awdl.sh --hardware rtl8852be
+sudo scripts/install-airdrop.sh --hardware rtl8852be
 sudo scripts/install-driver.sh rtl8852be --country CN
 ```
+
+BE200 使用相同公共用户态产物，驱动构建、驱动安装与两项应用安装的硬件参数改为 `be200`，模块地区参数按部署选择。AWDL 构建同时生成两个硬件后端，安装器仅安装所选后端。
 
 交叉构建仍使用公共构建配置的编译器、目标内核及 headers。安装接受 `--destdir`；已有运行配置保留。模块替换需要先停止所有无线服务，保存当前模块、参数和运行状态，再通过正常卸载加载完成。生产服务不自行替换驱动。
 
 ## 运行模式
+
+| 硬件 | 无线提供者 | AirDrop 依赖 | 与 NAN 的关系 |
+| --- | --- | --- | --- |
+| BE200 | `wirelessd.service` | 安装器生成对该服务的依赖 | 共用 NAN 管理接口，另建 NAN_DATA `awdl0`，NAN/fileserver 可保持运行 |
+| RTL8852BE | `wirelessd-awdl.service` | 安装器生成对该服务的依赖 | 当前驱动需先释放 NAN 占用 |
+
+BE200 启动：
+
+```sh
+sudo systemctl start wirelessd fileserver airdrop
+```
+
+RTL 启动：
 
 ```sh
 # 当前 RTL 后端测试前，正常停止占用同一网卡的服务。
 sudo systemctl stop fileserver wirelessd
 # 启动 AWDL 管理与 AirDrop 应用。
 sudo systemctl start airdrop
+```
 
+应用操作：
+
+```sh
 # 使用接收设备在系统中显示的准确名称。
 airdrop send 'My iPad' /absolute/path/file
 
@@ -39,14 +59,14 @@ airdrop accept 1
 airdrop decline 1
 airdrop stop
 
-# 结束 AirDrop/AWDL，恢复 NAN 文件服务。
+# RTL 结束 AirDrop/AWDL 后恢复 NAN 文件服务。
 sudo systemctl stop airdrop wirelessd-awdl
 sudo systemctl start fileserver
 ```
 
 iPad 使用系统 AirDrop 的“所有人（10 分钟）”模式，发送前开启并在系统提示中接受。BLE 需要专用、原本关闭的 Linux HCI 适配器；操作结束恢复关闭状态，已有蓝牙会话不会被接管。`airdrop stop` 取消活动操作并等待连接、BLE 和原生 AWDL 释放。
 
-服务启动不自动停止其他无线服务。当前实现共用 PCI 设备锁及 `org.wirelessd1`，同一网卡已被占用时启动报告忙；操作顺序由部署者明确控制。配置、配对和共享文件保留，默认开机启用设置保持原部署选择。
+BE200 在现有守护进程中注册两个协议接口，AWDL 释放不关闭 NAN。RTL 的两个运行单元共用 PCI 设备锁及 `org.wirelessd1`，同一网卡已被占用时启动报告忙。服务启动不自动停止其他无线服务。配置、配对和共享文件保留，默认开机启用设置保持原部署选择。
 
 ## 接口与进度
 
@@ -63,8 +83,9 @@ AirDrop 进度包括操作 ID、已发送压缩正文与总正文大小；`deliv
 
 ## 限制
 
-- 当前 RTL 驱动的 NAN 与 AWDL 使用同一组运行资源，活动 NAN 会使 AWDL 启动返回忙；公共管理器的并行协议接入与驱动资源共享尚未实现。
+- 当前 RTL 驱动的 NAN 与 AWDL 使用同一组运行资源，活动 NAN 会使 AWDL 启动返回忙；RTL 的驱动资源共享尚未实现。
+- BE200 AWDL 仅支持一个数据对端，固定主信道 149、VHT80；要求 NAN 数据频率 5745 MHz，不跟随 161。系统 AirDrop 与活动 NDP 并发传输尚未完成验收。
 - RTL AWDL 仅支持一个数据对端，在主信道 149 启动并跟随同一 80 MHz 块内的 149/161；不支持跨块切换或多对端并发。
-- AWDL 状态机在主机运行，内核 hrtimer 执行窗口门控；U2 镜像保持原版本，不具备自主 AWDL/TSF 调度。
+- AWDL 状态机在主机运行，内核 hrtimer 执行窗口门控；现有 c108 与 U2 固件不承担自主 AWDL/TSF 调度。
 - 发送按 TLS 返回的系统设备名匹配；名称不是密码学设备身份。支持系统 Everyone 模式，未实现 Contacts Only。
 - Upload 成功响应证明协议交付完成，接收端逐字节回传和长期稳定性需要独立验收。当前验证结果见 [验收记录](acceptance.md)。

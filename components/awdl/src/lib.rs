@@ -3,6 +3,7 @@ use owly_awdl::{Action, Channel, Config, Input, MacAddr, Node, Presence, RadioCo
 use std::ffi::{CStr, c_char, c_void};
 type Emit = unsafe extern "C" fn(*mut c_void, u32, *const u8, usize) -> i32;
 pub struct Control {
+    channels: [u8; 2],
     name: String,
     node: Node,
     target: Option<MacAddr>,
@@ -112,7 +113,9 @@ impl Control {
                         if let Some(he) = self.local_he {
                             advertise_he80(&mut frame.bytes, &he);
                         }
-                        if let Some(mac) = self.peer {
+                        if self.channels[1] != 0
+                            && let Some(mac) = self.peer
+                        {
                             if let Some(seq) = self.node.peer(mac).and_then(|p| p.sequence) {
                                 advertise_follow(&mut frame.bytes, seq.channels());
                             }
@@ -173,7 +176,7 @@ impl Control {
                             .any(|(mac, caps)| *mac == p.mac && caps.ready())
                         && (self.name == "*"
                             || p.name.eq_ignore_ascii_case(&self.name)
-                            || format_mac(p.mac) == self.name)
+                            || format_mac(p.mac).eq_ignore_ascii_case(&self.name))
                 })
                 .map(|p| p.mac);
             if let Some(mac) = self.target {
@@ -215,8 +218,7 @@ impl Control {
             if let Some(seq) = self.node.peer(peer).and_then(|p| p.sequence) {
                 let slot = clock.slot(now);
                 let channels = std::array::from_fn(|i| match seq.channel((slot + i) % 16) {
-                    149 => 149,
-                    161 => 161,
+                    channel if self.channels.contains(&channel) => channel,
                     _ => 0,
                 });
                 let base = boundary as i64 - 65536;
@@ -233,7 +235,7 @@ impl Control {
                 }
                 let same_before = seq.channel((slot + 15) % 16) == channels[0];
                 let same_after = seq.channel((slot + 1) % 16) == channels[0];
-                self.window = if channels[0] == 0 {
+                let window = if channels[0] == 0 {
                     (0, 0)
                 } else {
                     (
@@ -241,6 +243,13 @@ impl Control {
                         boundary - if same_after { 0 } else { 3072 },
                     )
                 };
+                if self.channels[1] == 0 && window != self.window {
+                    let mut data = [0u8; 16];
+                    data[..8].copy_from_slice(&window.0.to_le_bytes());
+                    data[8..].copy_from_slice(&window.1.to_le_bytes());
+                    self.emit(5, &data);
+                }
+                self.window = window;
             }
             self.deadline = Time(self.deadline.0.min(boundary));
         }
@@ -250,6 +259,7 @@ impl Control {
 pub unsafe extern "C" fn control_new(
     mac: *const u8,
     channel: u8,
+    secondary_channel: u8,
     name: *const c_char,
     local_name: *const c_char,
     he: *const u8,
@@ -278,6 +288,7 @@ pub unsafe extern "C" fn control_new(
     cfg.neighbour_echo = false;
     cfg.rssi_threshold = None;
     Box::into_raw(Box::new(Control {
+        channels: [channel, secondary_channel],
         name: unsafe { CStr::from_ptr(name) }
             .to_string_lossy()
             .into_owned(),

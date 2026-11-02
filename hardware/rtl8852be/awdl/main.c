@@ -10,12 +10,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-struct Control;
-extern struct Control *control_new(const unsigned char*,unsigned char,const char*,const char*,const unsigned char*,int(*)(void*,uint32_t,const unsigned char*,size_t),void*);
-extern uint64_t control_tick(struct Control*,uint64_t);
-extern void control_rx(struct Control*,const unsigned char*,size_t,uint64_t);
-extern void control_free(struct Control*);
-extern int control_select(struct Control*,const char*);
+#include "../../../components/awdl/control.h"
+
 struct run {struct wa_backend *backend;struct Control *node;uint64_t start,cookie,active;unsigned freq,tx,rx,busy,acks;int error,peer;unsigned char local[6];};
 static volatile sig_atomic_t stopped;
 static void stop_signal(int n){(void)n;stopped=1;}
@@ -83,7 +79,7 @@ int main(int argc,char **argv) {
  for(size_t i=0;i<sizeof(caps.he_cap);i++)printf("%02x",caps.he_cap[i]);
  putchar('\n');
  memcpy(r.local,caps.nmi,6);rc=wa_backend_command(r.backend,0x100,0,r.freq,NULL,0);if(rc)goto close;
- r.start=micros();printf("AWDL_CLOCK monotonic_us=%llu\n",(unsigned long long)r.start);r.node=control_new(caps.nmi,ch,argv[3],argv[4],caps.he_supported?caps.he_cap:NULL,emit,&r);
+ r.start=micros();printf("AWDL_CLOCK monotonic_us=%llu\n",(unsigned long long)r.start);r.node=control_new(caps.nmi,ch,161,argv[3],argv[4],caps.he_supported?caps.he_cap:NULL,emit,&r);
  printf("{\"event\":\"started\"}\n");
  while(!stopped){
   uint64_t now=micros();

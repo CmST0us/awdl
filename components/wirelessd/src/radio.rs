@@ -10,7 +10,15 @@ use aware_common::{
     bus,
     unix::{command, interface_exists, random},
 };
-use std::{path::Path, process::Stdio, time::Duration};
+use std::{
+    path::Path,
+    process::Stdio,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Child,
@@ -34,6 +42,7 @@ pub struct Radio {
     owns_bootstrap: bool,
     device_lock: Option<std::fs::File>,
     pub address: String,
+    pub awdl_owned: Arc<AtomicBool>,
 }
 
 impl Radio {
@@ -54,6 +63,7 @@ impl Radio {
             owns_bootstrap: false,
             device_lock: None,
             address: String::new(),
+            awdl_owned: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -81,9 +91,12 @@ impl Radio {
     }
 
     pub async fn check_interfaces(&self, require_data: bool) -> Result<()> {
-        self.backend
-            .unwrap()
-            .check(&self.interfaces().await?, &self.bootstrap, require_data)
+        self.backend.unwrap().check(
+            &self.interfaces().await?,
+            &self.bootstrap,
+            require_data,
+            self.awdl_owned.load(Ordering::Acquire),
+        )
     }
 
     fn select_phy(&mut self) -> Result<()> {
@@ -211,6 +224,10 @@ impl Radio {
         self.select_phy()?;
         let backend = self.backend.unwrap();
         if awdl {
+            ensure!(
+                !backend.shared_awdl(),
+                "该硬件由 wirelessd.service 同时承载 NAN 与 AWDL"
+            );
             backend.awdl_program()?;
         }
         for name in ["nan0", "ndi0", "awdl0"] {
@@ -268,6 +285,26 @@ impl Radio {
             self.bootstrap
         );
         Ok(network_manager)
+    }
+
+    pub fn shared_awdl(&self) -> Result<Option<(String, String, u8, Option<String>)>> {
+        let backend = self.backend.context("无线设备尚未启动")?;
+        if !backend.shared_awdl() {
+            return Ok(None);
+        }
+        let channel = backend.awdl_channel()?;
+        let constraint = (self.cfg.frequency != 5000 + u32::from(channel) * 5).then(|| {
+            format!(
+                "AWDL 需要 NAN 数据频率 {} MHz",
+                5000 + u32::from(channel) * 5
+            )
+        });
+        Ok(Some((
+            backend.awdl_program()?.into(),
+            self.phy.clone(),
+            channel,
+            constraint,
+        )))
     }
 
     pub async fn prepare_awdl(&mut self) -> Result<(String, String, u8)> {
@@ -432,6 +469,10 @@ impl Radio {
     }
 
     pub async fn close(&mut self) -> Result<()> {
+        ensure!(
+            !self.awdl_owned.load(Ordering::Acquire),
+            "AWDL 资源尚未释放，保留 NAN 所有权"
+        );
         self.events.take();
         self.control.take();
         self.global.take();

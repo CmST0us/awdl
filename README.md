@@ -1,6 +1,6 @@
 # Wireless Service
 
-Linux 无线服务组件，Wi-Fi Aware 支持 Intel BE200 与 RTL8852BE，AWDL / AirDrop 接入 RTL8852BE。两种网卡共用 Rust `wirelessd`、hostap 2.12、Rust HTTP 文件服务和 iOS AwareClient。驱动、固件及无线接入差异位于 `hardware/`。
+Linux 无线服务组件，Wi-Fi Aware 与原生 AWDL 接入 Intel BE200、RTL8852BE，AirDrop 使用公共 AWDL 接口。两种网卡共用 Rust `wirelessd`、hostap 2.12、Rust HTTP 文件服务和 iOS AwareClient。驱动、固件及无线接入差异位于 `hardware/`。
 
 `wirelessd` 管理无线设备与协议生命周期：Wi-Fi Aware 提供配对、服务注册和安全 NDP 会话，AWDL 提供发现、对端选择和原生数据链路。应用通过 D-Bus 使用对应接口。`fileserver` 是使用该接口的文件应用，可独立安装。一套服务管理一块网卡，业务数据走原生 NDI 与内核 IPv6。
 
