@@ -46,13 +46,13 @@ sudo systemctl start fileserver
 
 iPad 使用系统 AirDrop 的“所有人（10 分钟）”模式，发送前开启并在系统提示中接受。BLE 需要专用、原本关闭的 Linux HCI 适配器；操作结束恢复关闭状态，已有蓝牙会话不会被接管。`airdrop stop` 取消活动操作并等待连接、BLE 和原生 AWDL 释放。
 
-服务启动不自动停止其他无线服务。当前实现共用 PCI 设备锁及 `org.wifiawared1`，同一网卡已被占用时启动报告忙；操作顺序由部署者明确控制。配置、配对和共享文件保留，默认开机启用设置保持原部署选择。
+服务启动不自动停止其他无线服务。当前实现共用 PCI 设备锁及 `org.wirelessd1`，同一网卡已被占用时启动报告忙；操作顺序由部署者明确控制。配置、配对和共享文件保留，默认开机启用设置保持原部署选择。
 
 ## 接口与进度
 
 | 接口 | 方法及含义 |
 | --- | --- |
-| `org.wifiawared1.Awdl`，`/org/wifiawared1` | `Acquire(target)` 申请会话；空目标仅发现，`*` 选择首个可用对端；`SelectPeer(mac)` 选择一个已发现对端；`Release()` 等待原生 STOP |
+| `org.wirelessd1.Awdl`，`/org/wirelessd1` | `Acquire(target)` 申请会话；空目标仅发现，`*` 选择首个可用对端；`SelectPeer(mac)` 选择一个已发现对端；`Release()` 等待原生 STOP |
 | `org.airdrop1.Manager`，`/org/airdrop1` | `Send(name,path)`、`Receive()` 返回操作 ID；`Accept(id)`、`Decline(id)` 回答接收请求；`Stop()` 请求取消 |
 
 两个接口的 `Status` 属性和 `Event` 信号使用 JSON 描述状态。AWDL 所有权绑定 D-Bus 调用方；拥有者断开会触发回收。AirDrop 操作由常驻服务持有，发送 CLI 退出不取消传输，取消使用 `Stop`。

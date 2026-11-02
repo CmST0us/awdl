@@ -110,7 +110,7 @@ async fn ble(index: u16) -> Result<Child> {
 }
 async fn cleanup(connection: &zbus::Connection, job: &mut Job) -> Result<()> {
     let released: zbus::Result<()> = async {
-        let radio = bus::proxy(connection, bus::NAME, bus::PATH, "org.wifiawared1.Awdl").await?;
+        let radio = bus::proxy(connection, bus::NAME, bus::PATH, "org.wirelessd1.Awdl").await?;
         radio.call("Release", &()).await
     }
     .await;

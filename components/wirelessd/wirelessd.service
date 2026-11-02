@@ -10,7 +10,7 @@ After=local-fs.target NetworkManager.service dbus.service
 # 取得 BusName 后才宣布就绪。
 Type=dbus
 # 硬件无关的公共总线名称；取得此名称后服务就绪。
-BusName=org.wifiawared1
+BusName=org.wirelessd1
 # 启动公共守护进程，读取 /etc/wirelessd/config.toml。
 ExecStart=/usr/local/bin/wirelessd serve
 # 异常退出时重新启动。

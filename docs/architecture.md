@@ -186,7 +186,7 @@ NAN 发现、SAE/PASN、NIK/NPK、NDL/NDP、服务映射及协议调度协商由
 
 | 标识或状态 | 决定 |
 | --- | --- |
-| D-Bus 名称与对象根 | `org.wifiawared1` 和 `/org/wifiawared1`，独立于硬件后端 |
+| D-Bus 名称与对象根 | `org.wirelessd1` 和 `/org/wirelessd1`，独立于硬件后端 |
 | 文件服务发现名 | 默认由 `config/fileserver-discovery.toml` 定义 `_fileserver._tcp`，两端同源；其他应用注册自己的服务名 |
 | Linux 配置与配对目录 | `/etc/wirelessd`、`/var/lib/wirelessd`；升级接管旧目录及其内容 |
 | 运行目录 | `/run/wirelessd` |
@@ -291,6 +291,6 @@ AwareClient 使用一份 Swift 源码、一套服务名发现规则和一个项�
 
 `components/awdl` 管理 AWDL 协议状态机；`hardware/rtl8852be/awdl` 适配 vendor 管理帧、对端能力、原生接口与发送日程。`components/airdrop` 独立管理系统 AirDrop 的 BLE 唤醒、服务发现、TLS、接收决策和传输，不使用 NAN 的 NDP 或 fileserver HTTP 契约。
 
-同一 `wirelessd` 可由 NAN 单元或 AWDL 单元启动。两者共用配置中的 PCI 选择、空闲接口接管、设备锁与公共 D-Bus 名称；服务单元不自动停止其他无线服务。当前 RTL 接入要求已有设备所有者先完成退出，并行协议接入仍需实现。AWDL 使用独立 `org.wifiawared1.Awdl` 接口，控制宿主按管理帧和协议计时器推进，通过完成事件宣布就绪和停止。文件数据直接经过原生 `awdl0` 与内核 IPv6。
+同一 `wirelessd` 可由 NAN 单元或 AWDL 单元启动。两者共用配置中的 PCI 选择、空闲接口接管、设备锁与公共 D-Bus 名称；服务单元不自动停止其他无线服务。当前 RTL 接入要求已有设备所有者先完成退出，并行协议接入仍需实现。AWDL 使用独立 `org.wirelessd1.Awdl` 接口，控制宿主按管理帧和协议计时器推进，通过完成事件宣布就绪和停止。文件数据直接经过原生 `awdl0` 与内核 IPv6。
 
 AirDrop 为常驻应用服务，一个时刻持有一个发送或接收操作。每个操作有独立异步运行时，取消时先关闭所有 TLS/HTTP 连接，再回收无线会话及 BLE。接收完成后继续服务；单对端退出后重新发现。默认接收由本机操作者确认，可在配置中明确启用自动接受。配置、命令和接口见 [AirDrop 与 AWDL](airdrop.md)。

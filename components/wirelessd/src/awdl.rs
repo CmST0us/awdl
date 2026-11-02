@@ -52,7 +52,7 @@ impl Interface {
             .map_err(|_| Error::NotReady("AWDL 已停止".into()))?
     }
 }
-#[zbus::interface(name = "org.wifiawared1.Awdl")]
+#[zbus::interface(name = "org.wirelessd1.Awdl")]
 impl Interface {
     async fn acquire(
         &self,

@@ -14,4 +14,4 @@ Linux 无线服务组件，Wi-Fi Aware 支持 Intel BE200 与 RTL8852BE，AWDL /
 
 可编辑的本机配置放在 `config/local/`，示例位于 `config/examples/`。`.build/` 存放可重建产物，`.private/` 存放私有诊断材料；配对状态与共享文件保存在目标机器上。
 
-仓库地址：`ssh://git@gitlab-r.eric3u.xyz:20022/oxygen/wireless/wireless-service.git`。现有 Wi-Fi Aware 配置内容、D-Bus 协议名称与 iOS 安装身份保留。
+仓库地址：`ssh://git@gitlab-r.eric3u.xyz:20022/oxygen/wireless/wireless-service.git`。现有 Wi-Fi Aware 配置内容与 iOS 安装身份保留。公共 D-Bus 命名空间为 `org.wirelessd1`。

@@ -49,17 +49,17 @@ sudo systemctl enable --now wirelessd fileserver
 
 `CN` 只代表示例部署地区。RTL 必须明确国家码；BE200 的 `--cn` / `[be200].platform_cn` 是独立的平台提示。ROCK 5B 的 usbmoded 关机配置由 `install-platform` 单独安装。
 
-公共用户态升级时，先停止 `fileserver` 和 `wirelessd`，安装同一版本的程序、systemd 单元及 D-Bus 策略，再启动服务。公共总线名称、接口和错误命名空间为 `org.wifiawared1`，本机 D-Bus 调用方须使用同一契约。
+公共用户态升级时，先停止 `fileserver`、AirDrop 及对应的 wirelessd 单元，安装同一版本的 wirelessd、fileserver 和已安装的 AirDrop 程序、systemd 单元及 D-Bus 策略，再启动服务。公共总线名称、接口和错误命名空间为 `org.wirelessd1`，本机 D-Bus 调用方须使用同一契约。
 
 首次安装将带注释的默认配置写入 `/etc`，已有配置保持不变。无线配置里的既有 PCI 优先于安装文件；显式 `--pci` 同时更新运行配置、udev 设备归属及 systemd 设备依赖。物理接口按 PCI 匹配，运行时从 PHY 取得实际名称。已运行的系统 wpa_supplicant 须释放该设备，其他网卡不受影响。
 
 ### 从 wifiawared 升级
 
-先保留目标机器的程序、配置和状态目录，再执行 `install-wirelessd.sh`。安装器停止旧服务及其依赖应用，将 `wifiawared.service`、`wifiawared-awdl.service` 接管为 `wirelessd.service`、`wirelessd-awdl.service`，保留原启用与运行状态，并更新已有 fileserver / AirDrop 单元的依赖。旧命令和旧服务单元移除。
+先保留目标机器的程序、配置和状态目录，记录各服务的运行与启用状态，停止 fileserver、AirDrop 和旧无线服务，再执行 `install-wirelessd.sh`。安装器将 `wifiawared.service`、`wifiawared-awdl.service` 接管为 `wirelessd.service`、`wirelessd-awdl.service`，保留启用状态，并更新已有 fileserver / AirDrop 单元的依赖。旧命令和旧服务单元移除。
 
-默认配置目录 `/etc/wifiawared`、配对状态目录 `/var/lib/wifiawared` 和辅助程序目录 `/usr/local/libexec/wifiawared` 分别迁移到同级 `wirelessd` 目录。配置中这些目录及其子路径同步更新，临时运行目录改为 `/run/wirelessd`；其他自定义路径继续使用原值。配对内容、共享文件和 D-Bus 协议名称 `org.wifiawared1` 保留。新旧目录同时存在时，安装器在停止服务前报告冲突，不覆盖已有目录。
+默认配置目录 `/etc/wifiawared`、配对状态目录 `/var/lib/wifiawared` 和辅助程序目录 `/usr/local/libexec/wifiawared` 分别迁移到同级 `wirelessd` 目录。配置中这些目录及其子路径同步更新，临时运行目录改为 `/run/wirelessd`；其他自定义路径继续使用原值。配对内容和共享文件保留。公共 D-Bus 使用 `org.wirelessd1`，调用方与守护进程需一起升级。新旧目录同时存在时，安装器在停止服务前报告冲突，不覆盖已有目录。
 
-升级顺序为 `install-wirelessd.sh`，随后按已安装的组件执行 `install-fileserver.sh`、`install-awdl.sh`、`install-airdrop.sh`。`--destdir` 使用相同目录接管规则及启用链接转换，不启动服务。
+升级顺序为 `install-wirelessd.sh`，随后按已安装的组件执行 `install-fileserver.sh`、`install-awdl.sh`、`install-airdrop.sh`。全部安装完成后恢复原运行状态。`--destdir` 使用相同目录接管规则及启用链接转换，不启动服务。
 
 文件服务使用 `_fileserver._tcp`。已有部署需将 `/etc/fileserver/config.toml` 的 `service` 改为该名称并重启 `fileserver`，同时安装按同一发现契约重新构建的 iOS 应用。共享目录、端口、I/O 期限和配对状态保留。
 

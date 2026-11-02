@@ -8,7 +8,7 @@ Wi-Fi Aware 基线为 BE200 `f0f35f48df6cf05ea3386efb765cb6260eb1b4fe` 与 RTL88
 | 公共 hostap | 2.12 固定源码与 13 个补丁完整构建，ARM64 与 amd64 均包含 nl80211 和 rtl_nan |
 | AwareClient | AwareClient / AwareClientBE200 两种安装身份的 iOS Release 构建通过 |
 | 新安装 | 用户态暂存安装通过，配置保留注释，两个硬件策略、设备规则与独立服务单元齐全 |
-| 公共 D-Bus 命名空间 | `org.wifiawared1` 的 ARM64 Release 构建与暂存安装通过；BE200、RTL8852BE 均通过 systemd 就绪、普通用户属性与对象树读取、fileserver 注册/注销/重新注册、AlreadyRegistered / NotReady 错误名称验证；运行配置及配对文件保持一致 |
+| 公共 D-Bus 命名空间 | `org.wirelessd1` 的 ARM64 Release 构建与暂存安装通过；BE200、RTL8852BE 均通过 systemd 就绪、普通用户属性与对象树读取、fileserver 注册/注销、AlreadyRegistered / NotReady 错误名称验证；运行配置及配对内容保留 |
 | 文件服务发现契约 | Linux ARM64 fileserver、两个 iOS 客户端及 AwareLab 构建通过，安装产物均声明 `_fileserver._tcp`；BE200、RTL8852BE 分别通过既有配对连接、文件列表读取与断开重连 |
 | 硬件边界 | 公共服务和拆分后的 hostap 补丁链 ARM64 构建通过；BE200 驱动重建、两套驱动及公共用户态暂存安装通过；两张网卡使用相同公共产物完成既有配对连接、文件列表与断开重连，运行配置和配对身份保留 |
 | iOS 配置来源 | 两套客户端经构建脚本分别生成正确的 bundle ID；AwareLab 与测试 Runner 的既有身份保留，真机快照使用公共厂商、型号、配对名称和服务契约；冻结诊断包可独立加载其配置 |
@@ -24,11 +24,11 @@ Wi-Fi Aware 基线为 BE200 `f0f35f48df6cf05ea3386efb765cb6260eb1b4fe` 与 RTL88
 
 ## wirelessd 更名与部署接管
 
-2026-11-03，`wirelessd`、fileserver 与安装工具完成 ARM64 Linux 构建。新安装、旧默认目录升级、自定义目录保留均通过暂存安装；iOS 配置重新生成后的资源内容一致。
+2026-11-03，`wirelessd`、fileserver、AirDrop 与安装工具完成 ARM64 Linux 构建。新安装、旧默认目录升级、自定义目录保留均通过暂存安装；iOS 配置重新生成后的资源内容一致。
 
-ROCK 5B / RTL8852BE 通过实际安装器完成接管：`wirelessd.service` 保持 active/enabled，旧命令和服务单元移除；fileserver 注册、注销和普通用户 D-Bus 属性读取通过。AirDrop 就绪、AWDL 原生启动与 STOP 通过，退出后 `awdl0` 已删除。验证结束后恢复 NAN 运行，fileserver 保持 inactive/enabled，AirDrop 与 AWDL 单元保持 inactive/disabled。
+BE200、RTL8852BE 通过实际安装器完成接管，均运行 `wirelessd.service`。公共总线名为 `org.wirelessd1`，对象根为 `/org/wirelessd1`，服务对象、接口与错误名称使用同一前缀；两块板上旧总线名均无所有者。fileserver 注册、注销、普通用户 D-Bus 属性与对象读取通过。RTL 的 AirDrop 通过 `org.wirelessd1.Awdl` 完成申请、进入接收发现并释放，原生 STOP 完成后 `awdl0` 已删除。
 
-配置值、配对身份与凭据、共享文件保留，默认目录引用随名称更新。D-Bus 协议名称仍为 `org.wifiawared1`，驱动与固件沿用原部署。本次改名的实机接管验证覆盖 RTL8852BE。
+验证结束后两块板的 wirelessd 均为 active/enabled。BE200 的 fileserver 保持 active/enabled；RTL 的 fileserver 保持 inactive/enabled，AirDrop 与 AWDL 单元保持 inactive/disabled。配置值、配对身份与凭据、共享文件保留，默认目录引用随名称更新，驱动与固件沿用原部署。
 
 ## AirDrop 发送
 

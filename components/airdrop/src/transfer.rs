@@ -127,7 +127,7 @@ async fn send(
     config.model_name = cfg.model.clone();
     config.ask_timeout = Duration::from_secs(cfg.accept_seconds);
     let sender = Sender::new(config)?;
-    let radio = bus::proxy(connection, bus::NAME, bus::PATH, "org.wifiawared1.Awdl").await?;
+    let radio = bus::proxy(connection, bus::NAME, bus::PATH, "org.wirelessd1.Awdl").await?;
     let discovery = async {
         let mut tried = HashSet::new();
         let mut candidates = radio.receive_signal("Event").await?;
@@ -222,7 +222,7 @@ async fn receive(
     decisions: &mut mpsc::UnboundedReceiver<(u64, bool)>,
 ) -> Result<()> {
     std::fs::create_dir_all(&cfg.directory)?;
-    let radio = bus::proxy(connection, bus::NAME, bus::PATH, "org.wifiawared1.Awdl").await?;
+    let radio = bus::proxy(connection, bus::NAME, bus::PATH, "org.wirelessd1.Awdl").await?;
     {
         let mut signals = radio.receive_signal("Event").await?;
         let _: () = radio.call("Acquire", &("*",)).await?;

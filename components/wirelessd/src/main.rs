@@ -127,7 +127,7 @@ async fn run() -> Result<()> {
             ensure!(operation == "status", "AWDL 配对与传输由 airdrop 管理");
             let connection = bus::connect().await?;
             let proxy =
-                bus::proxy(&connection, bus::NAME, bus::PATH, "org.wifiawared1.Awdl").await?;
+                bus::proxy(&connection, bus::NAME, bus::PATH, "org.wirelessd1.Awdl").await?;
             let status: String = proxy.get_property("Status").await?;
             println!("{status}");
             return Ok(());

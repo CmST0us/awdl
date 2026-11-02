@@ -1,12 +1,14 @@
 # 上层服务接口
 
-`wirelessd` 使用 system D-Bus，无线守护进程和 fileserver 均使用 Rust zbus。总线名称为 `org.wifiawared1`，管理对象为 `/org/wifiawared1`。接口名称中的 `1` 表示协议主版本。类型与方法通过标准 Introspectable 接口查询，实际能力通过 Manager 属性查询。
+`wirelessd` 使用 system D-Bus，无线守护进程和 fileserver 均使用 Rust zbus。总线名称为 `org.wirelessd1`，管理对象为 `/org/wirelessd1`。接口名称中的 `1` 表示协议主版本。类型与方法通过标准 Introspectable 接口查询，实际能力通过 Manager 属性查询。
+
+Wi-Fi Aware 使用 `org.wirelessd1.Manager` 与 `org.wirelessd1.Service`；AWDL 使用 `org.wirelessd1.Awdl`，方法见 [AWDL 与 AirDrop 接口](airdrop.md#接口与进度)。
 
 能力属性面向本机上层应用；空口服务发现和 NDP 参数仍由 hostap 按 Wi-Fi Aware 协议通告。管理协议不承载文件数据。上层应用先在 `ndi0` 建立监听，再注册服务；TCP 或 UDP 数据直接进入上层进程。
 
 ## 管理接口
 
-接口：`org.wifiawared1.Manager`。
+接口：`org.wirelessd1.Manager`。
 
 | 方法 | 输入 | 返回 | 行为 |
 | --- | --- | --- | --- |
@@ -32,7 +34,7 @@
 
 ## 服务对象与所有权
 
-每次注册返回独立路径，例如 `/org/wifiawared1/services/s1`，接口为 `org.wifiawared1.Service`。路径在本次守护进程生命周期内不复用；无线重新发布时保持对象路径，更新 `PublishId`。
+每次注册返回独立路径，例如 `/org/wirelessd1/services/s1`，接口为 `org.wirelessd1.Service`。路径在本次守护进程生命周期内不复用；无线重新发布时保持对象路径，更新 `PublishId`。
 
 | 成员 | 类型 | 含义 |
 | --- | --- | --- |
@@ -44,7 +46,7 @@
 | `PublishId` | `s`，只读，可变 | 当前 hostap 发布实例 |
 | `Sessions` | `a(ssss)`，只读，可变 | 本服务已建立的 NDP 集合 |
 
-服务名最多 127 个 ASCII 字符，只含字母、数字、下划线、连字符和点，TCP 服务以 `._tcp` 结尾，UDP 服务以 `._udp` 结尾，后缀必须与传入的 `transport` 一致；名称比较不区分大小写。重复名称返回 `org.wifiawared1.Error.AlreadyRegistered`；不支持的传输协议返回标准 `org.freedesktop.DBus.Error.NotSupported`。无效输入返回 `InvalidArgs`，越权注销返回 `AccessDenied`。`OpenPairing` 在没有已注册服务时返回 `org.wifiawared1.Error.NotReady`；已有对端正在配对或验证时返回 `org.wifiawared1.Error.Busy`，单次认证最长 30 秒，结束后可重新调用。无线操作失败返回 `org.wifiawared1.Error.Radio`。
+服务名最多 127 个 ASCII 字符，只含字母、数字、下划线、连字符和点，TCP 服务以 `._tcp` 结尾，UDP 服务以 `._udp` 结尾，后缀必须与传入的 `transport` 一致；名称比较不区分大小写。重复名称返回 `org.wirelessd1.Error.AlreadyRegistered`；不支持的传输协议返回标准 `org.freedesktop.DBus.Error.NotSupported`。无效输入返回 `InvalidArgs`，越权注销返回 `AccessDenied`。`OpenPairing` 在没有已注册服务时返回 `org.wirelessd1.Error.NotReady`；已有对端正在配对或验证时返回 `org.wirelessd1.Error.Busy`，单次认证最长 30 秒，结束后可重新调用。无线操作失败返回 `org.wirelessd1.Error.Radio`。
 
 **一个连接可以注册多个服务。** 所有权由总线分配的唯一名称确定，不接受客户端传入的拥有者标识。单个 `Unregister` 只回收该服务；连接退出产生 `NameOwnerChanged`，回收它拥有的全部服务。回收包括撤销公告、取消该服务的认证调度、终止所属 NDP；其他服务继续运行。共享 IPv6 邻居条目在最后一个使用它的 NDP 移除后删除。
 
@@ -74,10 +76,10 @@ UDP 没有 accept 或连接断开事件；上层按照 `Sessions` 中的地址�
 ## 查询与调用
 
 ```sh
-busctl introspect org.wifiawared1 /org/wifiawared1
-busctl get-property org.wifiawared1 /org/wifiawared1 \
-  org.wifiawared1.Manager SupportedTransports
-busctl call org.wifiawared1 /org/wifiawared1 \
+busctl introspect org.wirelessd1 /org/wirelessd1
+busctl get-property org.wirelessd1 /org/wirelessd1 \
+  org.wirelessd1.Manager SupportedTransports
+busctl call org.wirelessd1 /org/wirelessd1 \
   org.freedesktop.DBus.ObjectManager GetManagedObjects
 sudo wirelessd status
 sudo wirelessd pair --seconds 120
@@ -92,9 +94,9 @@ Rust 注册示例（在 Tokio 异步入口内调用）：
 let connection = zbus::Connection::system().await?;
 let manager = zbus::Proxy::new(
     &connection,
-    "org.wifiawared1",
-    "/org/wifiawared1",
-    "org.wifiawared1.Manager",
+    "org.wirelessd1",
+    "/org/wirelessd1",
+    "org.wirelessd1.Manager",
 ).await?;
 let path: zbus::zvariant::OwnedObjectPath = manager
     .call("RegisterService", &("_device-control._tcp", "tcp", 7788u16))
