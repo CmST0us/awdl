@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """在真机开启 AirDrop、触发板端发送并自动接受指定文件。"""
 import argparse
+from bisect import bisect_right
 from datetime import datetime
 import json
 from pathlib import Path
@@ -16,6 +17,47 @@ import tomllib
 from publisher_observation.device_lease import DeviceLease
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def throughput(events):
+    """整文件均速及正文进度线性插值的五秒滑窗峰值，单位 MB/s。"""
+    delivered = next((e for e in reversed(events) if e.get('event') == 'delivered'), None)
+    if delivered is None:
+        return None
+    points = [(0.0, 0)]
+    for event in events:
+        if event.get('event') == 'progress':
+            points.append((event['seconds'], event['sent']))
+    points.append((delivered['upload_seconds'], delivered['compressed_bytes']))
+    times = [p[0] for p in points]
+
+    def bytes_at(t):
+        i = bisect_right(times, t)
+        if i == len(points):
+            return points[-1][1]
+        a, b = points[i - 1:i + 1]
+        return a[1] + (b[1] - a[1]) * (t - a[0]) / (b[0] - a[0])
+
+    window = 5.0
+    duration = delivered['upload_seconds']
+    result = {
+        'average_file_MBps': delivered['file_MBps'],
+        'average_compressed_MBps': delivered['compressed_MBps'],
+        'peak_window_seconds': window,
+        'peak_basis': 'sender_body_progress_linear_interpolation',
+    }
+    if duration >= window:
+        starts = {0.0, duration - window}
+        starts.update(t for t in times if 0 <= t <= duration - window)
+        starts.update(t - window for t in times if window <= t <= duration)
+        peak, start = max(((bytes_at(t + window) - bytes_at(t)) / window / 1e6, t)
+                          for t in starts)
+        result.update({
+            'peak_compressed_MBps': peak,
+            'peak_file_equivalent_MBps': peak * delivered['file_bytes'] / delivered['compressed_bytes'],
+            'peak_start_seconds': start,
+        })
+    return result
 
 
 def stop(process):
@@ -168,6 +210,9 @@ def main():
             if injected is not None:
                 injected.unlink(missing_ok=True)
             result['exit_codes'] = {name: process.returncode for name, process in processes.items()}
+            result['throughput'] = throughput(transfer_events)
+            if result['throughput'] is not None:
+                print(json.dumps({'event': 'throughput', **result['throughput']}), flush=True)
             (out / 'result.json').write_text(json.dumps(result, ensure_ascii=False, indent=2))
     print(f'结果：{out / "result.json"}', flush=True)
     return 0 if result['ok'] else 1

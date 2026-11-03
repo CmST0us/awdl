@@ -24,3 +24,5 @@ python3 ios/scripts/run_airdrop_ui.py --file /var/tmp/airdrop-large.txt
 入口持有 iOS 共享租约，完成构建和真机启动；收到 UI 的 `ready` 事件后才取得板端共享租约并调用 `airdrop send`。`accepted` 记录系统点击完成，板端 `delivered` 记录协议交付；两者均成功才判定整轮通过。失败或取消时停止活动的板端 AirDrop 操作。设置、请求、接受后的截图和界面树保存在 xcresult；完整日志与 `result.json` 位于 `.private/artifacts/airdrop-ui-*`。
 
 “所有人”按系统规则在十分钟后恢复；每轮测试重新开启。测试保留既有应用身份、配对记录和接收文件。UI 自动点击成功不代表无线传输成功，结果中分别保留两端事件。
+
+`result.json` 的 `throughput` 同时记录接受到 Upload 成功响应的整文件平均速度，以及正文进度按时间线性插值得到的 5 秒滑窗峰值。单位为十进制 MB/s；原文件与压缩正文分开统计，峰值原文件等效速度按两者总字节比例换算。峰值是发送端应用正文进度，不是空口速率或接收端落盘速率；不足 5 秒的传输不报告滑窗峰值。
