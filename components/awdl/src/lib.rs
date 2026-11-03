@@ -114,6 +114,9 @@ impl Control {
             match action {
                 Action::Transmit { mut frame, .. } => {
                     if frame.bytes[0] == 0xd0 {
+                        // The countdown describes target_tx; account for time
+                        // spent processing the received synchronization frame.
+                        frame.bytes[32..36].copy_from_slice(&(now.0 as u32).to_le_bytes());
                         advertise_vht80(&mut frame.bytes);
                         if let Some(he) = self.local_he {
                             advertise_he80(&mut frame.bytes, &he);
@@ -340,7 +343,8 @@ pub unsafe extern "C" fn control_tick(p: *mut Control, now: u64) -> u64 {
 pub unsafe extern "C" fn control_rx(p: *mut Control, data: *const u8, len: usize, now: u64) {
     let p = unsafe { &mut *p };
     let data = unsafe { std::slice::from_raw_parts(data, len) };
-    if let Some((mac, delta)) = parse_caps(data, p.local_he.as_ref(), Time(now)) {
+    let reference = action_reference_time(data, Time(now));
+    if let Some((mac, delta)) = parse_caps(data, p.local_he.as_ref(), reference) {
         let index = match p.vht_peers.iter().position(|(addr, _)| *addr == mac) {
             Some(index) => index,
             None => {
@@ -405,7 +409,7 @@ pub unsafe extern "C" fn control_rx(p: *mut Control, data: *const u8, len: usize
     }
     p.input(
         Input::Frame {
-            rx_time: Time(now),
+            rx_time: reference,
             rssi: None,
             bytes: data,
         },
@@ -601,6 +605,17 @@ fn he80(local: &[u8; 21], peer: &[u8]) -> Result<[u8; 8], &'static str> {
         padding[1],
         padding[2],
     ])
+}
+
+// AWDL's down-counter is sampled at target_tx. The sender fills phy_tx
+// when the frame actually leaves its queue; both counters wrap at 32 bits.
+fn action_reference_time(frame: &[u8], received: Time) -> Time {
+    if frame.len() < 40 || frame[0] != 0xd0 || frame[24..30] != [0x7f, 0, 0x17, 0xf2, 8, 0x10] {
+        return received;
+    }
+    let phy_tx = u32::from_le_bytes(frame[32..36].try_into().unwrap());
+    let target_tx = u32::from_le_bytes(frame[36..40].try_into().unwrap());
+    received.minus(u64::from(phy_tx.wrapping_sub(target_tx)))
 }
 
 fn parse_caps(frame: &[u8], local_he: Option<&[u8; 21]>, now: Time) -> Option<(MacAddr, PeerCaps)> {

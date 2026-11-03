@@ -30,4 +30,4 @@ reordering_segments = 4096
 tx_queue_packets = 1000
 # 对端切换信道前停止向固件提交数据的余量，单位 TU（1024 微秒）；1–60，必填。
 # 留出固件排空时间；相邻同信道时隙之间不扣除该余量。
-tx_drain_margin_tu = 12
+tx_drain_margin_tu = 3

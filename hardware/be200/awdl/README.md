@@ -2,7 +2,7 @@
 
 `be200-awdl` 复用已运行的 NAN 管理接口，通过 nl80211 收发 Apple AWDL Action 帧。`awdl0` 是同一 PHY 上的 `NAN_DATA` 接口，使用 NMI 地址；IP 数据由 mac80211 完成 AWDL 封装、解封装并交给内核 IPv6。控制协议来自公共 `components/awdl`。
 
-本后端与 NAN 共用数据主信道：5745 MHz 对应 149，5805 MHz 对应 161，80 MHz 中心频率为 5775 MHz。协商支持 HE80 / VHT80；本地发现日程由 hostap 管理。控制状态机使用选定对端的同步时钟计算可用窗口，转换为 CLOCK_MONOTONIC 纳秒窗口，内核 hrtimer 唤醒发送队列，驱动在窗口内取包。`tx_drain_margin_tu` 指定对端切换前的固件排空余量，默认 12 TU；同信道的相邻时隙之间不扣除该余量。
+本后端与 NAN 共用数据主信道：5745 MHz 对应 149，5805 MHz 对应 161，80 MHz 中心频率为 5775 MHz。协商支持 HE80 / VHT80；本地发现日程由 hostap 管理。控制状态机以 `phy_tx - target_tx` 补偿对端同步帧的发送排队时间，使用选定对端的同步时钟计算可用窗口，转换为 CLOCK_MONOTONIC 纳秒窗口，内核 hrtimer 唤醒发送队列，驱动在窗口内取包。`tx_drain_margin_tu` 指定对端切换前的固件排空余量，默认 3 TU；同信道的相邻时隙之间不扣除该余量。
 
 ## 资源生命周期
 
