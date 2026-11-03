@@ -1,0 +1,29 @@
+# 复制到 config/local/airdrop-uitest.toml。此文件是持久的真机验收输入。
+# 字段均必填，除 ssh_options 外不使用隐式默认值。密码使用 SSH 自身的认证方式。
+
+# 已配对且开启开发者模式的 iPad/iPhone UDID，非空字符串；不使用模拟器 ID。
+device_udid = "填写真机 UDID"
+# Apple 开发团队 ID，非空字符串；沿用现有 AwareLab Runner 的签名身份。
+development_team = "填写开发团队 ID"
+# 目标板的 SSH 别名或 user@host；须能以非交互方式登录并调用 airdrop。
+ssh_target = "airdrop-board"
+# 传给 ssh -o 的选项数组；省略或空数组时使用本机 SSH 配置。
+ssh_options = []
+# 目标板已有的共享设备租约绝对路径；发送期间持有，已被占用时立即失败。
+remote_lease = "/run/lock/目标板的共享设备租约.lock"
+# iPad/iPhone 的系统设备名称，非空字符串；用 AirDrop TLS Discover 精确匹配。
+receiver_name = "Test iPad"
+# 本次发送的目标板绝对文件路径；文件必须已存在，测试不会生成或删除文件。
+remote_file = "/var/tmp/airdrop-check.txt"
+# AirDrop 提示中的发送方展示名，非空字符串；须与目标板 AirDrop name 配置一致。
+sender_name = "Wireless Service"
+# 每个系统设置操作的失败期限，正整数秒；控件就绪立即推进。
+step_timeout_seconds = 10
+# 系统已开启所有人后等待接收提示的失败期限，正整数秒；包含板端服务发现与文件归档准备。
+request_timeout_seconds = 120
+# Xcode 构建与签名的失败期限，正整数秒；完成后立即启动真机测试。
+build_timeout_seconds = 180
+# 真机测试的整体失败期限，正整数秒；包含安装、启动、设置与接受操作。
+runner_timeout_seconds = 240
+# 板端发送进程的整体失败期限，正整数秒；不覆盖板端自身的 AirDrop 阶段期限。
+transfer_timeout_seconds = 660

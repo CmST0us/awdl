@@ -66,6 +66,8 @@ sudo systemctl start fileserver
 
 iPad 使用系统 AirDrop 的“所有人（10 分钟）”模式，发送前开启并在系统提示中接受。BLE 需要专用、原本关闭的 Linux HCI 适配器；操作结束恢复关闭状态，已有蓝牙会话不会被接管。`airdrop stop` 取消活动操作并等待连接、BLE 和原生 AWDL 释放。
 
+真机自动验收使用 [AirDrop UI 测试](../ios/README.md#airdrop-自动接收验收)：由 XCUITest 开启“所有人”并自动接受指定文件，Mac 入口在 UI 就绪后触发板端发送，分别记录点击接受与协议交付结果。
+
 BE200 在现有守护进程中注册两个协议接口，AWDL 释放不关闭 NAN。RTL 的两个运行单元共用 PCI 设备锁及 `org.wirelessd1`，同一网卡已被占用时启动报告忙。服务启动不自动停止其他无线服务。配置、配对和共享文件保留，默认开机启用设置保持原部署选择。
 
 ## 接口与进度
