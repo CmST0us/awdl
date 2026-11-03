@@ -13,3 +13,6 @@
 0013-awdl-management-timing.patch
 0014-awdl-fast-tx-amsdu.patch
 0015-awdl-scheduled-fq.patch
+0016-awdl-window-budget.patch
+0017-awdl-rate-initialization.patch
+0018-awdl-tx-status-owner.patch

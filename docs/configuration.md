@@ -155,24 +155,26 @@ BE200 的运行策略：
 
 ```toml
 # BE200 已验证的无线策略；修改后重启无线服务生效。
-# 配置必须与实际硬件匹配，不能通过改名选择另一种网卡能力。
+# 硬件标识，必填且必须为 be200；由实际网卡选择对应策略。
 hardware = "be200"
 
 [nan]
-# NAN 发现主信道频率，单位 MHz；须由后端支持。
+# NAN 发现主信道频率，单位 MHz；必填，当前后端要求 2437。
 discovery_frequency_mhz = 2437
-# hostap 的 NAN 双频配置；数据主信道仍由运行配置 frequency 指定。
+# hostap 的 NAN 双频配置，布尔值，必填；数据主信道由运行配置 frequency 指定。
 dual_band = true
-# NAN 主设备选择优先级，使用本后端已验收的取值。
+# NAN 主设备选择优先级，无量纲整数 0–255，必填。
 master_preference = 100
-# 发现信标间隔，单位 TU；受后端支持的启动组合约束。
+# 发现信标间隔，单位 TU（1024 微秒）；正整数，必填。
 discovery_beacon_interval_tu = 100
 
 [schedule]
-# 发现主信道的可用槽号，整数 0–31；每槽 16 TU，不替代协议 DW。
-discovery_slots = [1]
-# 数据主信道的可用槽号，整数 0–31；不同信道的两组槽不能重叠。
-data_slots = [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+# 发现主信道的额外可用槽号，整数 0–31，每槽 16 TU；必填。
+# 空列表仅保留协议 DW，不额外离开数据主信道。
+discovery_slots = []
+# 数据主信道的可用槽号，整数 0–31，每槽 16 TU；必填且非空。
+# 不同信道的两组槽不能重叠；协议 DW 仍由固件调度。
+data_slots = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
               16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
 ```
 
@@ -202,7 +204,7 @@ data_slots = [4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 17, 18, 19, 20,
               21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
 ```
 
-`discovery_slots` 表示发现主信道上的本地可用时隙，不替代协议 DW 定义。当前后端采用 512 TU 周期、16 TU 时隙，槽号为 0–31；这些单位由后端支持的调度格式定义。公共编码将槽号转换成 hostap 位图，产生当前 BE200 的 `fdffffff/02000000` 和 RTL 的 `f0f2ffff/0f0d0000`。
+`discovery_slots` 表示发现主信道上的额外本地可用时隙；空列表只保留协议 DW。当前后端采用 512 TU 周期、16 TU 时隙，槽号为 0–31；这些单位由后端支持的调度格式定义。公共编码将槽号转换成 hostap 位图，BE200 只发布数据主信道的 `ffffffff`，RTL 发布数据／发现位图 `f0f2ffff/0f0d0000`。`data_slots` 必须非空。
 
 数据主信道从运行配置的 `frequency` 取得。同一信道时使用已支持的单信道全周期策略；不同信道时两组槽不能重叠。对端协商和交集计算仍由 hostap 与后端执行。
 
@@ -405,7 +407,7 @@ systemd 单元拥有进程启动、重启策略和外部停止期限；D-Bus 策
 
 `config/awdl.toml` 提供公共 AWDL 节点名与启动、停止失败期限，安装到 `/etc/wirelessd/awdl.toml`；设备选择沿用 `/etc/wirelessd/config.toml`。BE200 沿用 NAN 数据频率配置，5745 / 5805 MHz 分别选择 149 / 161，并协商 HE80 / VHT80；其他频率的 AWDL 申请返回明确错误，NAN 服务继续运行。RTL 支持 149/161 同块跟随。
 
-`hardware/be200/radio.toml` 的 `[awdl]` 提供会话 TCP 拥塞控制、初始窗口、乱序阈值、接口队列长度和发送排空余量；每项必填，重启 wirelessd 生效。默认算法 BBR 要求目标内核提供 tcp_bbr，fq pacing 要求 sch_fq。显式 `radio_profile` 替代文件也须包含这些字段。BE200 模块电源策略与聚合上限保存在 `hardware/be200/driver/be200.conf`，安装后重新加载驱动生效。
+`hardware/be200/radio.toml` 的 `[awdl]` 提供会话 TCP 拥塞控制、初始窗口、乱序阈值、接口队列长度和发送排空余量；每项必填，重启 wirelessd 生效。默认算法 Scalable 要求目标内核提供 tcp_scalable，fq pacing 要求 sch_fq。显式 `radio_profile` 替代文件也须包含这些字段。BE200 模块电源策略与聚合上限保存在 `hardware/be200/driver/be200.conf`，安装后重新加载驱动生效。
 
 `config/airdrop.toml` 提供 AirDrop 的产品显示名、mDNS 主机标签、接收目录和端口、手工或自动接受策略、专用 HCI 选择、发现/接受/传输期限及公告周期，安装到 `/etc/airdrop/config.toml`。每项配置就地注明单位、约束与作用；已有文件不被安装器覆盖。
 

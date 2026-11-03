@@ -1,0 +1,56 @@
+Subject: [PATCH] 按发送队列归属报告 AWDL 完成状态
+
+AWDL 与 NMI 地址相同。站点销毁先删除地址索引，再排空固件队列。
+完成通知使用仍由 TXQ 持有的数据站点，保持统计和资源归属。
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tx.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tx.c
+@@ -27,6 +27,30 @@
+ {
+ 	return txq && txq->sta && txq->vif->nan_data_awdl &&
+ 	       txq->tid < IEEE80211_NUM_TIDS;
++}
++
++/* NMI and AWDL data stations share their addresses. During removal the
++ * data station leaves the address index before firmware TX is flushed.
++ * The TXQ retains the actual station until that flush has completed.
++ */
++static void iwl_mld_tx_status(struct iwl_mld *mld, struct sk_buff *skb, int id)
++{
++	struct ieee80211_txq *txq;
++
++	rcu_read_lock();
++	txq = rcu_dereference(mld->fw_id_to_txq[id]);
++	if (iwl_mld_awdl_data_queue(txq)) {
++		struct ieee80211_tx_status status = {
++			.skb = skb,
++			.info = IEEE80211_SKB_CB(skb),
++			.sta = txq->sta,
++		};
++
++		ieee80211_tx_status_ext(mld->hw, &status);
++	} else {
++		ieee80211_tx_status_skb(mld->hw, skb);
++	}
++	rcu_read_unlock();
+ }
+ 
+ /* Rate feedback remains useful even when BA cannot yet reclaim a TFD. */
+@@ -1422,7 +1446,7 @@
+ 					  info);
+ 
+ 		if (likely(!iwl_mld_time_sync_frame(mld, skb, hdr->addr1)))
+-			ieee80211_tx_status_skb(mld->hw, skb);
++			iwl_mld_tx_status(mld, skb, txq_id);
+ 	}
+ 
+ 	iwl_mld_awdl_rate_feedback(mld, sta_id, le32_to_cpu(tx_resp->initial_rate));
+@@ -1496,7 +1520,7 @@
+ 		else
+ 			info->flags &= ~IEEE80211_TX_STAT_ACK;
+ 
+-		ieee80211_tx_status_skb(mld->hw, skb);
++		iwl_mld_tx_status(mld, skb, txq);
+ 	}
+ 	iwl_mld_awdl_completed(mld, txq, reclaimed_bytes, !in_flush, !in_flush);
+ }

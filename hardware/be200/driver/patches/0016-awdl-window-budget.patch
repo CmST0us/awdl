@@ -1,0 +1,452 @@
+Subject: [PATCH] 按 AWDL 窗口预算提交已拆分的 MPDU
+
+以完成事件归还固件在途字节，按平滑排空成本和实际 PHY 反馈约束提交。
+限制固件在途空口成本，TSO 保留聚合与逐 MSDU 序号。
+站点删除与固件重启回收尚未提交的帧。
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tx.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tx.c
+@@ -10,6 +10,7 @@
+ #include "hcmd.h"
+ #include "iwl-utils.h"
+ #include "iface.h"
++#include "stats.h"
+ 
+ #include "fw/dbg.h"
+ 
+@@ -20,6 +21,124 @@
+ #include "fw/api/time-event.h"
+ 
+ #define MAX_ANT_NUM 2
++
++/* NAN management and multicast queues have no AWDL peer budget. */
++static bool iwl_mld_awdl_data_queue(struct ieee80211_txq *txq)
++{
++	return txq && txq->sta && txq->vif->nan_data_awdl &&
++	       txq->tid < IEEE80211_NUM_TIDS;
++}
++
++/* Rate feedback remains useful even when BA cannot yet reclaim a TFD. */
++static void iwl_mld_awdl_rate_feedback(struct iwl_mld *mld, u8 sta_id, u32 rate)
++{
++	struct ieee80211_link_sta *link_sta;
++	struct rate_info info = {};
++	u32 bitrate, cost;
++
++	if (sta_id >= mld->fw->ucode_capa.num_stations)
++		return;
++	rcu_read_lock();
++	link_sta = rcu_dereference(mld->fw_id_to_link_sta[sta_id]);
++	if (IS_ERR_OR_NULL(link_sta) ||
++	    !iwl_mld_sta_from_mac80211(link_sta->sta)->vif->nan_data_awdl)
++		goto out;
++	iwl_mld_rate_to_info(rate, &info);
++	bitrate = cfg80211_calculate_bitrate(&info);
++	if (!bitrate)
++		goto out;
++	/* cfg80211 reports units of 100 kbit/s. */
++	cost = DIV_ROUND_UP(80000U * 256, bitrate);
++	for (int tid = 0; tid < IEEE80211_NUM_TIDS; tid++) {
++		struct ieee80211_txq *txq = link_sta->sta->txq[tid];
++
++		if (iwl_mld_awdl_data_queue(txq))
++			WRITE_ONCE(iwl_mld_txq_from_mac80211(txq)->awdl_phy_ns_per_byte_q8,
++				   cost);
++	}
++out:
++	rcu_read_unlock();
++}
++
++/* Reserve airtime for the next complete MPDU, including queued data. */
++static bool iwl_mld_awdl_can_submit(struct ieee80211_txq *txq,
++				  unsigned int length)
++{
++	struct iwl_mld_txq *q = iwl_mld_txq_from_mac80211(txq);
++	u64 now = ktime_get_ns();
++	u64 opens = READ_ONCE(txq->vif->awdl_opens_ns);
++	u64 closes = READ_ONCE(txq->vif->awdl_closes_ns);
++	u32 rate = READ_ONCE(q->awdl_ns_per_byte_q8);
++	u32 phy_cost = READ_ONCE(q->awdl_phy_ns_per_byte_q8);
++	u32 pending = atomic_read(&q->awdl_pending_bytes);
++	u64 bytes = (u64)pending + length;
++	u64 cost;
++
++	if (now < opens || closes <= now + 1000000)
++		return false;
++	/* Learn the initial rate from one completed MPDU before expanding
++	 * the queue; firmware may still be using its low-rate startup mode.
++	 */
++	if (!rate)
++		return !pending;
++	cost = div_u64(bytes * max(rate, phy_cost) * 5, 4 * 256);
++	/* An empty queue can sample one MPDU in the first half-window,
++	 * so a slower previous window cannot prevent rate recovery.
++	 */
++	if (!pending && now < opens + (closes - opens) / 2)
++		return true;
++
++	/* Bound in-flight payload airtime to two maximum 5484-us PPDUs.
++	 * Keep the remaining MPDUs on the host when firmware probes a lower
++	 * PHY rate; a long hardware queue could otherwise outlive the window.
++	 */
++	return (!phy_cost || div_u64(bytes * phy_cost * 5, 4 * 256) <=
++		2 * 5484 * 1000) && closes > now + 1000000 + cost;
++}
++
++/* Only transport completion releases the bytes owned by firmware. */
++static void iwl_mld_awdl_completed(struct iwl_mld *mld, int id,
++				   unsigned int bytes, bool sample, bool wake)
++{
++	struct ieee80211_txq *txq;
++
++	rcu_read_lock();
++	txq = rcu_dereference(mld->fw_id_to_txq[id]);
++	if (iwl_mld_awdl_data_queue(txq)) {
++		struct iwl_mld_txq *q = iwl_mld_txq_from_mac80211(txq);
++		u64 now = ktime_get_ns();
++		u64 opens = READ_ONCE(txq->vif->awdl_opens_ns);
++		u64 closes = READ_ONCE(txq->vif->awdl_closes_ns);
++		u64 previous = READ_ONCE(q->awdl_last_completion_ns);
++
++		/* Ignore short control frames; exclude scheduled off-channel time. */
++		if ((sample || !q->awdl_sample_bytes) && bytes >= 1500 && previous &&
++		    now >= opens && now < closes) {
++			u64 elapsed = now - max(previous, opens);
++			/* Smooth time and volume together: a short completion must
++			 * not weigh as much as a full aggregate in the byte cost.
++			 */
++			if (q->awdl_sample_bytes) {
++				q->awdl_sample_ns = (q->awdl_sample_ns * 3 + elapsed) / 4;
++				q->awdl_sample_bytes = (q->awdl_sample_bytes * 3 + bytes) / 4;
++			} else {
++				q->awdl_sample_ns = elapsed;
++				q->awdl_sample_bytes = bytes;
++			}
++			WRITE_ONCE(q->awdl_ns_per_byte_q8,
++				   DIV_ROUND_UP_ULL(q->awdl_sample_ns * 256,
++						    q->awdl_sample_bytes));
++		}
++		WRITE_ONCE(q->awdl_last_completion_ns, now);
++		atomic_sub(bytes, &q->awdl_pending_bytes);
++		if (wake) {
++			local_bh_disable();
++			iwl_mld_tx_from_txq(mld, txq);
++			local_bh_enable();
++		}
++	}
++	rcu_read_unlock();
++}
+ 
+ /* Toggles between TX antennas. Receives the bitmask of valid TX antennas and
+  * the *index* used for the last TX, and returns the next valid *index* to use.
+@@ -185,12 +304,24 @@
+ 	iwl_trans_txq_free(mld->trans, queue_id);
+ }
+ 
++void iwl_mld_awdl_purge_txq(struct iwl_mld *mld, struct ieee80211_txq *txq)
++{
++	struct sk_buff *skb;
++	struct iwl_mld_txq *q = iwl_mld_txq_from_mac80211(txq);
++
++	if (!iwl_mld_awdl_data_queue(txq))
++		return;
++	while ((skb = __skb_dequeue(&q->awdl_ready)))
++		ieee80211_free_txskb(mld->hw, skb);
++}
++
+ void iwl_mld_remove_txq(struct iwl_mld *mld, struct ieee80211_txq *txq)
+ {
+ 	struct iwl_mld_txq *mld_txq = iwl_mld_txq_from_mac80211(txq);
+ 	u32 sta_msk, tid;
+ 
+ 	lockdep_assert_wiphy(mld->wiphy);
++	iwl_mld_awdl_purge_txq(mld, txq);
+ 
+ 	spin_lock_bh(&mld->add_txqs_lock);
+ 	if (!list_empty(&mld_txq->list))
+@@ -816,8 +947,19 @@
+ 
+ 	info->driver_data[1] = dev_tx_cmd;
+ 
+-	if (iwl_trans_tx(mld->trans, skb, dev_tx_cmd, queue))
++	if (iwl_mld_awdl_data_queue(txq)) {
++		struct iwl_mld_txq *q = iwl_mld_txq_from_mac80211(txq);
++
++		if (!atomic_read(&q->awdl_pending_bytes))
++			WRITE_ONCE(q->awdl_last_completion_ns, ktime_get_ns());
++		atomic_add(skb->len, &q->awdl_pending_bytes);
++	}
++	if (iwl_trans_tx(mld->trans, skb, dev_tx_cmd, queue)) {
++		if (iwl_mld_awdl_data_queue(txq))
++			atomic_sub(skb->len,
++				   &iwl_mld_txq_from_mac80211(txq)->awdl_pending_bytes);
+ 		goto err;
++	}
+ 
+ 	/* Update low-latency counter when a packet is queued instead
+ 	 * of after TX, it makes sense for early low-latency detection
+@@ -976,8 +1118,13 @@
+ 	payload_len = skb_tail_pointer(skb) - skb_transport_header(skb) -
+ 		tcp_hdrlen(skb) + skb->data_len;
+ 
+-	if (payload_len <= skb_shinfo(skb)->gso_size)
++	if (payload_len <= skb_shinfo(skb)->gso_size) {
++		if (iwl_mld_awdl_data_queue(txq)) {
++			__skb_queue_tail(&iwl_mld_txq_from_mac80211(txq)->awdl_ready, skb);
++			return 0;
++		}
+ 		return iwl_mld_tx_mpdu(mld, skb, txq);
++	}
+ 
+ 	if (!info->control.vif)
+ 		return -1;
+@@ -999,6 +1146,12 @@
+ 				(ntohl(tcp_hdr(skb)->seq) - tcp_seq) / mss,
+ 				skb_network_header(skb) - 6);
+ 
++		if (iwl_mld_awdl_data_queue(txq)) {
++			/* Keep the remaining MPDUs on the host across a window edge. */
++			__skb_queue_tail(&iwl_mld_txq_from_mac80211(txq)->awdl_ready,
++					 skb);
++			continue;
++		}
+ 		ret = iwl_mld_tx_mpdu(mld, skb, txq);
+ 		if (!ret)
+ 			continue;
+@@ -1044,6 +1197,10 @@
+ 		goto err;
+ 	}
+ 
++	if (iwl_mld_awdl_data_queue(txq)) {
++		__skb_queue_tail(&iwl_mld_txq_from_mac80211(txq)->awdl_ready, skb);
++		return;
++	}
+ 	if (likely(!iwl_mld_tx_mpdu(mld, skb, txq)))
+ 		return;
+ 
+@@ -1092,11 +1249,26 @@
+ 	rcu_read_lock();
+ 	do {
+ 		while (likely(!mld_txq->status.stop_full) &&
++		       !READ_ONCE(mld_txq->awdl_stopped) &&
+ 		       (!txq->vif->nan_data_awdl || txq->tid >= IEEE80211_NUM_TIDS ||
+ 		        (ktime_get_ns() >= READ_ONCE(txq->vif->awdl_opens_ns) &&
+-		         ktime_get_ns() + 1000000 < READ_ONCE(txq->vif->awdl_closes_ns))) &&
+-		       (skb = ieee80211_tx_dequeue(mld->hw, txq)))
++		         ktime_get_ns() + 1000000 < READ_ONCE(txq->vif->awdl_closes_ns)))) {
++			if (iwl_mld_awdl_data_queue(txq)) {
++				skb = skb_peek(&mld_txq->awdl_ready);
++				if (skb) {
++					if (!iwl_mld_awdl_can_submit(txq, skb->len))
++						break;
++					skb = __skb_dequeue(&mld_txq->awdl_ready);
++					if (iwl_mld_tx_mpdu(mld, skb, txq))
++						ieee80211_free_txskb(mld->hw, skb);
++					continue;
++				}
++			}
++			skb = ieee80211_tx_dequeue(mld->hw, txq);
++			if (!skb)
++				break;
+ 			iwl_mld_tx_skb(mld, skb, txq);
++		}
+ 	} while (atomic_dec_return(&mld_txq->tx_request));
+ 
+ 	IWL_DEBUG_TX(mld, "TXQ of sta %pM tid %d is now empty\n",
+@@ -1176,6 +1348,7 @@
+ 	u16 ssn;
+ 	struct sk_buff_head skbs;
+ 	u8 skb_freed = 0;
++	u32 reclaimed_bytes = 0;
+ 	bool mgmt = false;
+ 	bool tx_failure = (status & TX_STATUS_MSK) != TX_STATUS_SUCCESS;
+ 
+@@ -1208,6 +1381,7 @@
+ 		struct ieee80211_hdr *hdr = (void *)skb->data;
+ 
+ 		skb_freed++;
++		reclaimed_bytes += skb->len;
+ 
+ 		iwl_trans_free_tx_cmd(mld->trans, info->driver_data[1]);
+ 
+@@ -1250,6 +1424,9 @@
+ 		if (likely(!iwl_mld_time_sync_frame(mld, skb, hdr->addr1)))
+ 			ieee80211_tx_status_skb(mld->hw, skb);
+ 	}
++
++	iwl_mld_awdl_rate_feedback(mld, sta_id, le32_to_cpu(tx_resp->initial_rate));
++	iwl_mld_awdl_completed(mld, txq_id, reclaimed_bytes, false, true);
+ 
+ 	IWL_DEBUG_TX_REPLY(mld,
+ 			   "TXQ %d status 0x%08x ssn=%d initial_rate 0x%x retries %d\n",
+@@ -1295,6 +1472,7 @@
+ 				   bool in_flush)
+ {
+ 	struct sk_buff_head reclaimed_skbs;
++	u32 reclaimed_bytes = 0;
+ 
+ 	__skb_queue_head_init(&reclaimed_skbs);
+ 
+@@ -1304,6 +1482,7 @@
+ 		struct sk_buff *skb = __skb_dequeue(&reclaimed_skbs);
+ 		struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
+ 
++		reclaimed_bytes += skb->len;
+ 		iwl_trans_free_tx_cmd(mld->trans, info->driver_data[1]);
+ 
+ 		memset(&info->status, 0, sizeof(info->status));
+@@ -1319,6 +1498,7 @@
+ 
+ 		ieee80211_tx_status_skb(mld->hw, skb);
+ 	}
++	iwl_mld_awdl_completed(mld, txq, reclaimed_bytes, !in_flush, !in_flush);
+ }
+ 
+ int iwl_mld_flush_link_sta_txqs(struct iwl_mld *mld, u32 fw_sta_id)
+@@ -1462,9 +1642,6 @@
+ 	u8 sta_id = ba_res->sta_id;
+ 	struct ieee80211_link_sta *link_sta;
+ 
+-	if (!tfd_cnt)
+-		return;
+-
+ 	if (IWL_FW_CHECK(mld, struct_size(ba_res, tfd, tfd_cnt) > pkt_len,
+ 			 "Short BA notif (tfd_cnt=%d, size:0x%x)\n",
+ 			 tfd_cnt, pkt_len))
+@@ -1476,6 +1653,10 @@
+ 			   le16_to_cpu(ba_res->txed),
+ 			   le16_to_cpu(ba_res->done));
+ 
++	iwl_mld_awdl_rate_feedback(mld, sta_id, le32_to_cpu(ba_res->tx_rate));
++	if (!tfd_cnt)
++		return;
++
+ 	for (int i = 0; i < tfd_cnt; i++) {
+ 		struct iwl_compressed_ba_tfd *ba_tfd = &ba_res->tfd[i];
+ 		int txq_id = le16_to_cpu(ba_tfd->q_num);
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tx.h
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tx.h
+@@ -14,6 +14,14 @@
+  * struct iwl_mld_txq - TX Queue data
+  *
+  * @fw_id: the fw id of this txq. Only valid when &status.allocated is true.
++ * @awdl_pending_bytes: bytes submitted to the transport, awaiting completion
++ * @awdl_ns_per_byte_q8: completed data cost, nanoseconds per byte times 256
++ * @awdl_phy_ns_per_byte_q8: latest firmware PHY cost, ns per byte times 256
++ * @awdl_sample_ns: smoothed completion time in nanoseconds
++ * @awdl_sample_bytes: smoothed completed bytes for the same time samples
++ * @awdl_last_completion_ns: monotonic time of the previous completion/submission
++ * @awdl_stopped: station removal has stopped admission of prepared MPDUs
++ * @awdl_ready: ordered MPDUs from at most one dequeued GSO skb
+  * @status: bitmap of the txq status
+  * @status.allocated: Indicates that the queue was allocated.
+  * @status.stop_full: Indicates that the queue is full and should stop TXing.
+@@ -26,11 +34,19 @@
+ 	/* Add here fields that need clean up on restart */
+ 	struct_group(zeroed_on_hw_restart,
+ 		u16 fw_id;
++		atomic_t awdl_pending_bytes;
++		u32 awdl_ns_per_byte_q8;
++		u32 awdl_phy_ns_per_byte_q8;
++		u64 awdl_sample_ns;
++		u32 awdl_sample_bytes;
++		u64 awdl_last_completion_ns;
++		bool awdl_stopped;
+ 		struct {
+ 			u8 allocated:1;
+ 			u8 stop_full:1;
+ 		} status;
+ 	);
++	struct sk_buff_head awdl_ready;
+ 	struct list_head list;
+ 	atomic_t tx_request;
+ 	/* And here fields that survive a fw restart */
+@@ -38,6 +54,7 @@
+ 
+ static inline void iwl_mld_init_txq(struct iwl_mld_txq *mld_txq)
+ {
++	skb_queue_head_init(&mld_txq->awdl_ready);
+ 	INIT_LIST_HEAD(&mld_txq->list);
+ 	atomic_set(&mld_txq->tx_request, 0);
+ }
+@@ -49,6 +66,8 @@
+ }
+ 
+ void iwl_mld_add_txqs_wk(struct wiphy *wiphy, struct wiphy_work *wk);
++void iwl_mld_awdl_purge_txq(struct iwl_mld *mld,
++			    struct ieee80211_txq *txq);
+ void iwl_mld_remove_txq(struct iwl_mld *mld, struct ieee80211_txq *txq);
+ void iwl_mld_add_txq_list(struct iwl_mld *mld);
+ void
+--- a/drivers/net/wireless/intel/iwlwifi/mld/sta.h
++++ b/drivers/net/wireless/intel/iwlwifi/mld/sta.h
+@@ -162,8 +162,10 @@
+ 	struct iwl_mld_link_sta *mld_link_sta;
+ 	u8 link_id;
+ 
+-	for (int i = 0; i < ARRAY_SIZE(sta->txq); i++)
++	for (int i = 0; i < ARRAY_SIZE(sta->txq); i++) {
++		iwl_mld_awdl_purge_txq(mld_sta->mld, sta->txq[i]);
+ 		CLEANUP_STRUCT(iwl_mld_txq_from_mac80211(sta->txq[i]));
++	}
+ 
+ 	for_each_mld_link_sta(mld_sta, mld_link_sta, link_id) {
+ 		CLEANUP_STRUCT(mld_link_sta);
+--- a/drivers/net/wireless/intel/iwlwifi/mld/mac80211.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/mac80211.c
+@@ -2735,6 +2735,10 @@
+ 	u8 link_id;
+ 
+ 	lockdep_assert_wiphy(mld->wiphy);
++	if (vif->nan_data_awdl)
++		for (int i = 0; i < ARRAY_SIZE(sta->txq); i++)
++			WRITE_ONCE(iwl_mld_txq_from_mac80211(sta->txq[i])->awdl_stopped,
++				   true);
+ 
+ 	/* This is called before mac80211 does RCU synchronisation,
+ 	 * so here we already invalidate our internal RCU-protected
+--- a/drivers/net/wireless/intel/iwlwifi/mld/stats.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/stats.c
+@@ -175,15 +175,10 @@
+ 	return iwl_mld_send_fw_stats_cmd(mld, cfg_mask, cfg_time, type_mask);
+ }
+ 
+-static void iwl_mld_sta_stats_fill_txrate(struct iwl_mld_sta *mld_sta,
+-					  struct station_info *sinfo)
+-{
+-	struct rate_info *rinfo = &sinfo->txrate;
+-	u32 rate_n_flags = mld_sta->deflink.last_rate_n_flags;
++void iwl_mld_rate_to_info(u32 rate_n_flags, struct rate_info *rinfo)
++{
+ 	u32 format = rate_n_flags & RATE_MCS_MOD_TYPE_MSK;
+ 	u32 gi_ltf;
+-
+-	sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_BITRATE);
+ 
+ 	switch (rate_n_flags & RATE_MCS_CHAN_WIDTH_MSK) {
+ 	case RATE_MCS_CHAN_WIDTH_20:
+@@ -313,6 +308,13 @@
+ 		rinfo->flags |= RATE_INFO_FLAGS_VHT_MCS;
+ 		break;
+ 	}
++}
++
++static void iwl_mld_sta_stats_fill_txrate(struct iwl_mld_sta *mld_sta,
++					  struct station_info *sinfo)
++{
++	sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_BITRATE);
++	iwl_mld_rate_to_info(mld_sta->deflink.last_rate_n_flags, &sinfo->txrate);
+ }
+ 
+ static void iwl_mld_sta_stats_fill_beacon_signal_avg(struct ieee80211_vif *vif,
+--- a/drivers/net/wireless/intel/iwlwifi/mld/stats.h
++++ b/drivers/net/wireless/intel/iwlwifi/mld/stats.h
+@@ -4,6 +4,8 @@
+  */
+ #ifndef __iwl_mld_stats_h__
+ #define __iwl_mld_stats_h__
++
++void iwl_mld_rate_to_info(u32 rate_n_flags, struct rate_info *rinfo);
+ 
+ int iwl_mld_request_periodic_fw_stats(struct iwl_mld *mld, bool enable);
+ 

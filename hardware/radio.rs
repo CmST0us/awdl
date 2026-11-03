@@ -143,6 +143,7 @@ impl Backend {
         }
         let discovery = bitmap(&profile.schedule.discovery_slots)?;
         let data = bitmap(&profile.schedule.data_slots)?;
+        ensure!(data != 0, "数据时隙列表不能为空");
         ensure!(discovery & data == 0, "发现与数据时隙不能重叠");
         eprintln!("无线策略: {}", path.display());
         Ok(profile)
@@ -186,7 +187,6 @@ fn bitmap(slots: &[u8]) -> Result<u32> {
         ensure!(bits & (1 << slot) == 0, "重复时隙 {slot}");
         bits |= 1 << slot;
     }
-    ensure!(bits != 0, "时隙列表不能为空");
     Ok(bits)
 }
 impl Profile {
@@ -195,10 +195,15 @@ impl Profile {
         if frequency == discovery {
             return Ok(format!("{frequency}:ffffffff"));
         }
+        let data_slots = crate::support::hex(&bitmap(&self.schedule.data_slots)?.to_le_bytes());
+        let discovery_slots = bitmap(&self.schedule.discovery_slots)?;
+        if discovery_slots == 0 {
+            return Ok(format!("{frequency}:{data_slots}"));
+        }
         Ok(format!(
             "{frequency}:{} {discovery}:{}",
-            crate::support::hex(&bitmap(&self.schedule.data_slots)?.to_le_bytes()),
-            crate::support::hex(&bitmap(&self.schedule.discovery_slots)?.to_le_bytes())
+            data_slots,
+            crate::support::hex(&discovery_slots.to_le_bytes())
         ))
     }
 }

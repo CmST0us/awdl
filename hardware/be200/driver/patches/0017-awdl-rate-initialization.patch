@@ -1,0 +1,32 @@
+Subject: [PATCH] 按 AWDL 已授权链路能力初始化速率表
+
+AWDL 数据站点只为对端日程中的 PHY 配置 TLC。
+授权前不发送数据站点的认证或关联帧，保留完整能力一次初始化。
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tlc.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tlc.c
+@@ -760,6 +760,10 @@
+ 			capa.rx_nss = min(capa.rx_nss, chains);
+ 		}
+ 
++		/* AWDL data only uses channels in this peer's schedule. */
++		if (vif->nan_data_awdl && !common_channel)
++			continue;
++
+ 		/* Apply minimum parameters if there is no common channel */
+ 		if (!common_channel) {
+ 			capa.bandwidth = IEEE80211_STA_RX_BW_20;
+@@ -832,6 +836,13 @@
+ 	int link_id;
+ 
+ 	lockdep_assert_wiphy(mld->wiphy);
++
++	/* AWDL has no authentication/association traffic on the data
++	 * station. Initialize TLC with the complete authorized capability.
++	 */
++	if (vif->nan_data_awdl &&
++	    iwl_mld_sta_from_mac80211(sta)->sta_state < IEEE80211_STA_AUTHORIZED)
++		return;
+ 
+ 	/* Note: for NAN this is only the mac80211-level deflink */
+ 	for_each_vif_active_link(vif, link, link_id) {
