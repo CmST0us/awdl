@@ -20,8 +20,8 @@ discovery_seconds = 20
 service_seconds = 5
 # 等待用户答复系统接收提示的最长时间，正整数秒；120 秒覆盖人工确认。
 accept_seconds = 120
-# 从用户接受到 Upload 成功响应的最长时间，正整数秒；75 秒覆盖 500 MB 约 24 秒的已测基线。
-upload_seconds = 75
+# 从用户接受到 Upload 成功响应的失败期限，正整数秒；600 秒覆盖两种后端的 500 MB 验收，完成后立即释放。
+upload_seconds = 600
 # 每轮 mDNS 重复公告数量，正整数；固定带宽接入用重复公告覆盖对端可用窗口。
 announcement_count = 64
 # 同轮相邻公告间隔，正整数微秒；这是协议广播周期，不用于等待流程完成。

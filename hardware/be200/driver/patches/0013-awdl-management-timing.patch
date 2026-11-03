@@ -1,0 +1,48 @@
+Subject: [PATCH] iwlmld: transmit AWDL actions on the native data queue
+
+AWDL synchronization frames carry their creation time. Sending them through
+the NAN management queue delays them until a NAN discovery window. Use the
+owned AWDL NAN_DATA multicast queue so their timing follows the data channel.
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tx.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tx.c
+@@ -3,6 +3,7 @@
+  * Copyright (C) 2024 - 2026 Intel Corporation
+  */
+ #include <net/ip.h>
++#include <net/awdl.h>
+ 
+ #include "tx.h"
+ #include "sta.h"
+@@ -608,6 +609,15 @@
+ 	return rcu_dereference(mld_vif->link[link_id]);
+ }
+ 
++static void iwl_mld_awdl_mgmt_queue(void *data, u8 *mac,
++				    struct ieee80211_vif *vif)
++{
++	struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
++
++	if (vif->nan_data_awdl)
++		*(int *)data = mld_vif->nan.mcast_data_sta.queue_id;
++}
++
+ static int
+ iwl_mld_get_tx_queue_id(struct iwl_mld *mld, struct ieee80211_txq *txq,
+ 			struct sk_buff *skb)
+@@ -682,6 +692,15 @@
+ 		return mld_vif->aux_sta.queue_id;
+ 	case NL80211_IFTYPE_NAN:
+ 		WARN_ON(!ieee80211_is_mgmt(fc));
++		if (ieee80211_is_awdl_action(hdr, skb->len)) {
++			int queue = IWL_MLD_INVALID_QUEUE;
++
++			/* AWDL timing follows the data channel, not NAN DWs. */
++			ieee80211_iterate_active_interfaces_atomic(mld->hw,
++				IEEE80211_IFACE_ITER_NORMAL,
++				iwl_mld_awdl_mgmt_queue, &queue);
++			return queue;
++		}
+ 		return iwl_mld_nan_get_mgmt_queue(mld, info->control.vif);
+ 	case NL80211_IFTYPE_NAN_DATA:
+ 		WARN_ON(!ieee80211_is_data(fc));

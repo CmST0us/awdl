@@ -68,13 +68,31 @@ BE200、RTL8852BE 通过实际安装器完成接管，均运行 `wirelessd.servi
 | 后端异常退出 | 强制终止控制进程后 awdl0 与 NMI 对端均已删除，NAN/fileserver 继续运行 |
 | BLE | 关闭的 BE200 HCI 经复位后成功开启 LE 广播，结束恢复关闭 |
 | AirDrop 服务生命周期 | BE200、RTL 均通过接收发现、取消与释放；BE200 活动接收期间重启 wirelessd 后三项服务恢复，AirDrop 回到 idle |
+| iPad AirDrop 发现 | BE200 原生 AWDL 完成 mDNS 与 TLS Discover，返回系统名称 `eki.day.padmini` |
 | 配置保留 | BE200 现有 wirelessd 与 fileserver 配置逐字节不变 |
+
+## BE200 系统 AirDrop 与 UI 自动接收
+
+2026-11-03，LubanCat 5 的 BE200 使用原生 NAN/NAN_DATA，向 iPad mini（A17 Pro，iPadOS 27.0.1）发送 1 MiB 文本与原有 500 MB 文件。AwareLab 真机 UI 测试自动开启“所有人（10 分钟）”，核对发送方与文件名并点击“接受”；两轮 UI 测试和板端 Upload 成功响应均通过。验收入口与配置见 [iOS 自动接收](../ios/README.md#airdrop-自动接收验收)。
+
+| 项目 | 结果 |
+| --- | --- |
+| 原文件大小 | 500,000,000 字节 |
+| 压缩归档正文 | 377,035,944 字节 |
+| 接受到 Upload 成功响应 | 100.758 秒 |
+| 原文件等效速度 | 4.962 MB/s |
+| 压缩正文速度 | 3.742 MB/s |
+| 原生 STOP | `cleanup=0`，管理帧提交与完成均为 2796，awdl0 已删除 |
+| 服务状态 | wirelessd、fileserver、airdrop 均 active；NAN 与 ndi0 保留 |
+| BLE | 发送后 hci0 恢复关闭 |
+
+驱动补丁 `0013` 使 AWDL Action 帧使用原生数据队列，按数据频道发送同步信息。七个 backport 模块构建通过，实机运行对应 iwlmld；c108 / PNVM 和原有配对保持不变。AirDrop `upload_seconds` 默认为 600 秒；完成响应推进释放。500 MB 吞吐按原文件与压缩正文分别统计，1 MiB 的高压缩文本仅用于交付验证。
 
 ## 已知限制
 
-- BE200 的 iPad 系统 AirDrop、大文件持续传输及活动 NDP 与 AWDL 并发传输尚未完成验收。
+- iPad 接收失败后可能保留挂起的系统会话，出现已开启“所有人”但不再弹窗的状态；需要恢复系统接收服务或重启设备。真机 UI 测试要求设备已解锁。
+- BE200 已完成 Linux → iPad 的系统 AirDrop 小文件与 500 MB 发送；活动 NDP 与 AWDL 并发传输、反向接收和长期稳定性尚未完成验收。
 - BE200 原生 AWDL 的发送吞吐低于 RTL 已测 AirDrop 基线；当前链路固定 149，不跟随其他信道。
-
 - BE200 backport 在 hostap 被强制终止后，异步销毁 NAN 接口的群组密钥清理可触发 `iwl_mld_get_key_sta_mask` 内核警告；该异常清理路径尚未修复。正常停止及立即重启已通过。
 - 同一 iPad 保持 RTL 客户端连接时，BE200 服务发现存在超过 5 秒验收窗口的情况。两个客户端安装身份分别连接与重连已通过，并发连接尚未完成验收。
 - RTL 服务重启后也观察到超过 5 秒窗口的发现延迟；发现延迟的触发条件尚未定位。

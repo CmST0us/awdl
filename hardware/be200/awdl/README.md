@@ -14,7 +14,7 @@
 
 ## 驱动接口
 
-有序补丁 `0011` 允许指定 AWDL BSSID 与 Apple Action 帧；`0012` 提供原生数据格式、站点所有权与窗口门控。沿用 c108 / PNVM 固件。
+有序补丁 `0011` 允许指定 AWDL BSSID 与 Apple Action 帧；`0012` 提供原生数据格式、站点所有权与窗口门控；`0013` 将 AWDL Action 帧送入所属 NAN_DATA 的组播队列，避免 NAN 发现窗口延迟同步帧的实际发送。沿用 c108 / PNVM 固件。
 
 Intel vendor command `0x001735 / 0x4157444c` 以 `awdl0` 的 ifindex 寻址：
 
