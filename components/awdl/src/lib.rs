@@ -251,6 +251,22 @@ impl Control {
                 let same_after = seq.channel((slot + 1) % 16) == channels[0];
                 let window = if channels[0] == 0 {
                     (0, 0)
+                } else if self.channels[1] == 0 {
+                    // Keep a single-channel radio open for the complete run.
+                    // Publishing each slot separately makes the driver drain
+                    // and stop at boundaries where the peer stays on channel.
+                    let before = (1..16)
+                        .take_while(|i| seq.channel((slot + 16 - i) % 16) == channels[0])
+                        .count() as i64;
+                    let after = channels[1..]
+                        .iter()
+                        .take_while(|&&channel| channel == channels[0])
+                        .count() as u64;
+                    let continuous = after == 15;
+                    (
+                        (base - before * 65536 + if continuous { 0 } else { 3072 }).max(1) as u64,
+                        boundary + after * 65536 - if continuous { 0 } else { self.tx_drain_us },
+                    )
                 } else {
                     (
                         (base + if same_before { 0 } else { 3072 }).max(1) as u64,

@@ -289,12 +289,18 @@ static int clear_tcp_metrics(const char *local, const char *peer) {
   rc = request(&nl, &m, family_reply, &nl);
   if (rc)
     goto out;
-  inet_pton(AF_INET6, local, &source);
-  inet_pton(AF_INET6, peer, &destination);
+  if (inet_pton(AF_INET6, local, &source) != 1 ||
+      inet_pton(AF_INET6, peer, &destination) != 1) {
+    rc = -EINVAL;
+    goto out;
+  }
   begin(&nl, &m, nl.family, TCP_METRICS_CMD_DEL);
   put(&m, TCP_METRICS_ATTR_ADDR_IPV6, &destination, sizeof(destination));
   put(&m, TCP_METRICS_ATTR_SADDR_IPV6, &source, sizeof(source));
   rc = request(&nl, &m, NULL, NULL);
+  if (!rc || rc == -ESRCH)
+    fprintf(stderr, "AWDL_TCP_METRICS source=%s peer=%s removed=%d\n",
+            local, peer, !rc);
   if (rc == -ESRCH)
     rc = 0;
 out:
@@ -411,13 +417,14 @@ static int add_peer(struct run *r, const unsigned char *data) {
   rc = request(&r->cmd, &m, NULL, NULL);
   if (rc)
     return rc;
-  char local[INET6_ADDRSTRLEN + 4], peer[INET6_ADDRSTRLEN], mac[18];
+  char local[INET6_ADDRSTRLEN], prefix[INET6_ADDRSTRLEN + 4];
+  char peer[INET6_ADDRSTRLEN], mac[18];
   linklocal(r->local, local);
-  strcat(local, "/64");
+  snprintf(prefix, sizeof(prefix), "%s/64", local);
   linklocal(data, peer);
   snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x", data[0], data[1],
            data[2], data[3], data[4], data[5]);
-  rc = run_command((char *[]){"ip", "-6", "addr", "replace", local, "dev", "awdl0",
+  rc = run_command((char *[]){"ip", "-6", "addr", "replace", prefix, "dev", "awdl0",
                      "nodad", NULL});
   if (rc)
     return rc;

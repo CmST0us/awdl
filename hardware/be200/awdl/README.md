@@ -2,7 +2,7 @@
 
 `be200-awdl` 复用已运行的 NAN 管理接口，通过 nl80211 收发 Apple AWDL Action 帧。`awdl0` 是同一 PHY 上的 `NAN_DATA` 接口，使用 NMI 地址；IP 数据由 mac80211 完成 AWDL 封装、解封装并交给内核 IPv6。控制协议来自公共 `components/awdl`。
 
-本后端与 NAN 共用数据主信道：5745 MHz 对应 149，5805 MHz 对应 161，80 MHz 中心频率为 5775 MHz。协商支持 HE80 / VHT80；本地发现日程由 hostap 管理。控制状态机以 `phy_tx - target_tx` 补偿对端同步帧的发送排队时间，使用选定对端的同步时钟计算可用窗口，转换为 CLOCK_MONOTONIC 纳秒窗口，内核 hrtimer 唤醒发送队列，驱动在窗口内取包。`tx_drain_margin_tu` 指定对端切换前的固件排空余量，默认 3 TU；同信道的相邻时隙之间不扣除该余量。
+本后端与 NAN 共用数据主信道：5745 MHz 对应 149，5805 MHz 对应 161，80 MHz 中心频率为 5775 MHz。协商支持 HE80 / VHT80；本地发现日程由 hostap 管理。控制状态机以 `phy_tx - target_tx` 补偿对端同步帧的发送排队时间，使用选定对端的同步时钟计算可用窗口，转换为 CLOCK_MONOTONIC 纳秒窗口，内核 hrtimer 唤醒发送队列，驱动在窗口内取包。相邻同信道时隙合并成完整的连续窗口，内部边界不触发驱动停发。`tx_drain_margin_tu` 指定对端切换前的固件排空余量，默认 3 TU。
 
 ## 资源生命周期
 
@@ -29,6 +29,8 @@ Intel vendor command `0x001735 / 0x4157444c` 以 `awdl0` 的 ifindex 寻址：
 ## TCP 策略
 
 `hardware/be200/radio.toml` 的 `[awdl]` 定义拥塞控制算法、初始拥塞窗口、乱序阈值、接口发送队列长度和发送排空余量，字段必填。`wirelessd` 校验后通过 `AWARE_AWDL_TCP_CONGESTION`、`AWARE_AWDL_INITIAL_WINDOW`、`AWARE_AWDL_REORDERING`、`AWARE_AWDL_TX_QUEUE`、`AWARE_AWDL_TX_DRAIN_TU` 传给后端；这些进程环境不是第二份配置来源。后端为会话主机路由设置 TCP 策略，并使用 fq pacing。建立新链路时通过通用 Netlink 清除该本地地址与对端地址对应的旧 TCP 指标，使路由参数用于新连接；无缓存时正常继续。最小重传期限为 1100 ms，覆盖一个 1048.576 ms AWDL 周期；路由和队列随接口销毁，不改变系统全局 TCP 默认值。
+
+TCP 指标使用不带前缀长度的 IPv6 源／目的地址匹配，接口地址单独附加 `/64`。`AWDL_TCP_METRICS` 日志记录删除结果：`removed=1` 表示找到并删除旧记录，`removed=0` 表示没有匹配记录。无线策略在管理器启动时加载，修改后须重启 `wirelessd`，活动会话可通过 `ip -6 route show dev awdl0` 与 `ss -tin` 核对实际配置。
 
 ## 限制
 
