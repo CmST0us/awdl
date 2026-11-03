@@ -91,6 +91,7 @@ impl Publisher {
                         channel,
                         radio.awdl_owned.clone(),
                         constraint,
+                        radio.awdl_environment()?,
                     )
                     .await?,
                 ),

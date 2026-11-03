@@ -21,10 +21,67 @@ impl Backend {
     pub fn shared_awdl(self) -> bool {
         matches!(self, Self::Be200)
     }
-    pub fn awdl_channel(self) -> Result<u8> {
-        self.awdl_program()?;
-        // RTL 当前固定在 149 启动，随后跟随同一 80 MHz 块内的 149/161。
-        Ok(149)
+    pub fn awdl_environment(self, cfg: &Configuration) -> Result<Vec<(String, String)>> {
+        if self != Self::Be200 {
+            return Ok(Vec::new());
+        }
+        let policy = self
+            .profile(cfg)?
+            .awdl
+            .context("BE200 无线策略缺少 awdl 配置")?;
+        ensure!(
+            !policy.tcp_congestion_control.is_empty()
+                && policy.tcp_congestion_control.len() < 16
+                && policy
+                    .tcp_congestion_control
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_'),
+            "tcp_congestion_control 必须是内核拥塞控制算法名"
+        );
+        ensure!(
+            policy.initial_window_segments > 0
+                && policy.tx_queue_packets > 0
+                && policy.reordering_segments > 0,
+            "AWDL 初始窗口、乱序阈值与发送队列长度必须为正整数"
+        );
+        ensure!(
+            (1..=60).contains(&policy.tx_drain_margin_tu),
+            "AWDL 排空余量必须为 1–60 TU"
+        );
+        Ok(vec![
+            (
+                "AWARE_AWDL_TCP_CONGESTION".into(),
+                policy.tcp_congestion_control,
+            ),
+            (
+                "AWARE_AWDL_INITIAL_WINDOW".into(),
+                policy.initial_window_segments.to_string(),
+            ),
+            (
+                "AWARE_AWDL_REORDERING".into(),
+                policy.reordering_segments.to_string(),
+            ),
+            (
+                "AWARE_AWDL_TX_DRAIN_TU".into(),
+                policy.tx_drain_margin_tu.to_string(),
+            ),
+            (
+                "AWARE_AWDL_TX_QUEUE".into(),
+                policy.tx_queue_packets.to_string(),
+            ),
+        ])
+    }
+    pub fn awdl_channel(self, frequency: u32) -> Result<u8> {
+        match self {
+            Self::Be200 => {
+                ensure!(
+                    matches!(frequency, 5745 | 5805),
+                    "BE200 AWDL 需要 NAN 数据频率为 5745 或 5805 MHz"
+                );
+                Ok(((frequency - 5000) / 5) as u8)
+            }
+            Self::Rtl8852be => Ok(149),
+        }
     }
     pub fn driver(self) -> &'static str {
         match self {
@@ -97,6 +154,16 @@ pub struct Profile {
     pub hardware: String,
     pub nan: Nan,
     pub schedule: Schedule,
+    pub awdl: Option<Awdl>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Awdl {
+    pub tcp_congestion_control: String,
+    pub initial_window_segments: u32,
+    pub reordering_segments: u32,
+    pub tx_queue_packets: u32,
+    pub tx_drain_margin_tu: u32,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

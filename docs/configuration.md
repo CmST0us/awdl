@@ -403,7 +403,9 @@ systemd 单元拥有进程启动、重启策略和外部停止期限；D-Bus 策
 
 ## AWDL 与 AirDrop 配置
 
-`config/awdl.toml` 提供公共 AWDL 节点名与启动、停止失败期限，安装到 `/etc/wirelessd/awdl.toml`；设备选择沿用 `/etc/wirelessd/config.toml`。BE200 固定 149/VHT80、RTL 支持 149/161 同块跟随，属于硬件实现。BE200 沿用 NAN 数据频率配置，频率不是 5745 MHz 时 AWDL 申请返回明确错误，NAN 服务继续运行。
+`config/awdl.toml` 提供公共 AWDL 节点名与启动、停止失败期限，安装到 `/etc/wirelessd/awdl.toml`；设备选择沿用 `/etc/wirelessd/config.toml`。BE200 沿用 NAN 数据频率配置，5745 / 5805 MHz 分别选择 149 / 161，并协商 HE80 / VHT80；其他频率的 AWDL 申请返回明确错误，NAN 服务继续运行。RTL 支持 149/161 同块跟随。
+
+`hardware/be200/radio.toml` 的 `[awdl]` 提供会话 TCP 拥塞控制、初始窗口、乱序阈值、接口队列长度和发送排空余量；每项必填，重启 wirelessd 生效。默认算法 BBR 要求目标内核提供 tcp_bbr，fq pacing 要求 sch_fq。显式 `radio_profile` 替代文件也须包含这些字段。BE200 模块电源策略与聚合上限保存在 `hardware/be200/driver/be200.conf`，安装后重新加载驱动生效。
 
 `config/airdrop.toml` 提供 AirDrop 的产品显示名、mDNS 主机标签、接收目录和端口、手工或自动接受策略、专用 HCI 选择、发现/接受/传输期限及公告周期，安装到 `/etc/airdrop/config.toml`。每项配置就地注明单位、约束与作用；已有文件不被安装器覆盖。
 

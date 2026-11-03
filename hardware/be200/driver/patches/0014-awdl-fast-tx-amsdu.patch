@@ -1,0 +1,324 @@
+Subject: [PATCH] 为原生 AWDL 接入快速发送、A-MSDU 与 TSO 卸载
+
+保留 AWDL BSSID、逐 MSDU 序号与封装，按实际 IP 偏移计算校验和。
+使用受对端、FIFO 和部署上限约束的聚合及 256 项发送队列。
+
+--- a/net/mac80211/tx.c
++++ b/net/mac80211/tx.c
+@@ -3013,7 +3013,8 @@
+ 		u8 *awdl = skb_push(skb, 14);
+ 
+ 		memcpy(awdl, awdl_snap, sizeof(awdl_snap));
+-		put_unaligned_le16(atomic_inc_return(&sdata->u.nan_data.awdl_seq), awdl + 10);
++		unsigned int count = max_t(unsigned int, 1, skb_shinfo(skb)->gso_segs);
++		put_unaligned_le16(atomic_add_return(count, &sdata->u.nan_data.awdl_seq) - count + 1, awdl + 10);
+ 		put_unaligned_le16(0, awdl + 12);
+ 	} else if (encaps_data)
+ 		memcpy(skb_push(skb, encaps_len), encaps_data, encaps_len);
+@@ -3104,6 +3105,24 @@
+  * maintained if any of the TX path checks change.
+  */
+ 
++static unsigned int ieee80211_awdl_encap_len(struct ieee80211_sub_if_data *sdata)
++{
++	return sdata->vif.nan_data_awdl ? 14 : sizeof(rfc1042_header);
++}
++
++static void ieee80211_awdl_encap(struct ieee80211_sub_if_data *sdata, void *data, unsigned int count)
++{
++	u8 *bytes = data;
++
++	if (!sdata->vif.nan_data_awdl) {
++		memcpy(bytes, rfc1042_header, sizeof(rfc1042_header));
++		return;
++	}
++	memcpy(bytes, awdl_snap, sizeof(awdl_snap));
++	put_unaligned_le16(atomic_add_return(count, &sdata->u.nan_data.awdl_seq) - count + 1, bytes + 10);
++	put_unaligned_le16(0, bytes + 12);
++}
++
+ void ieee80211_check_fast_xmit(struct sta_info *sta)
+ {
+ 	struct ieee80211_fast_tx build = {}, *fast_tx = NULL, *old;
+@@ -3113,8 +3132,7 @@
+ 	struct ieee80211_chanctx_conf *chanctx_conf;
+ 	__le16 fc;
+ 
+-	if (sdata->vif.nan_data_awdl ||
+-	    !ieee80211_hw_check(&local->hw, SUPPORT_FAST_XMIT))
++	if (!ieee80211_hw_check(&local->hw, SUPPORT_FAST_XMIT))
+ 		return;
+ 
+ 	if (ieee80211_vif_is_mesh(&sdata->vif))
+@@ -3345,9 +3363,8 @@
+ 
+ 	hdr->frame_control = fc;
+ 
+-	memcpy(build.hdr + build.hdr_len,
+-	       rfc1042_header,  sizeof(rfc1042_header));
+-	build.hdr_len += sizeof(rfc1042_header);
++	ieee80211_awdl_encap(sdata, build.hdr + build.hdr_len, 1);
++	build.hdr_len += ieee80211_awdl_encap_len(sdata);
+ 
+ 	fast_tx = kmemdup(&build, sizeof(build), GFP_ATOMIC);
+ 	/* if the kmemdup fails, continue w/o fast_tx */
+@@ -3427,7 +3444,7 @@
+ 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
+ 	struct ieee80211_hdr *hdr;
+ 	struct ethhdr *amsdu_hdr;
+-	int hdr_len = fast_tx->hdr_len - sizeof(rfc1042_header);
++	int hdr_len = fast_tx->hdr_len - ieee80211_awdl_encap_len(sdata);
+ 	int subframe_len = skb->len - hdr_len;
+ 	void *data;
+ 	u8 *qc, *h_80211_src, *h_80211_dst;
+@@ -3500,7 +3517,8 @@
+ 	struct ieee80211_txq *txq = sta->sta.txq[tid];
+ 	struct txq_info *txqi;
+ 	struct sk_buff **frag_tail, *head;
+-	int subframe_len = skb->len - ETH_ALEN;
++	int subframe_len = skb->len - ETH_ALEN +
++		ieee80211_awdl_encap_len(sdata) - sizeof(rfc1042_header);
+ 	u8 max_subframes = sta->sta.max_amsdu_subframes;
+ 	int max_frags = local->hw.max_tx_fragments;
+ 	int max_amsdu_len = sta->sta.cur->max_amsdu_len;
+@@ -3557,7 +3575,8 @@
+ 	orig_truesize = head->truesize;
+ 	orig_len = head->len;
+ 
+-	if (skb->len + head->len > max_amsdu_len)
++	if (skb->len + head->len + ieee80211_awdl_encap_len(sdata) -
++	    sizeof(rfc1042_header) > max_amsdu_len)
+ 		goto out;
+ 
+ 	nfrags = 1 + skb_shinfo(skb)->nr_frags;
+@@ -3596,23 +3615,23 @@
+ 	 * we add a new subframe we pad out the previous one to a multiple
+ 	 * of 4 and thus it no longer matters in the next round.
+ 	 */
+-	hdrlen = fast_tx->hdr_len - sizeof(rfc1042_header);
++	hdrlen = fast_tx->hdr_len - ieee80211_awdl_encap_len(sdata);
+ 	if ((head->len - hdrlen) & 3)
+ 		pad = 4 - ((head->len - hdrlen) & 3);
+ 
+-	if (!ieee80211_amsdu_realloc_pad(local, skb, sizeof(rfc1042_header) +
++	if (!ieee80211_amsdu_realloc_pad(local, skb, ieee80211_awdl_encap_len(sdata) +
+ 						     2 + pad))
+ 		goto out_recalc;
+ 
+ 	ret = true;
+-	data = skb_push(skb, ETH_ALEN + 2);
++	data = skb_push(skb, ieee80211_awdl_encap_len(sdata) + 2);
+ 	ether_addr_copy(data, da);
+ 	ether_addr_copy(data + ETH_ALEN, sa);
+ 
+ 	data += 2 * ETH_ALEN;
+ 	len = cpu_to_be16(subframe_len);
+ 	memcpy(data, &len, 2);
+-	memcpy(data + 2, rfc1042_header, sizeof(rfc1042_header));
++	ieee80211_awdl_encap(sdata, data + 2, 1);
+ 
+ 	memset(skb_push(skb, pad), 0, pad);
+ 
+@@ -3799,7 +3818,11 @@
+ 		nmi = rcu_dereference(sdata->u.nan_data.nmi);
+ 		if (!nmi)
+ 			goto free;
+-		ether_addr_copy(hdr->addr3, nmi->u.nan.conf.cluster_id);
++		ether_addr_copy(hdr->addr3, sdata->vif.nan_data_awdl ?
++				awdl_bssid : nmi->u.nan.conf.cluster_id);
++		if (sdata->vif.nan_data_awdl)
++			ieee80211_awdl_encap(sdata, skb->data + fast_tx->hdr_len - 14,
++				max_t(unsigned int, 1, skb_shinfo(skb)->gso_segs));
+ 	}
+ 
+ 	info = IEEE80211_SKB_CB(skb);
+--- a/net/mac80211/iface.c
++++ b/net/mac80211/iface.c
+@@ -960,19 +960,7 @@
+ 	return drv_net_setup_tc(local, sdata, dev, type, type_data);
+ }
+ 
+-static netdev_features_t ieee80211_fix_features(struct net_device *dev,
+-						 netdev_features_t features)
+-{
+-	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev);
+-
+-	/* The firmware offload parser expects the standard SNAP layout. */
+-	if (sdata->vif.nan_data_awdl)
+-		features &= ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK);
+-	return features;
+-}
+-
+ static const struct net_device_ops ieee80211_dataif_ops = {
+-	.ndo_fix_features	= ieee80211_fix_features,
+ 	.ndo_open		= ieee80211_open,
+ 	.ndo_stop		= ieee80211_stop,
+ 	.ndo_uninit		= ieee80211_uninit,
+--- a/drivers/net/wireless/intel/iwlwifi/mld/mac80211.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/mac80211.c
+@@ -2244,6 +2244,14 @@
+ 					   struct sk_buff *head,
+ 					   struct sk_buff *skb)
+ {
++	struct ieee80211_vif *vif = IEEE80211_SKB_CB(head)->control.vif;
++
++	/* AWDL supplies complete subframe headers; checksum modes must match. */
++	if (vif && vif->nan_data_awdl)
++		return skb->protocol == htons(ETH_P_IPV6) &&
++		       head->protocol == skb->protocol &&
++		       iwl_mld_can_hw_csum(skb) == iwl_mld_can_hw_csum(head);
++
+ 	if (!IS_ENABLED(CONFIG_INET))
+ 		return false;
+ 
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tlc.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tlc.c
+@@ -821,6 +821,10 @@
+ 				 link_sta, &capa);
+ }
+ 
++static u16 iwl_mld_get_amsdu_size_of_tid(struct iwl_mld *mld,
++				      struct ieee80211_link_sta *link_sta,
++				      unsigned int tid);
++
+ void iwl_mld_config_tlc(struct iwl_mld *mld, struct ieee80211_vif *vif,
+ 			struct ieee80211_sta *sta)
+ {
+@@ -838,6 +842,17 @@
+ 			continue;
+ 
+ 		iwl_mld_config_tlc_link(mld, vif, link, link_sta);
++		if (vif->nan_data_awdl &&
++		    iwl_mld_sta_from_mac80211(sta)->sta_state >= IEEE80211_STA_ASSOC) {
++			/* AWDL builds its own subframes; firmware NAN aggregation
++			 * recommendations need not arrive for this encapsulation.
++			 */
++			link_sta->agg.max_rc_amsdu_len = link_sta->agg.max_amsdu_len;
++			for (int tid = 0; tid < IWL_MAX_TID_COUNT; tid++)
++				link_sta->agg.max_tid_amsdu_len[tid] =
++					iwl_mld_get_amsdu_size_of_tid(mld, link_sta, tid);
++			ieee80211_sta_recalc_aggregates(sta);
++		}
+ 	}
+ }
+ 
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tx.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tx.c
+@@ -54,6 +54,10 @@
+ 	int max_size = IWL_DEFAULT_QUEUE_SIZE;
+ 
+ 	lockdep_assert_wiphy(mld->wiphy);
++
++	/* AWDL drains short availability windows, including at HE rates. */
++	if (txq->vif->nan_data_awdl)
++		return 256;
+ 
+ 	for_each_sta_active_link(txq->vif, sta, link_sta, link_id) {
+ 		if (link_sta->eht_cap.has_eht) {
+@@ -212,7 +216,7 @@
+ 	(type *)(skb_network_header(skb) + (off))
+ 
+ static __le32
+-iwl_mld_get_offload_assist(struct sk_buff *skb, bool amsdu)
++iwl_mld_get_offload_assist(struct sk_buff *skb, bool amsdu, bool awdl)
+ {
+ 	struct ieee80211_hdr *hdr = (void *)skb->data;
+ 	u16 mh_len = ieee80211_hdrlen(hdr->frame_control);
+@@ -278,7 +282,7 @@
+ 	 * We don't support tunneling so no need to take care of inner header.
+ 	 * Size is in words.
+ 	 */
+-	offload_assist |= (4 << TX_CMD_OFFLD_IP_HDR);
++	offload_assist |= ((awdl ? 8 : 4) << TX_CMD_OFFLD_IP_HDR);
+ 
+ 	/* Do IPv4 csum for AMSDU only (no IP csum for Ipv6) */
+ 	if (skb->protocol == htons(ETH_P_IP) && amsdu) {
+@@ -580,7 +584,8 @@
+ 
+ 	iwl_mld_fill_tx_cmd_hdr(tx_cmd, skb, amsdu);
+ 
+-	tx_cmd->offload_assist = iwl_mld_get_offload_assist(skb, amsdu);
++	tx_cmd->offload_assist = iwl_mld_get_offload_assist(skb, amsdu,
++						    info->control.vif && info->control.vif->nan_data_awdl);
+ 
+ 	/* Total # bytes to be transmitted */
+ 	tx_cmd->len = cpu_to_le16((u16)skb->len);
+@@ -880,7 +885,8 @@
+ 	u16 snap_ip_tcp, pad, max_tid_amsdu_len;
+ 	u8 tid;
+ 
+-	snap_ip_tcp = 8 + skb_network_header_len(skb) + tcp_hdrlen(skb);
++	snap_ip_tcp = skb_network_offset(skb) - ieee80211_hdrlen(hdr->frame_control) +
++		skb_network_header_len(skb) + tcp_hdrlen(skb);
+ 
+ 	if (!ieee80211_is_data_qos(hdr->frame_control) ||
+ 	    !sta->cur->max_rc_amsdu_len)
+@@ -958,6 +964,10 @@
+ 	struct sk_buff *orig_skb = skb;
+ 	struct sk_buff_head mpdus_skbs;
+ 	unsigned int payload_len;
++	u32 tcp_seq = ntohl(tcp_hdr(skb)->seq);
++	u16 awdl_seq = 0;
++	unsigned int mss = skb_shinfo(skb)->gso_size;
++	bool awdl = txq && txq->vif->nan_data_awdl;
+ 	int ret;
+ 
+ 	if (WARN_ON(!txq || !txq->sta))
+@@ -974,6 +984,8 @@
+ 
+ 	__skb_queue_head_init(&mpdus_skbs);
+ 
++	if (awdl)
++		awdl_seq = get_unaligned_le16(skb_network_header(skb) - 6);
+ 	ret = iwl_mld_tx_tso_segment(mld, skb, txq->sta, &mpdus_skbs);
+ 	if (ret)
+ 		return ret;
+@@ -982,6 +994,10 @@
+ 
+ 	while (!skb_queue_empty(&mpdus_skbs)) {
+ 		skb = __skb_dequeue(&mpdus_skbs);
++		if (awdl)
++			put_unaligned_le16(awdl_seq +
++				(ntohl(tcp_hdr(skb)->seq) - tcp_seq) / mss,
++				skb_network_header(skb) - 6);
+ 
+ 		ret = iwl_mld_tx_mpdu(mld, skb, txq);
+ 		if (!ret)
+--- a/drivers/net/wireless/intel/iwlwifi/pcie/gen1_2/tx-gen2.c
++++ b/drivers/net/wireless/intel/iwlwifi/pcie/gen1_2/tx-gen2.c
+@@ -4,6 +4,8 @@
+  * Copyright (C) 2018-2020, 2023-2025 Intel Corporation
+  */
+ #include <net/tso.h>
++#include <net/awdl.h>
++#include <linux/unaligned.h>
+ #include <linux/tcp.h>
+ 
+ #include "iwl-debug.h"
+@@ -173,12 +175,16 @@
+ 	u8 *start_hdr;
+ 	struct sg_table *sgt;
+ 	struct tso_t tso;
++	unsigned int snap_len = skb_network_offset(skb) - hdr_len;
++	bool awdl = snap_len == 16 &&
++		!memcmp(skb->data + hdr_len, awdl_snap, sizeof(awdl_snap));
++	u16 awdl_seq = awdl ? get_unaligned_le16(skb->data + hdr_len + 10) : 0;
+ 
+ 	trace_iwlwifi_dev_tx(trans->dev, skb, tfd, sizeof(*tfd),
+ 			     &dev_cmd->hdr, start_len, 0);
+ 
+ 	ip_hdrlen = skb_network_header_len(skb);
+-	snap_ip_tcp_hdrlen = 8 + ip_hdrlen + tcp_hdrlen(skb);
++	snap_ip_tcp_hdrlen = snap_len + ip_hdrlen + tcp_hdrlen(skb);
+ 	total_len = skb->len - snap_ip_tcp_hdrlen - hdr_len;
+ 	amsdu_pad = 0;
+ 
+@@ -236,6 +242,8 @@
+ 		 * as MAC header.
+ 		 */
+ 		tso_build_hdr(skb, pos_hdr, &tso, data_left, !total_len);
++		if (awdl)
++			put_unaligned_le16(awdl_seq++, pos_hdr + 10);
+ 
+ 		pos_hdr += snap_ip_tcp_hdrlen;
+ 

@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <linux/genetlink.h>
+#include <linux/tcp_metrics.h>
 #include <net/if.h>
 #include <poll.h>
 #include <signal.h>
@@ -34,6 +35,10 @@ struct run {
   uint64_t nmi, start;
   unsigned char local[6], peer[6];
   unsigned tx, rx, completions;
+  unsigned channel, tx_drain_tu;
+  char *congestion, *initial_window, *tx_queue, *reordering;
+  unsigned char he[21];
+  int has_he;
   int error;
 };
 static volatile sig_atomic_t stopped;
@@ -220,6 +225,34 @@ static int interface_reply(struct nlmsghdr *h, void *context) {
   }
   return 0;
 }
+static int capabilities_reply(struct nlmsghdr *h, void *context) {
+  struct run *r = context;
+  const struct nlattr *a[NL80211_ATTR_MAX + 1];
+  const struct nlattr *nan[NL80211_NAN_CAPABILITIES_MAX + 1];
+  const struct nlattr *phy[NL80211_NAN_PHY_CAP_ATTR_MAX + 1];
+  attrs(h, a, NL80211_ATTR_MAX + 1);
+  if (number(a[NL80211_ATTR_WIPHY]) != r->phy ||
+      !a[NL80211_ATTR_NAN_CAPABILITIES])
+    return 0;
+  parse(value(a[NL80211_ATTR_NAN_CAPABILITIES]),
+        length(a[NL80211_ATTR_NAN_CAPABILITIES]), nan,
+        NL80211_NAN_CAPABILITIES_MAX + 1);
+  if (!nan[NL80211_NAN_CAPA_PHY])
+    return 0;
+  parse(value(nan[NL80211_NAN_CAPA_PHY]), length(nan[NL80211_NAN_CAPA_PHY]),
+        phy, NL80211_NAN_PHY_CAP_ATTR_MAX + 1);
+  if (length(phy[NL80211_NAN_PHY_CAP_ATTR_HE_MAC]) != 6 ||
+      length(phy[NL80211_NAN_PHY_CAP_ATTR_HE_PHY]) != 11 ||
+      length(phy[NL80211_NAN_PHY_CAP_ATTR_HE_MCS_SET]) < 4)
+    return 0;
+  memcpy(r->he, value(phy[NL80211_NAN_PHY_CAP_ATTR_HE_MAC]), 6);
+  memcpy(r->he + 6, value(phy[NL80211_NAN_PHY_CAP_ATTR_HE_PHY]), 11);
+  memcpy(r->he + 17, value(phy[NL80211_NAN_PHY_CAP_ATTR_HE_MCS_SET]), 4);
+  /* AWDL advertises only the 80 MHz MCS set. */
+  r->he[6] &= ~(8 | 16);
+  r->has_he = !!(r->he[6] & 4);
+  return 0;
+}
 static int vendor(struct run *r, const void *data, size_t len) {
   struct message m;
   begin(&r->cmd, &m, r->cmd.family, NL80211_CMD_VENDOR);
@@ -229,12 +262,12 @@ static int vendor(struct run *r, const void *data, size_t len) {
   put(&m, NL80211_ATTR_VENDOR_DATA, data, len);
   return request(&r->cmd, &m, NULL, NULL);
 }
-static int ip(char *const argv[]) {
+static int run_command(char *const argv[]) {
   pid_t child = fork();
   if (child < 0)
     return -errno;
   if (!child) {
-    execvp("ip", argv);
+    execvp(argv[0], argv);
     _exit(127);
   }
   int status;
@@ -242,6 +275,32 @@ static int ip(char *const argv[]) {
     if (errno != EINTR)
       return -errno;
   return WIFEXITED(status) && !WEXITSTATUS(status) ? 0 : -EIO;
+}
+static int clear_tcp_metrics(const char *local, const char *peer) {
+  struct netlink nl = {.fd = -1};
+  struct message m;
+  struct in6_addr source, destination;
+  int rc = open_netlink(&nl);
+  if (rc)
+    goto out;
+  begin(&nl, &m, GENL_ID_CTRL, CTRL_CMD_GETFAMILY);
+  put(&m, CTRL_ATTR_FAMILY_NAME, TCP_METRICS_GENL_NAME,
+      sizeof(TCP_METRICS_GENL_NAME));
+  rc = request(&nl, &m, family_reply, &nl);
+  if (rc)
+    goto out;
+  inet_pton(AF_INET6, local, &source);
+  inet_pton(AF_INET6, peer, &destination);
+  begin(&nl, &m, nl.family, TCP_METRICS_CMD_DEL);
+  put(&m, TCP_METRICS_ATTR_ADDR_IPV6, &destination, sizeof(destination));
+  put(&m, TCP_METRICS_ATTR_SADDR_IPV6, &source, sizeof(source));
+  rc = request(&nl, &m, NULL, NULL);
+  if (rc == -ESRCH)
+    rc = 0;
+out:
+  if (nl.fd >= 0)
+    close(nl.fd);
+  return rc;
 }
 static void linklocal(const unsigned char *mac, char *out) {
   unsigned char addr[16] = {0xfe, 0x80};
@@ -271,11 +330,11 @@ static int create_data(struct run *r) {
   if (rc)
     return rc;
   rc =
-      ip((char *[]){"ip", "link", "set", "awdl0", "addrgenmode", "none", NULL});
+      run_command((char *[]){"ip", "link", "set", "awdl0", "addrgenmode", "none", NULL});
   if (rc)
     return rc;
-  return ip(
-      (char *[]){"ip", "link", "set", "awdl0", "mtu", "1280", "up", NULL});
+  return run_command(
+      (char *[]){"ip", "link", "set", "awdl0", "mtu", "1500", "up", NULL});
 }
 static int peer_caps(struct run *r, const unsigned char *caps) {
   struct message m;
@@ -287,6 +346,21 @@ static int peer_caps(struct run *r, const unsigned char *caps) {
   put(&m, NL80211_ATTR_MAC, r->peer, 6);
   put(&m, NL80211_ATTR_HT_CAPABILITY, ht, sizeof(ht));
   put(&m, NL80211_ATTR_VHT_CAPABILITY, caps, 12);
+  if (caps[20]) {
+    unsigned char he[21] = {0};
+    // Mandatory HE80 modes; optional LDPC/GI and padding use negotiated values.
+    he[6] = 4;
+    he[7] = (caps[23] ? 32 : 0) | ((caps[24] & 1) ? 64 : 0);
+    he[13] = (caps[24] & 2) ? 4 : 0;
+    unsigned char padding = caps[25];
+    for (int i = 26; i < 28; i++)
+      if (caps[i] > padding)
+        padding = caps[i];
+    he[15] = padding << 6;
+    memcpy(he + 17, caps + 21, 2);
+    memcpy(he + 19, caps + 21, 2);
+    put(&m, NL80211_ATTR_HE_CAPABILITY, he, sizeof(he));
+  }
   return request(&r->cmd, &m, NULL, NULL);
 }
 static int add_peer(struct run *r, const unsigned char *data) {
@@ -307,12 +381,12 @@ static int add_peer(struct run *r, const unsigned char *data) {
   put16(&m, NL80211_ATTR_NAN_MAX_CHAN_SWITCH_TIME, 4000);
   put8(&m, NL80211_ATTR_NAN_SEQ_ID, 1);
   size_t ch = nest(&m, NL80211_ATTR_NAN_CHANNEL);
-  put32(&m, NL80211_ATTR_WIPHY_FREQ, 5745);
+  put32(&m, NL80211_ATTR_WIPHY_FREQ, 5000 + 5 * r->channel);
   put32(&m, NL80211_ATTR_CENTER_FREQ1, 5775);
   put32(&m, NL80211_ATTR_CENTER_FREQ2, 0);
   put32(&m, NL80211_ATTR_CHANNEL_WIDTH, NL80211_CHAN_WIDTH_80);
-  /* Operating class 128, center 155 (bit 5), primary 149 (bit 0). */
-  unsigned char entry[6] = {128, 32, 0, 1, 0, 0};
+  /* Operating class 128, center 155, primary 149 or 161. */
+  unsigned char entry[6] = {128, 32, 0, r->channel == 149 ? 1 : 8, 0, 0};
   put(&m, NL80211_ATTR_NAN_CHANNEL_ENTRY, entry, sizeof(entry));
   put8(&m, NL80211_ATTR_NAN_RX_NSS, 2);
   endnest(&m, ch);
@@ -343,12 +417,35 @@ static int add_peer(struct run *r, const unsigned char *data) {
   linklocal(data, peer);
   snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x", data[0], data[1],
            data[2], data[3], data[4], data[5]);
-  rc = ip((char *[]){"ip", "-6", "addr", "replace", local, "dev", "awdl0",
+  rc = run_command((char *[]){"ip", "-6", "addr", "replace", local, "dev", "awdl0",
                      "nodad", NULL});
   if (rc)
     return rc;
-  rc = ip((char *[]){"ip", "-6", "neigh", "replace", peer, "lladdr", mac, "nud",
+  rc = run_command((char *[]){"ip", "-6", "neigh", "replace", peer, "lladdr", mac, "nud",
                      "permanent", "dev", "awdl0", NULL});
+  if (rc)
+    return rc;
+  /* A full AWDL schedule is 16 * 64 TU (1048.576 ms). TCP must allow
+   * the peer to return before treating an unavailable window as loss.
+   * The host route disappears with the session's NAN_DATA interface.
+   */
+  rc = run_command((char *[]){"ip", "-6", "route", "replace", peer, "dev", "awdl0",
+                     "rto_min", "1100ms", "congctl", r->congestion,
+                     "initcwnd", r->initial_window, "reordering", r->reordering, NULL});
+  if (rc)
+    return rc;
+  /* The new NAN_DATA session installs its own route policy. Cached TCP
+   * metrics for this peer must not override that policy on new connections.
+   */
+  rc = clear_tcp_metrics(local, peer);
+  if (rc)
+    return rc;
+  rc = run_command((char *[]){"ip", "link", "set", "awdl0", "txqueuelen",
+                              r->tx_queue, NULL});
+  if (rc)
+    return rc;
+  rc = run_command((char *[]){"tc", "qdisc", "replace", "dev", "awdl0",
+                              "root", "fq", NULL});
   if (rc)
     return rc;
   printf("{\"event\":\"netdev-ready\",\"interface\":\"awdl0\",\"local\":\"%s\","
@@ -377,7 +474,7 @@ static int emit(void *context, uint32_t kind, const unsigned char *data,
     struct message m;
     begin(&r->events, &m, r->events.family, NL80211_CMD_FRAME);
     put(&m, NL80211_ATTR_WDEV, &r->nmi, 8);
-    put32(&m, NL80211_ATTR_WIPHY_FREQ, 5745);
+    put32(&m, NL80211_ATTR_WIPHY_FREQ, 5000 + 5 * r->channel);
     put(&m, NL80211_ATTR_TX_NO_CCK_RATE, NULL, 0);
     put(&m, NL80211_ATTR_FRAME, data, len);
     rc = send_message(&r->events, &m);
@@ -449,13 +546,32 @@ int main(int argc, char **argv) {
   if ((argc != 3 && argc != 5) || strncmp(argv[1], "phy", 3))
     return 2;
   int stopping = !strcmp(argv[2], "stop");
-  if (!stopping && (argc != 5 || strcmp(argv[2], "149")))
+  if (!stopping && (argc != 5 ||
+      (strcmp(argv[2], "149") && strcmp(argv[2], "161"))))
     return 2;
   char *end;
   unsigned long phy = strtoul(argv[1] + 3, &end, 10);
   if (*end || end == argv[1] + 3)
     return 2;
-  struct run r = {.phy = phy, .cmd.fd = -1, .events.fd = -1};
+  struct run r = {.phy = phy, .cmd.fd = -1, .events.fd = -1,
+                  .channel = stopping ? 0 : (unsigned)atoi(argv[2])};
+  if (!stopping) {
+    r.congestion = getenv("AWARE_AWDL_TCP_CONGESTION");
+    r.initial_window = getenv("AWARE_AWDL_INITIAL_WINDOW");
+    r.tx_queue = getenv("AWARE_AWDL_TX_QUEUE");
+    r.reordering = getenv("AWARE_AWDL_REORDERING");
+    const char *drain = getenv("AWARE_AWDL_TX_DRAIN_TU");
+    if (!drain)
+      return 2;
+    unsigned long drain_tu = strtoul(drain, &end, 10);
+    if (*end || end == drain || drain_tu < 1 || drain_tu > 60)
+      return 2;
+    r.tx_drain_tu = drain_tu;
+    if (!r.congestion || !r.initial_window || !r.tx_queue || !r.reordering) {
+      fprintf(stderr, "AWDL transport policy is required from wirelessd\n");
+      return 2;
+    }
+  }
   setvbuf(stdout, NULL, _IOLBF, 0);
   signal(SIGTERM, stop_signal);
   signal(SIGINT, stop_signal);
@@ -498,11 +614,19 @@ int main(int argc, char **argv) {
   rc = request(&r.events, &m, NULL, NULL);
   if (rc)
     goto close;
+  begin(&r.cmd, &m, r.cmd.family, NL80211_CMD_GET_WIPHY);
+  ((struct nlmsghdr *)m.bytes)->nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+  put32(&m, NL80211_ATTR_WIPHY, r.phy);
+  put(&m, NL80211_ATTR_SPLIT_WIPHY_DUMP, NULL, 0);
+  rc = request(&r.cmd, &m, capabilities_reply, &r);
+  if (rc)
+    goto close;
   rc = create_data(&r);
   if (rc)
     goto cleanup;
   r.start = micros();
-  r.node = control_new(r.local, 149, 0, argv[3], argv[4], NULL, emit, &r);
+  r.node = control_new(r.local, r.channel, 0, argv[3], argv[4],
+                       r.has_he ? r.he : NULL, r.tx_drain_tu * 1024, emit, &r);
   printf("{\"event\":\"started\"}\n");
   while (!stopped) {
     uint64_t next = r.start + control_tick(r.node, micros() - r.start + 1) - 1;

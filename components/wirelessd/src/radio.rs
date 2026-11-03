@@ -292,13 +292,10 @@ impl Radio {
         if !backend.shared_awdl() {
             return Ok(None);
         }
-        let channel = backend.awdl_channel()?;
-        let constraint = (self.cfg.frequency != 5000 + u32::from(channel) * 5).then(|| {
-            format!(
-                "AWDL 需要 NAN 数据频率 {} MHz",
-                5000 + u32::from(channel) * 5
-            )
-        });
+        let (channel, constraint) = match backend.awdl_channel(self.cfg.frequency) {
+            Ok(channel) => (channel, None),
+            Err(error) => (0, Some(error.to_string())),
+        };
         Ok(Some((
             backend.awdl_program()?.into(),
             self.phy.clone(),
@@ -307,12 +304,18 @@ impl Radio {
         )))
     }
 
+    pub fn awdl_environment(&self) -> Result<Vec<(String, String)>> {
+        self.backend
+            .context("无线设备尚未启动")?
+            .awdl_environment(&self.cfg)
+    }
+
     pub async fn prepare_awdl(&mut self) -> Result<(String, String, u8)> {
         self.prepare(true).await?;
         Ok((
             self.backend.unwrap().awdl_program()?.into(),
             self.bootstrap.clone(),
-            self.backend.unwrap().awdl_channel()?,
+            self.backend.unwrap().awdl_channel(self.cfg.frequency)?,
         ))
     }
 

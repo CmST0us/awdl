@@ -11,3 +11,4 @@
 0011-native-awdl-management.patch
 0012-native-awdl-data.patch
 0013-awdl-management-timing.patch
+0014-awdl-fast-tx-amsdu.patch

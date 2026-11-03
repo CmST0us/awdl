@@ -123,6 +123,12 @@ async fn cleanup(connection: &zbus::Connection, job: &mut Job) -> Result<()> {
         }
         Err(error) => Err(error.into()),
     };
+    if let Err(error) = stop_ble(job).await {
+        result = Err(error);
+    }
+    result
+}
+async fn stop_ble(job: &mut Job) -> Result<()> {
     if let Some(child) = &mut job.ble {
         if let Some(pid) = child.id() {
             unsafe {
@@ -130,12 +136,15 @@ async fn cleanup(connection: &zbus::Connection, job: &mut Job) -> Result<()> {
             }
         }
         match tokio::time::timeout(Duration::from_secs(4), child.wait()).await {
-            Ok(Ok(status)) if status.success() => {}
-            other => result = Err(anyhow::anyhow!("BLE 关闭未完成: {other:?}")),
+            Ok(Ok(status)) if status.success() => {
+                job.ble = None;
+            }
+            other => bail!("BLE 关闭未完成: {other:?}"),
         }
     }
-    result
+    Ok(())
 }
+
 async fn emit(
     connection: &zbus::Connection,
     state: &Arc<RwLock<Value>>,
@@ -213,7 +222,16 @@ async fn serve(cfg: Configuration) -> Result<()> {
                 if let Err(error)=result{if stopping{failure=Some(error);}}
                 if stopping{break;}
             },
-            event=incoming.recv()=>{if let Some(event)=event{emit(&connection,&state,event,job.as_ref().map_or(0,|j|j.id)).await?;}},
+            event=incoming.recv()=>{if let Some(event)=event{
+                if event["event"] == "accepted" {
+                    if let Some(active) = &mut job {
+                        if let Err(error) = stop_ble(active).await {
+                            emit(&connection,&state,json!({"event":"ble-stop-failed","error":error.to_string()}),active.id).await?;
+                        }
+                    }
+                }
+                emit(&connection,&state,event,job.as_ref().map_or(0,|j|j.id)).await?;
+            }},
             command=commands.recv(), if !stopping=>match command {
                 Some(Command::Start(operation,reply))=>{
                     if job.is_some()||held.is_some(){let _=reply.send(Err(zbus::fdo::Error::Failed("已有 AirDrop 操作，请先停止".into())));continue;}

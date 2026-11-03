@@ -79,7 +79,7 @@ int main(int argc,char **argv) {
  for(size_t i=0;i<sizeof(caps.he_cap);i++)printf("%02x",caps.he_cap[i]);
  putchar('\n');
  memcpy(r.local,caps.nmi,6);rc=wa_backend_command(r.backend,0x100,0,r.freq,NULL,0);if(rc)goto close;
- r.start=micros();printf("AWDL_CLOCK monotonic_us=%llu\n",(unsigned long long)r.start);r.node=control_new(caps.nmi,ch,161,argv[3],argv[4],caps.he_supported?caps.he_cap:NULL,emit,&r);
+ r.start=micros();printf("AWDL_CLOCK monotonic_us=%llu\n",(unsigned long long)r.start);r.node=control_new(caps.nmi,ch,161,argv[3],argv[4],caps.he_supported?caps.he_cap:NULL,3072,emit,&r);
  printf("{\"event\":\"started\"}\n");
  while(!stopped){
   uint64_t now=micros();

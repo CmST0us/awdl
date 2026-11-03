@@ -15,6 +15,8 @@
 - `nan_amsdu_limit` 用于对端大聚合互通限制；`be200.conf` 随每次安装将其设为7935字节。
 - `platform_cn` 仅在平台 WRDD 缺失且显式启用时补充CN，沿正常BIOS MCC路径提交。
 - TSO A-MSDU 按每个聚合实际引用的内存片段核对描述符预算。
+- 原生 AWDL 支持快速发送、逐 MSDU 序号、A-MSDU、TSO 与 16 字节封装下的校验和卸载；发送队列为 256 项，保留 NAN/NAN_DATA 接口类型。
+- `power_scheme=1` 保持持续活动，减少间歇发送窗口内的省电延迟；取值与省略行为见 `be200.conf`。
 - `IWL_ERR_LIMIT` 在频率限制允许时输出，超出时只写入 trace。
 - 构建将 `IWLWIFI_FW_MISBEHAVE_NMI_DEFAULT` 设为 0，驱动一致性检查命中只记录错误，不向固件发 NMI。需要固件现场时，在 `/lib/firmware/iwl-dbg-cfg.ini` 首行写 `[IWL DEBUG CONFIG DATA]`、次行写 `FW_MISBEHAVE_NMI=1`，再完整重新加载 iwlwifi 及其 opmode 模块。
 

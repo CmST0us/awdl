@@ -12,6 +12,7 @@ pub struct Control {
     context: *mut c_void,
     deadline: Time,
     window: (u64, u64),
+    tx_drain_us: u64,
     plan: Option<(i64, [u8; 16])>,
     applied: Option<[u8; 28]>,
     observed: u64,
@@ -23,6 +24,7 @@ pub struct Control {
 }
 #[derive(Default, Clone)]
 struct PeerCaps {
+    clock: Option<owly_awdl::sync::Clock>,
     caps: [u8; 28],
     ht: bool,
     vht: bool,
@@ -38,6 +40,9 @@ impl PeerCaps {
         self.ht && self.vht && self.caps[4] & 3 != 3
     }
     fn merge(&mut self, delta: Self) {
+        if delta.clock.is_some() {
+            self.clock = delta.clock;
+        }
         if delta.ht {
             self.caps[12..20].copy_from_slice(&delta.caps[12..20]);
             self.ht = true;
@@ -213,7 +218,13 @@ impl Control {
                     );
                 }
             }
-            let clock = self.node.clock();
+            // A selected peer can follow a different synchronization master.
+            let clock = self
+                .vht_peers
+                .iter()
+                .find(|(mac, _)| *mac == peer)
+                .and_then(|(_, caps)| caps.clock.as_ref())
+                .unwrap_or_else(|| self.node.clock());
             let boundary = now.0 + clock.next_slot_us(now);
             if let Some(seq) = self.node.peer(peer).and_then(|p| p.sequence) {
                 let slot = clock.slot(now);
@@ -240,7 +251,7 @@ impl Control {
                 } else {
                     (
                         (base + if same_before { 0 } else { 3072 }).max(1) as u64,
-                        boundary - if same_after { 0 } else { 3072 },
+                        boundary - if same_after { 0 } else { self.tx_drain_us },
                     )
                 };
                 if self.channels[1] == 0 && window != self.window {
@@ -263,6 +274,7 @@ pub unsafe extern "C" fn control_new(
     name: *const c_char,
     local_name: *const c_char,
     he: *const u8,
+    tx_drain_us: u32,
     emit: Emit,
     context: *mut c_void,
 ) -> *mut Control {
@@ -300,6 +312,7 @@ pub unsafe extern "C" fn control_new(
         context,
         deadline: Time(1),
         window: (0, 0),
+        tx_drain_us: u64::from(tx_drain_us),
         plan: None,
         observed: 1,
         available: 0,
@@ -327,7 +340,7 @@ pub unsafe extern "C" fn control_tick(p: *mut Control, now: u64) -> u64 {
 pub unsafe extern "C" fn control_rx(p: *mut Control, data: *const u8, len: usize, now: u64) {
     let p = unsafe { &mut *p };
     let data = unsafe { std::slice::from_raw_parts(data, len) };
-    if let Some((mac, delta)) = parse_caps(data, p.local_he.as_ref()) {
+    if let Some((mac, delta)) = parse_caps(data, p.local_he.as_ref(), Time(now)) {
         let index = match p.vht_peers.iter().position(|(addr, _)| *addr == mac) {
             Some(index) => index,
             None => {
@@ -590,7 +603,7 @@ fn he80(local: &[u8; 21], peer: &[u8]) -> Result<[u8; 8], &'static str> {
     ])
 }
 
-fn parse_caps(frame: &[u8], local_he: Option<&[u8; 21]>) -> Option<(MacAddr, PeerCaps)> {
+fn parse_caps(frame: &[u8], local_he: Option<&[u8; 21]>, now: Time) -> Option<(MacAddr, PeerCaps)> {
     if frame.len() < 40 || frame[0] != 0xd0 || frame[24..30] != [0x7f, 0, 0x17, 0xf2, 8, 0x10] {
         return None;
     }
@@ -600,6 +613,12 @@ fn parse_caps(frame: &[u8], local_he: Option<&[u8; 21]>) -> Option<(MacAddr, Pee
     while at + 3 <= frame.len() {
         let len = u16::from_le_bytes([frame[at + 1], frame[at + 2]]) as usize;
         let value = frame.get(at + 3..at + 3 + len)?;
+        if frame[at] == 4 {
+            let sync = owly_awdl::tlv::SyncParams::parse(value).ok()?;
+            let mut clock = owly_awdl::sync::Clock::new(now);
+            clock.update(now, sync.next_tu, sync.aw_counter);
+            parsed.clock = Some(clock);
+        }
         if frame[at] == 12 {
             if let Some(offset) = data_state_ext(value) {
                 parsed.apple_he = Some(value[offset + 1] & 1 != 0);

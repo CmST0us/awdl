@@ -16,12 +16,13 @@ struct Control;
 typedef int (*control_emit)(void *, uint32_t, const unsigned char *, size_t);
 /* secondary_channel == 0 keeps the primary channel and emits peer windows.
  * Otherwise the backend applies channel plans within the supported pair.
+ * tx_drain_us reserves firmware drain time before a channel switch.
  * he is NULL or points to the local 21-byte HE capability.
  */
 struct Control *control_new(const unsigned char *mac, unsigned char channel,
                             unsigned char secondary_channel, const char *target,
                             const char *local_name, const unsigned char *he,
-                            control_emit emit, void *context);
+                            uint32_t tx_drain_us, control_emit emit, void *context);
 uint64_t control_tick(struct Control *, uint64_t now_us);
 void control_rx(struct Control *, const unsigned char *, size_t,
                 uint64_t now_us);

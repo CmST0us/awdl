@@ -96,6 +96,7 @@ struct Manager {
     program: String,
     interface: String,
     channel: u8,
+    environment: Vec<(String, String)>,
     session: Option<Session>,
     owner: Option<String>,
     state: Arc<RwLock<Value>>,
@@ -150,6 +151,7 @@ impl Manager {
         }
         self.owned.store(true, Ordering::Release);
         let mut child = tokio::process::Command::new(&self.program)
+            .envs(self.environment.iter().map(|(key, value)| (key, value)))
             .args([
                 &self.interface,
                 &self.channel.to_string(),
@@ -205,6 +207,12 @@ impl Manager {
         } else {
             Err(Error::AccessDenied("应用未持有 AWDL".into()))
         }
+    }
+    async fn release(&mut self, sender: &str) -> Result<(), Error> {
+        if self.owner.is_some() {
+            self.check_owner(sender)?;
+        }
+        self.stop().await.map_err(Into::into)
     }
     async fn select(&mut self, sender: &str, mac: &str) -> Result<(), Error> {
         self.check_owner(sender)?;
@@ -309,6 +317,7 @@ pub async fn attach(
     channel: u8,
     owned: Arc<AtomicBool>,
     constraint: Option<String>,
+    environment: Vec<(String, String)>,
 ) -> Result<Service> {
     let cfg: Configuration = aware_common::configuration::load(
         include_str!("../../../config/awdl.toml"),
@@ -343,6 +352,7 @@ pub async fn attach(
         program,
         interface,
         channel,
+        environment,
         session: None,
         owner: None,
         state,
@@ -392,7 +402,7 @@ async fn serve(
             request = rx.recv() => match request {
                 Some(Request::Acquire(owner, target, reply)) => { let _ = reply.send(manager.acquire(owner, target).await); },
                 Some(Request::Select(owner, mac, reply)) => { let _ = reply.send(manager.select(&owner, &mac).await); },
-                Some(Request::Release(owner, reply)) => { let result = match manager.check_owner(&owner) { Ok(()) => manager.stop().await.map_err(Into::into), Err(error) => Err(error) }; let _ = reply.send(result); },
+                Some(Request::Release(owner, reply)) => { let _ = reply.send(manager.release(&owner).await); },
                 None => break Ok(()),
             },
             line = line => match line {
@@ -422,6 +432,7 @@ pub async fn run(mut radio: Radio, shutdown: impl std::future::Future<Output = (
         channel,
         radio.awdl_owned.clone(),
         None,
+        radio.awdl_environment()?,
     )
     .await?;
     let result = async {

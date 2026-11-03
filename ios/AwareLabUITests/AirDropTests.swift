@@ -12,6 +12,10 @@ final class AirDropTests: XCTestCase {
         let timeout = try XCTUnwrap(environment["AIRDROP_REQUEST_TIMEOUT"].flatMap(Double.init))
         let stepTimeout = try XCTUnwrap(environment["AIRDROP_STEP_TIMEOUT"].flatMap(Double.init))
 
+        let storage = try FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        let available = try XCTUnwrap(storage[.systemFreeSize] as? NSNumber).uint64Value
+        FileHandle.standardOutput.write(Data("AIRDROP_UI {\"event\":\"storage\",\"available_bytes\":\(available),\"thermal_state\":\(ProcessInfo.processInfo.thermalState.rawValue)}\n".utf8))
+
         XCUIDevice.shared.orientation = .portrait
         settings.launch()
         capture(settings, name: "settings")
