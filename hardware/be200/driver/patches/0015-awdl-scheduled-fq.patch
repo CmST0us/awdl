@@ -1,0 +1,18 @@
+Subject: AWDL：保留公平队列容量约束，避免按关窗等待时间丢包
+
+--- a/net/mac80211/tx.c
++++ b/net/mac80211/tx.c
+@@ -1421,6 +1421,13 @@
+ 
+ 	local = container_of(fq, struct ieee80211_local, fq);
+ 	txqi = container_of(tin, struct txq_info, tin);
++	/* AWDL intentionally waits through unavailable channel slots. This is
++	 * not congestion: retain FQ flow and memory bounds, but do not drop
++	 * packets because their scheduled wait exceeds CoDel's target.
++	 */
++	if (txqi->txq.vif->nan_data_awdl)
++		return fq_flow_dequeue(fq, flow);
++
+ 	cparams = &local->cparams;
+ 	cstats = &txqi->cstats;
+ 
