@@ -8,6 +8,8 @@
 
 公共管理器调用 `be200-awdl phyN channel target local-name`，`channel` 为 149 或 161，并传入硬件策略中的 TCP 参数。`target` 为空时只发现，`*` 选择第一个可用对端，也可传入 MAC；标准输入的 `SELECT MAC` 选择已发现对端，`STOP` 请求释放。标准输出与公共管理器交换 `started`、`peer`、`netdev-ready`、`stopped` 等 JSON 事件。
 
+创建 `awdl0` 后注册 `NL80211_CMD_UNEXPECTED_FRAME`。mac80211 收到来自未建站对端、发往本机的单播帧时报告源 MAC；后端以 `sender-requested` 事件交给公共应用选择实际发送者。当前数据站点仍用于组播发现，接收应用在没有活动 Ask 或上传时通过正常释放和申请切换对端。
+
 创建接口时设置 nl80211 `SOCKET_OWNER`。AWDL 对端的 NMI station 归 `awdl0` 所有，接口停止先回收 NDI station，再释放其 NMI station；控制套接字关闭也触发接口销毁。正常停止等待 `DEL_INTERFACE` 确认。`be200-awdl phyN stop` 可回收同 PHY 上残留的原生 `awdl0`。
 
 公共 `wirelessd.service` 在启动 hostap 后注册 `org.wirelessd1.Awdl`，与 Wi-Fi Aware Manager 共用设备锁和总线名。管理器在启动后端前记录所有权，只有释放完成后才清除；退出先停止 AWDL，再关闭 NAN。

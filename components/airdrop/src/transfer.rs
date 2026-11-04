@@ -5,7 +5,6 @@ use futures_util::{FutureExt, Stream, StreamExt};
 use owly_airdrop::{
     driver::{
         mdns::Mdns,
-        receiver::{Options, Receiver, ReceiverEvent},
         sender::{Event, Payload, Sender},
         tls::Identity,
     },
@@ -241,32 +240,36 @@ async fn receive(
     events: &Events,
     decisions: &mut mpsc::UnboundedReceiver<(u64, bool)>,
 ) -> Result<()> {
+    use crate::receiver::{Notice, Receiver};
+    use owly_airdrop::proto::receiver::Answer;
+    use std::sync::{Arc, atomic::AtomicU64};
     std::fs::create_dir_all(&cfg.directory)?;
     let radio = bus::proxy(connection, bus::NAME, bus::PATH, "org.wirelessd1.Awdl").await?;
-    {
+    let identity = Identity::generate()?;
+    let instance = identifier()?;
+    let ids = Arc::new(AtomicU64::new(1));
+    let mut target = "*".to_string();
+    loop {
         let mut signals = radio.receive_signal("Event").await?;
-        let _: () = radio.call("Acquire", &("*",)).await?;
+        let _: () = radio.call("Acquire", &(&target,)).await?;
         emit(events, json!({"event":"listening"}));
         let (index, address, _) = link(&mut signals).await?;
-        let identity = Identity::generate()?;
-        let mut config = owly_airdrop::proto::receiver::Config::new(&cfg.name);
-        config.model_name = cfg.model.clone();
-        config.ask_timeout = Duration::from_secs(cfg.accept_seconds);
-        let (receiver, mut incoming) = Receiver::bind(
+        let (mut receiver, mut incoming) = Receiver::bind(
             SocketAddrV6::new(address, cfg.port, 0, index),
             &identity,
-            Options::new(config, cfg.directory.clone()),
+            cfg,
+            ids.clone(),
+            events.clone(),
         )
         .await?;
-        let task = tokio::spawn(receiver.run());
-        let _registration = Mdns::new(index)
+        let registration = Mdns::new(index)
             .with_burst(Some(Burst {
                 count: cfg.announcement_count,
                 interval: Duration::from_micros(cfg.announcement_interval_us),
                 pause: Duration::from_millis(cfg.announcement_pause_ms),
             }))
             .register(Service {
-                instance: identifier()?,
+                instance: instance.clone(),
                 host: cfg.hostname.clone(),
                 port: cfg.port,
                 addr: address,
@@ -277,42 +280,57 @@ async fn receive(
             events,
             json!({"event":"ready","address":address.to_string(),"port":cfg.port,"name":cfg.name}),
         );
-        let mut pending = HashMap::new();
+        let mut pending = HashMap::<u64, tokio::sync::oneshot::Sender<Answer>>::new();
+        let mut candidate = None;
+        let mut released = false;
         loop {
             tokio::select! {
-                decision = decisions.recv() => {
-                    if let Some((id, accept)) = decision { if let Some(request) = pending.remove(&id) {
-                        let request: owly_airdrop::driver::receiver::Request = request;
-                        if accept { request.accept(); } else { request.decline(); }
-                    } }
-                },
-                event = incoming.recv() => match event {
-                    Some(ReceiverEvent::Request(request)) => {
-                        emit(events, json!({"event":"request","id":request.id,"peer":request.peer.to_string(),"offer":format!("{:?}",request.ask.offer)}));
+                biased;
+                notice = incoming.recv() => match notice.context("AirDrop 接收器退出")? {
+                    Notice::Request { id, peer, ask, reply } => {
+                        emit(events,json!({"event":"request","id":id,"peer":peer.to_string(),"offer":format!("{:?}",ask.offer)}));
                         if cfg.auto_accept {
-                            emit(events, json!({"event":"answered","id":request.id,"accept":true}));
-                            request.accept();
-                        } else { pending.insert(request.id,request); }
-                    },
-                    Some(ReceiverEvent::Withdrawn{id}) => { pending.remove(&id); emit(events,json!({"event":"withdrawn","id":id})); },
-                    Some(ReceiverEvent::Received{id,paths}) => { emit(events,json!({"event":"received","id":id,"paths":paths})); },
-                    Some(ReceiverEvent::Failed{id,reason}) => { pending.remove(&id); emit(events,json!({"event":"receive-failed","id":id,"error":reason})); },
-                    Some(event) => emit(events,json!({"event":"receiver","detail":format!("{event:?}")})),
-                    None => bail!("AirDrop 接收器退出"),
+                            emit(events,json!({"event":"answered","id":id,"accept":true}));
+                            let _ = reply.send(Answer::Accept);
+                        } else { pending.insert(id, reply); }
+                    }
+                    Notice::Idle => { pending.retain(|_, reply| !reply.is_closed()); }
                 },
+                decision = decisions.recv() => {
+                    if let Some((id, accept)) = decision {
+                        if let Some(reply) = pending.remove(&id) {
+                            let _ = reply.send(if accept { Answer::Accept } else { Answer::Decline });
+                        }
+                    }
+                },
+                result = receiver.step() => { result?; },
                 event = next(&mut signals) => {
-                    if event?["event"] == "released" { break; }
+                    let event = event?;
+                    if event["event"] == "sender-requested" {
+                        candidate = Some(event["mac"].as_str().context("发送者缺少 MAC 地址")?.to_string());
+                    }
+                    if event["event"] == "released" { released = true; target = "*".into(); break; }
                 },
             }
+            if !receiver.busy() {
+                if let Some(mac) = candidate.take() {
+                    emit(events, json!({"event":"sender-selecting","mac":mac}));
+                    target = mac;
+                    break;
+                }
+            }
         }
+        // Close all connections before releasing their native data station.
         incoming.close();
         for id in pending.keys() {
             emit(events, json!({"event":"withdrawn","id":id}));
         }
         drop(pending);
-        task.abort();
-        let _ = task.await;
-        Ok(())
+        receiver.close().await;
+        drop(registration);
+        if !released {
+            let _: () = radio.call("Release", &()).await?;
+        }
     }
 }
 pub async fn run(

@@ -351,8 +351,13 @@ static int create_data(struct run *r) {
       run_command((char *[]){"ip", "link", "set", "awdl0", "addrgenmode", "none", NULL});
   if (rc)
     return rc;
-  return run_command(
+  rc = run_command(
       (char *[]){"ip", "link", "set", "awdl0", "mtu", "1500", "up", NULL});
+  if (rc)
+    return rc;
+  begin(&r->events, &m, r->events.family, NL80211_CMD_UNEXPECTED_FRAME);
+  put32(&m, NL80211_ATTR_IFINDEX, r->ndi);
+  return request(&r->events, &m, NULL, NULL);
 }
 static int peer_caps(struct run *r, const unsigned char *caps) {
   struct message m;
@@ -602,7 +607,14 @@ static int receive(struct run *r) {
       uint64_t wdev = 0;
       if (length(a[NL80211_ATTR_WDEV]) == 8)
         memcpy(&wdev, value(a[NL80211_ATTR_WDEV]), 8);
-      if (g->cmd == NL80211_CMD_FRAME && wdev == r->nmi &&
+      if (g->cmd == NL80211_CMD_UNEXPECTED_FRAME &&
+          number(a[NL80211_ATTR_IFINDEX]) == r->ndi &&
+          length(a[NL80211_ATTR_MAC]) == 6) {
+        const unsigned char *mac = value(a[NL80211_ATTR_MAC]);
+        if (memcmp(mac, r->peer, 6))
+          printf("{\"event\":\"sender-requested\",\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\"}\n",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+      } else if (g->cmd == NL80211_CMD_FRAME && wdev == r->nmi &&
           a[NL80211_ATTR_FRAME]) {
         r->rx++;
         uint64_t delay = micros() - event.received;

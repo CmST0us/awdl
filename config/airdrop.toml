@@ -16,11 +16,13 @@ auto_accept = false
 hci = 0
 # 发现并选定系统设备名的总失败期限，正整数秒；收到匹配结果立即推进。
 discovery_seconds = 20
-# 单个候选的 mDNS 查询或 TLS Discover 失败期限，正整数秒。
+# 单个候选的 mDNS 查询、TLS Discover，以及接收端 TLS 握手和控制响应写入的失败期限，正整数秒。
 service_seconds = 5
 # 等待用户答复系统接收提示的最长时间，正整数秒；120 秒覆盖人工确认。
 accept_seconds = 120
-# 从用户接受到 Upload 成功响应的失败期限，正整数秒；600 秒覆盖两种后端的 500 MB 验收，完成后立即释放。
+# 接收端在 Ask 之前允许连接无流量的最长时间，正整数秒；不限制常驻接收总时长。
+receive_idle_seconds = 120
+# 从用户接受到 Upload 成功响应的失败期限，正整数秒；同时约束发送与接收，完成后立即推进。
 upload_seconds = 600
 # 每轮 mDNS 重复公告数量，正整数；固定带宽接入用重复公告覆盖对端可用窗口。
 announcement_count = 64

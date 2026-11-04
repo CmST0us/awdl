@@ -4,6 +4,60 @@ final class AirDropTests: XCTestCase {
     private let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
     private let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
 
+    @MainActor func testSendFile() throws {
+        continueAfterFailure = false
+        let environment = ProcessInfo.processInfo.environment
+        let filename = try XCTUnwrap(environment["AIRDROP_FILENAME"])
+        let receiver = try XCTUnwrap(environment["AIRDROP_RECEIVER_NAME"])
+        let timeout = try XCTUnwrap(environment["AIRDROP_REQUEST_TIMEOUT"].flatMap(Double.init))
+        let stepTimeout = try XCTUnwrap(environment["AIRDROP_STEP_TIMEOUT"].flatMap(Double.init))
+        let files = XCUIApplication(bundleIdentifier: "com.apple.DocumentsApp")
+        let storage = try FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        let available = try XCTUnwrap(storage[.systemFreeSize] as? NSNumber).uint64Value
+        FileHandle.standardOutput.write(Data("AIRDROP_UI {\"event\":\"storage\",\"available_bytes\":\(available)}\n".utf8))
+
+        XCUIDevice.shared.orientation = .portrait
+        settings.launch()
+        try tap(settings, labels: ["Wi-Fi", "无线局域网"], timeout: stepTimeout)
+        capture(settings, name: "send-wifi")
+        files.launch()
+        if files.buttons["完成"].exists { files.buttons["完成"].tap() }
+        let search = files.searchFields.firstMatch
+        if !search.exists {
+            try tap(files, labels: ["Search", "搜索"], timeout: stepTimeout)
+        }
+        XCTAssertTrue(search.waitForExistence(timeout: stepTimeout))
+        search.tap()
+        if let value = search.value as? String, !value.isEmpty, value != search.placeholderValue {
+            search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count))
+        }
+        search.typeText(filename)
+        let matches = files.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", filename + ","))
+        XCTAssertTrue(matches.firstMatch.waitForExistence(timeout: timeout), "没有找到待发送文件：\(filename)")
+        // Files keeps the underlying directory in its accessibility tree;
+        // the search result is the last matching cell above that directory.
+        let file = try XCTUnwrap(matches.allElementsBoundByIndex.last)
+        capture(files, name: "send-file-selected")
+        files.buttons["OverflowBarButtonItem"].tap()
+        try tap(files, labels: ["Select", "选择"], timeout: stepTimeout)
+        file.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.5)).tap()
+        let share = files.buttons.matching(NSPredicate(format: "label IN %@", ["Share", "共享"]))
+        XCTAssertTrue(share.firstMatch.waitForExistence(timeout: stepTimeout))
+        try XCTUnwrap(share.allElementsBoundByIndex.last).tap()
+        capture(files, name: "send-share-sheet")
+        try tap(files, labels: ["AirDrop", "隔空投送"], timeout: stepTimeout)
+        event("send-ready")
+        let target = files.buttons.matching(NSPredicate(format: "label CONTAINS %@", receiver)).firstMatch
+        XCTAssertTrue(target.waitForExistence(timeout: timeout), "AirDrop 未发现接收端：\(receiver)")
+        capture(files, name: "send-target")
+        target.tap()
+        event("send-requested")
+        let completed = files.staticTexts.matching(NSPredicate(format: "label IN %@", ["Sent", "已发送"])).firstMatch
+        XCTAssertTrue(completed.waitForExistence(timeout: timeout), "AirDrop 未确认发送完成")
+        event("sent")
+        capture(files, name: "send-completed")
+    }
+
     @MainActor func testReceiveFile() throws {
         continueAfterFailure = false
         let environment = ProcessInfo.processInfo.environment

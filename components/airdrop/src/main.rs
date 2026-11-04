@@ -1,4 +1,5 @@
 mod configuration;
+mod receiver;
 mod transfer;
 use anyhow::{Context, Result, bail, ensure};
 use aware_common::bus;

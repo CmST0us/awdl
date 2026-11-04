@@ -4,9 +4,9 @@ PCI `8086:272b`，hostap 使用 nl80211。运行时所选 PHY 只保留 NAN/NAN_
 
 驱动采用 Ubuntu backport 24.70-14867、项目补丁及 c108 / PNVM 固件。构建安装见[公共入口](../../docs/build.md)，芯片固件及授权位于 firmware。BE200 backport 会替换 cfg80211/mac80211；本组件一次运行一种硬件，不能据此声明与 RTL 驱动可同时运行。
 
-## 已知限制
+## NAN 密钥释放
 
-hostap 被强制终止后，cfg80211 异步销毁 NAN 接口，现有 iwlmld 的群组密钥清理可能在广播或管理站点已失效时触发 `iwl_mld_get_key_sta_mask` 警告。公共服务正常停止时等待 hostap 退出与内核接口释放；驱动异常退出路径的修复独立于该正常生命周期。
+驱动补丁 `0029` 在 NAN 管理站点销毁前释放剩余组密钥，使固件密钥删除先于站点销毁。hostap 异常退出验收中 IGTK / BIGTK 删除成功，无新增密钥警告；记录见[验收结果](../../docs/acceptance.md#nan-异常退出的密钥回收)。公共服务正常停止仍等待 hostap 退出与内核接口释放。
 
 ## 原生 AWDL
 

@@ -70,6 +70,8 @@ iPad 使用系统 AirDrop 的“所有人（10 分钟）”模式，发送前开
 
 发送端按 TLS Discover 返回的系统设备名选择接收者。发现过程中优先尝试尚未查询的 AWDL 对端；链路、mDNS 或 Discover 的短暂失败保留重试资格，已确认系统名称不匹配的设备在本次请求中排除。重试仍受同一个总发现期限约束，`candidate.attempt` 记录该对端的尝试次数。
 
+BE200 接收模式先建立发现公告所需的数据站点，再依据内核报告的其他发送者单播请求选择实际对端。`sender-selecting` 记录切换目标；切换前关闭旧连接并等待原生 STOP 完成，服务实例与 TLS 身份保持不变。普通 Discover 不锁定接收资格；Ask、用户答复及上传期间保留当前数据站点，待连接结束后处理其他发送者的请求。接收连接的空闲期限、等待答复期限和整次上传期限分别配置。
+
 发送端使用接收者 mDNS TXT 中的 `flags` 协商正文格式：支持 DVZip 的接收者使用 DVZip，其余使用 gzip。`discovered.flags` 记录对端公告的能力；正文大小和速度按实际选定格式统计。
 
 BE200 在现有守护进程中注册两个协议接口，AWDL 释放不关闭 NAN。RTL 的两个运行单元共用 PCI 设备锁及 `org.wirelessd1`，同一网卡已被占用时启动报告忙。服务启动不自动停止其他无线服务。配置、配对和共享文件保留，默认开机启用设置保持原部署选择。
@@ -85,11 +87,11 @@ BE200 在现有守护进程中注册两个协议接口，AWDL 释放不关闭 NA
 
 AirDrop 进度包括操作 ID、已发送压缩正文与总正文大小；`delivered` 表示收到 Upload 成功响应。`file_bytes` 是原文件长度，`compressed_bytes` 是压缩归档正文长度。`upload_seconds` 从用户接受到 Upload 成功响应，两个 `MBps` 字段分别按原文件和压缩正文计算，单位为十进制 MB/s。
 
-`request`、`withdrawn`、`received` 和 `receive-failed` 关联同一个接收请求 ID。默认只在明确接受后落盘；自动接受策略从应用配置读取。回收失败保留错误及资源所有权，处理现场后可用 `airdrop stop` 再次请求清理。
+`request`、`withdrawn`、`received` 和 `receive-failed` 关联同一个接收请求 ID。`receive-progress.bytes` 为解包后已写入的累计文件字节，`seconds` 从接受起算。`received.file_bytes`、`receive_seconds` 与 `file_MBps` 记录解包后文件总量、接受至响应完成的时间及均速。`received.paths` 给出最终落盘路径，`response_sent` 表示成功响应及连接关闭是否完成；文件已提交而响应失败时仍保留文件，并报告连接失败。默认只在明确接受后落盘；自动接受策略从应用配置读取。回收失败保留错误及资源所有权，处理现场后可用 `airdrop stop` 再次请求清理。
 
 ## 限制
 
-- iPad → Linux 接收尚未通过文件验收。接收模式通过 `Acquire("*")` 绑定首个可用 AWDL 对端；BE200 多设备实测中，mini 收到 mDNS 公告但数据链路绑定另一台设备，TCP 连接未建立，系统列表没有显示接收者。
+- BE200 已通过 iPad mini → Linux 的小文件与 500 MB 接收及逐字节一致性验收；RTL 的反向接收尚无本轮真机结果。
 - 当前 RTL 驱动的 NAN 与 AWDL 使用同一组运行资源，活动 NAN 会使 AWDL 启动返回忙；RTL 的驱动资源共享尚未实现。
 - BE200 AWDL 仅支持一个数据对端；NAN 数据频率 5745 / 5805 MHz 分别选择主信道 149 / 161，协商 HE80 / VHT80，在同一频块内跟随两者。活动 NDP 占用共享 PHY 时，AWDL 使用配置主信道的公共时隙；活动 NDP 与 AWDL 并发传输尚未完成验收。
 - RTL AWDL 仅支持一个数据对端，在主信道 149 启动并跟随同一 80 MHz 块内的 149/161；不支持跨块切换或多对端并发。

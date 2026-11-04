@@ -17,3 +17,4 @@ libc.workspace = true
 owly-airdrop = { git = "https://github.com/t4t5/owly.git", rev = "0f2ca4087e6d938d823e76c856fcd04d0a0162b6", features = ["mdns"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 socket2 = { version = "0.6", features = ["all"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }

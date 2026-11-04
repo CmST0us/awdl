@@ -26,3 +26,18 @@ python3 ios/scripts/run_airdrop_ui.py --file /var/tmp/airdrop-large.txt
 “所有人”按系统规则在十分钟后恢复；每轮测试重新开启。测试保留既有应用身份、配对记录和接收文件。UI 自动点击成功不代表无线传输成功，结果中分别保留两端事件。
 
 `result.json` 的 `throughput` 同时记录接受到 Upload 成功响应的整文件平均速度，以及正文进度按时间线性插值得到的 5 秒滑窗峰值。单位为十进制 MB/s；原文件与压缩正文分开统计，峰值原文件等效速度按两者总字节比例换算。峰值是发送端应用正文进度，不是空口速率或接收端落盘速率；不足 5 秒的传输不报告滑窗峰值。
+
+## AirDrop 自动发送验收
+
+`AirDropTests/testSendFile` 从系统“文件”App 搜索指定文件，通过选择与共享菜单打开 AirDrop，选中指定接收者并等待“已发送”。开始时记录可用空间和系统 Wi-Fi 页面，保留 AP 连接；文件、云端副本和安装身份均保留。板端先运行 `airdrop receive`，在收到匹配的 `request` 后接受。
+
+真机 `xctestrun` 的 `AwareLabUITests.EnvironmentVariables` 接受这些必填输入：
+
+| 字段 | 含义与约束 |
+| --- | --- |
+| `AIRDROP_FILENAME` | 文件 App 中现有文件的完整名称，非空，包含扩展名 |
+| `AIRDROP_RECEIVER_NAME` | AirDrop 接收者的系统显示名，非空，与板端配置一致 |
+| `AIRDROP_STEP_TIMEOUT` | 单次界面元素出现的失败期限，正数秒 |
+| `AIRDROP_REQUEST_TIMEOUT` | 文件搜索、接收者发现和等待发送完成各阶段的失败期限，正数秒 |
+
+使用已配置签名的 AwareLab scheme 构建后，以 `-only-testing:AwareLabUITests/AirDropTests/testSendFile` 运行。操作设备前持有共享租约。`send-ready`、`send-requested`、`sent` 分别表示分享界面就绪、点击接收者及系统确认完成。验收同时要求板端 `received`、最终文件字节数与原文件逐字节比较通过；UI 成功不能代替落盘验证。
