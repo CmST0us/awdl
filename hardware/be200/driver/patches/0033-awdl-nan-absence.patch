@@ -1,0 +1,70 @@
+Subject: [PATCH] 向 AWDL 控制端报告 NAN 发现的接收空隙
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/vendor-cmd.h
++++ b/drivers/net/wireless/intel/iwlwifi/mld/vendor-cmd.h
+@@ -5,6 +5,7 @@
+ #ifndef __iwl_mld_vend_cmd_h__
+ #define __iwl_mld_vend_cmd_h__
+ 
++void iwl_mld_send_nan_absence(struct iwl_mld *mld, u8 band, u64 ended);
+ void iwl_mld_vendor_cmds_register(struct iwl_mld *mld);
+ void iwl_mld_send_link_info_changed(struct iwl_mld *mld,
+ 				    struct ieee80211_vif *vif);
+--- a/drivers/net/wireless/intel/iwlwifi/mld/vendor-cmd.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/vendor-cmd.c
+@@ -1216,16 +1216,36 @@
+ 
+ enum iwl_mvm_vendor_events_idx {
+ 	IWL_MLD_VENDOR_EVENT_IDX_LINK_INFO_CHANGED,
++	IWL_MLD_VENDOR_EVENT_IDX_NAN_ABSENCE,
+ 	NUM_IWL_MLD_VENDOR_EVENT_IDX,
+ };
+ 
+ static const struct nl80211_vendor_cmd_info
+ iwl_mld_vendor_events[NUM_IWL_MLD_VENDOR_EVENT_IDX] = {
++	[IWL_MLD_VENDOR_EVENT_IDX_NAN_ABSENCE] = {
++		.vendor_id = INTEL_OUI,
++		.subcmd = 0x4157444c,
++	},
+ 	[IWL_MLD_VENDOR_EVENT_IDX_LINK_INFO_CHANGED] = {
+ 		.vendor_id = INTEL_OUI,
+ 		.subcmd = IWL_MVM_VENDOR_CMD_LINK_INFO_CHANGED_EVENT,
+ 	},
+ };
++
++void iwl_mld_send_nan_absence(struct iwl_mld *mld, u8 band, u64 ended)
++{
++	struct sk_buff *msg;
++	u8 *data;
++
++	msg = cfg80211_vendor_event_alloc(mld->hw->wiphy, NULL, 9,
++		IWL_MLD_VENDOR_EVENT_IDX_NAN_ABSENCE, GFP_ATOMIC);
++	if (!msg)
++		return;
++	data = skb_put(msg, 9);
++	data[0] = band;
++	put_unaligned_le64(ended, data + 1);
++	cfg80211_vendor_event(msg, GFP_ATOMIC);
++}
+ 
+ void iwl_mld_send_link_info_changed(struct iwl_mld *mld,
+ 				    struct ieee80211_vif *vif)
+--- a/drivers/net/wireless/intel/iwlwifi/mld/notif.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/notif.c
+@@ -5,6 +5,7 @@
+ 
+ #include "mld.h"
+ #include "notif.h"
++#include "vendor-cmd.h"
+ #include "scan.h"
+ #include "iface.h"
+ #include "mlo.h"
+@@ -566,6 +567,8 @@
+ 		if (rx_h->cmd_id == WIDE_ID(MAC_CONF_GROUP, NAN_DW_END_NOTIF)) {
+ 			const struct iwl_nan_dw_end_notif *dw = (const void *)pkt->data;
+ 
++			iwl_mld_send_nan_absence(mld, dw->band, ktime_get_ns());
++
+ 			IWL_DEBUG_INFO(mld, "NAN_DW_RX mono_ns=%llu band=%u seq=%u\n",
+ 				       (unsigned long long)ktime_get_ns(), dw->band,
+ 				       le16_to_cpu(pkt->hdr.sequence));

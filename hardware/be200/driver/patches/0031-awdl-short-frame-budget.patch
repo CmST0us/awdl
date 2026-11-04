@@ -1,0 +1,16 @@
+Subject: [PATCH] 使用已完成短帧的 PHY 反馈推进 AWDL 发送预算
+
+接收文件时数据队列主要承载 TCP ACK，无法产生大包吞吐样本。
+收到固件 PHY 反馈后即可按空口预算提交后续帧，不再永久串行等待。
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tx.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tx.c
+@@ -105,7 +105,7 @@
+ 	/* Learn the initial rate from one completed MPDU before expanding
+ 	 * the queue; firmware may still be using its low-rate startup mode.
+ 	 */
+-	if (!rate)
++	if (!rate && !phy_cost)
+ 		return !pending;
+ 	cost = div_u64(bytes * max(rate, phy_cost) * 5, 4 * 256);
+ 	/* An empty queue can sample one MPDU in the first half-window,

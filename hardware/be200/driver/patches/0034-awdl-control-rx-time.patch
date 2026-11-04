@@ -1,0 +1,77 @@
+Subject: [PATCH] 为 AWDL 控制帧保留驱动入口接收时间
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/vendor-cmd.h
++++ b/drivers/net/wireless/intel/iwlwifi/mld/vendor-cmd.h
+@@ -5,6 +5,8 @@
+ #ifndef __iwl_mld_vend_cmd_h__
+ #define __iwl_mld_vend_cmd_h__
+ 
++void iwl_mld_send_awdl_frame(struct iwl_mld *mld, const struct sk_buff *frame,
++			     u64 received);
+ void iwl_mld_send_nan_absence(struct iwl_mld *mld, u8 band, u64 ended);
+ void iwl_mld_vendor_cmds_register(struct iwl_mld *mld);
+ void iwl_mld_send_link_info_changed(struct iwl_mld *mld,
+--- a/drivers/net/wireless/intel/iwlwifi/mld/vendor-cmd.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/vendor-cmd.c
+@@ -1232,6 +1232,29 @@
+ 	},
+ };
+ 
++/* Control frames carry their driver ingress time, before Netlink delivery
++ * and userspace scheduling. IP data remains on the native NAN_DATA netdev.
++ */
++void iwl_mld_send_awdl_frame(struct iwl_mld *mld, const struct sk_buff *frame,
++                           u64 received)
++{
++	struct sk_buff *msg;
++	u8 *data;
++
++	msg = cfg80211_vendor_event_alloc(mld->hw->wiphy, NULL, 9 + frame->len,
++		IWL_MLD_VENDOR_EVENT_IDX_NAN_ABSENCE, GFP_ATOMIC);
++	if (!msg)
++		return;
++	data = skb_put(msg, 9 + frame->len);
++	data[0] = 2; /* 0/1: NAN band absence; 2: timestamped AWDL action */
++	put_unaligned_le64(received, data + 1);
++	if (skb_copy_bits(frame, 0, data + 9, frame->len)) {
++		kfree_skb(msg);
++		return;
++	}
++	cfg80211_vendor_event(msg, GFP_ATOMIC);
++}
++
+ void iwl_mld_send_nan_absence(struct iwl_mld *mld, u8 band, u64 ended)
+ {
+ 	struct sk_buff *msg;
+--- a/drivers/net/wireless/intel/iwlwifi/mld/rx.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/rx.c
+@@ -4,6 +4,7 @@
+  */
+ 
+ #include <net/mac80211.h>
++#include <net/awdl.h>
+ #include <kunit/static_stub.h>
+ #include <linux/version.h>
+ 
+@@ -11,6 +12,7 @@
+ #include "sta.h"
+ #include "agg.h"
+ #include "rx.h"
++#include "vendor-cmd.h"
+ #include "hcmd.h"
+ #include "iface.h"
+ #include "time_sync.h"
+@@ -2775,6 +2777,13 @@
+ 				 rxb, &mpdu_desc))
+ 		goto drop;
+ 
++	if (mld->nan_device_vif &&
++	    !(rx_status->flag & RX_FLAG_FAILED_FCS_CRC) &&
++	    ieee80211_is_awdl_action(skb->data, skb->len) &&
++	    (is_multicast_ether_addr(hdr->addr1) ||
++	     ether_addr_equal(hdr->addr1, mld->nan_device_vif->addr)))
++		iwl_mld_send_awdl_frame(mld, skb, ktime_get_ns());
++
+ 	/* time sync frame is saved and will be released later when the
+ 	 * notification with the timestamps arrives.
+ 	 */

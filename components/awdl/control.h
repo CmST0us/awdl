@@ -24,6 +24,16 @@ struct Control *control_new(const unsigned char *mac, unsigned char channel,
                             const char *local_name, const unsigned char *he,
                             uint32_t tx_drain_us, control_emit emit, void *context);
 uint64_t control_tick(struct Control *, uint64_t now_us);
+/* Repeating local radio absence, in the control epoch's microseconds.
+ * A source replaces its previous interval; period == 0 removes it.
+ * Advertised receive slots exclude overlaps while other radio users run.
+ */
+void control_absence(struct Control *, uint8_t source, int64_t begin_us,
+                     int64_t end_us, int64_t period_us);
+/* Local VHT capability word; use its MPDU/A-MPDU receive limits. */
+void control_rx_aggregation(struct Control *, uint32_t vht_capability);
+/* Completed hardware channel-switch duration, in microseconds. */
+void control_switch_delay(struct Control *, uint64_t elapsed_us);
 /* received_us is the reception time, independent of delayed event handling.
  * Both timestamps use the control epoch; now_us advances protocol timers.
  */

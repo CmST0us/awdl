@@ -55,6 +55,16 @@ Intel vendor command `0x001735 / 0x4157444c` 以 `awdl0` 的 ifindex 寻址：
 
 默认 `dual_band = false` 保留 2.4 GHz NAN 发现和 5 GHz 数据链路，关闭可选的 5 GHz 发现窗口。双频发现时，NAN DW 与 AWDL PHY 修改重叠会延长切换命令，使部分可用窗口无法用于数据发送。该策略由硬件配置拥有，不改变配对记录或文件服务契约。
 
+## 接收调度
+
+`0031` 使短帧使用已有的固件 PHY 成本参与发送预算。TCP ACK 不会产生大数据帧的经验速率样本，不能据此一直串行提交。`0032` 在 HT 诊断分类记录接收重排队列、BAID 与站点归属，默认关闭。
+
+`0033` 将 NAN DW 结束通知的频段和单调时钟时间传给原生控制端。硬件后端按发现周期及切换占用报告接收空隙；公共 AWDL 公告排除与空隙重叠的时隙，并为实际完成的 PHY 切换预留时间。日程保留 16 个 64 TU 条目，NAN 继续运行。`local-schedule` 记录公告日程、参考时刻、周期空隙与已观测的切换耗时。
+
+`0034` 将 AWDL 控制帧与驱动入口的单调时钟时间放入同一 vendor 事件。控制端使用该接收时刻校准对端日程，消息传递和用户态处理的等待时间分别统计，不进入同步参考时刻。
+
+BE200 的 MPDU / A-MPDU 接收上限从 nl80211 NAN PHY 能力读取并写入 AWDL 公告；同一能力源决定驱动接收支持范围。接收数据仍使用原生 NAN_DATA、硬件聚合与内核 TCP。
+
 ## TCP 策略
 
 `hardware/be200/radio.toml` 的 `[awdl]` 定义拥塞控制算法、初始拥塞窗口、乱序阈值、接口发送队列长度和发送排空余量，字段必填。`wirelessd` 校验后通过 `AWARE_AWDL_TCP_CONGESTION`、`AWARE_AWDL_INITIAL_WINDOW`、`AWARE_AWDL_REORDERING`、`AWARE_AWDL_TX_QUEUE`、`AWARE_AWDL_TX_DRAIN_TU` 传给后端；这些进程环境不是第二份配置来源。后端为会话主机路由设置 TCP 策略，并使用 fq pacing。建立新链路时通过通用 Netlink 清除该本地地址与对端地址对应的旧 TCP 指标，使路由参数用于新连接；无缓存时正常继续。最小重传期限为 1100 ms，覆盖一个 1048.576 ms AWDL 周期；路由和队列随接口销毁，不改变系统全局 TCP 默认值。

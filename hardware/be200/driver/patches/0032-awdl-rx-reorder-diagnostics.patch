@@ -1,0 +1,24 @@
+Subject: [PATCH] 记录接收数据的固件重排与站点归属
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/agg.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/agg.c
+@@ -207,6 +207,19 @@
+ 
+ 	baid = u32_get_bits(reorder, IWL_RX_MPDU_REORDER_BAID_MASK);
+ 
++	if (iwl_have_debug_level(IWL_DL_HT) &&
++	    ieee80211_is_data_qos(hdr->frame_control) &&
++	    !(IEEE80211_SEQ_TO_SN(le16_to_cpu(hdr->seq_ctrl)) & 511)) {
++		struct iwl_mld_sta *owner = sta ? iwl_mld_sta_from_mac80211(sta) : NULL;
++
++		IWL_DEBUG_HT(mld,
++			     "RX_REORDER queue=%d tid=%u seq=%u status=0x%x reorder=0x%x flags2=0x%x amsdu=0x%x owner=%d type=%d len=%u\n",
++			     queue, tid, IEEE80211_SEQ_TO_SN(le16_to_cpu(hdr->seq_ctrl)),
++			     le32_to_cpu(desc->status), reorder, desc->mac_flags2,
++			     desc->amsdu_info, owner ? owner->deflink.fw_id : -1,
++			     owner ? owner->vif->type : -1, skb->len);
++	}
++
+ 	/* This also covers the case of receiving a Block Ack Request
+ 	 * outside a BA session; we'll pass it to mac80211 and that
+ 	 * then sends a delBA action frame.

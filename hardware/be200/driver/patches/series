@@ -28,3 +28,7 @@
 0028-awdl-ready-window.patch
 0029-nan-key-teardown-order.patch
 0030-nan-awdl-timeline.patch
+0031-awdl-short-frame-budget.patch
+0032-awdl-rx-reorder-diagnostics.patch
+0033-awdl-nan-absence.patch
+0034-awdl-control-rx-time.patch

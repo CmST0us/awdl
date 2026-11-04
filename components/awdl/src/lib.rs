@@ -22,6 +22,10 @@ pub struct Control {
     vht_peers: Vec<(MacAddr, PeerCaps)>,
     announced: Vec<MacAddr>,
     local_he: Option<[u8; 21]>,
+    absences: Vec<(u8, i64, i64, i64)>,
+    advertised_sequence: Option<[u8; 16]>,
+    switch_us: u64,
+    rx_aggregation: u32,
 }
 #[derive(Default, Clone)]
 struct PeerCaps {
@@ -118,7 +122,7 @@ impl Control {
                         // The countdown describes target_tx; account for time
                         // spent processing the received synchronization frame.
                         frame.bytes[32..36].copy_from_slice(&(now.0 as u32).to_le_bytes());
-                        advertise_vht80(&mut frame.bytes);
+                        advertise_vht80(&mut frame.bytes, self.rx_aggregation);
                         if let Some(he) = self.local_he {
                             advertise_he80(&mut frame.bytes, &he);
                         }
@@ -138,6 +142,9 @@ impl Control {
                                     peer,
                                     clock,
                                     self.channels,
+                                    &self.absences,
+                                    self.switch_us,
+                                    &mut self.advertised_sequence,
                                     now,
                                 );
                             }
@@ -267,10 +274,12 @@ impl Control {
                     self.peer_sequence = Some((peer, sequence));
                 }
                 let slot = clock.slot(now);
-                let channels = std::array::from_fn(|i| match seq.channel((slot + i) % 16) {
-                    channel if self.channels.contains(&channel) => channel,
-                    _ => 0,
-                });
+                let mut channels: [u8; 16] =
+                    std::array::from_fn(|i| match seq.channel((slot + i) % 16) {
+                        channel if self.channels.contains(&channel) => channel,
+                        _ => 0,
+                    });
+                reserve_switches(&mut channels, self.switch_us);
                 let base = boundary as i64 - 65536;
                 let changed = plan_changed(self.plan.as_ref(), base, &channels);
                 if changed {
@@ -375,6 +384,10 @@ pub unsafe extern "C" fn control_new(
         report: 1,
         vht_peers: Vec::new(),
         announced: Vec::new(),
+        absences: Vec::new(),
+        advertised_sequence: None,
+        switch_us: 0,
+        rx_aggregation: 1 | (3 << 23),
         local_he: if he.is_null() {
             None
         } else {
@@ -399,6 +412,30 @@ pub unsafe extern "C" fn control_tick(p: *mut Control, now: u64) -> u64 {
     let p = unsafe { &mut *p };
     p.input(Input::Timer(Time(now)), Time(now));
     p.deadline.0
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn control_absence(
+    p: *mut Control,
+    source: u8,
+    begin: i64,
+    end: i64,
+    period: i64,
+) {
+    let p = unsafe { &mut *p };
+    p.absences.retain(|entry| entry.0 != source);
+    if end > begin && period > end - begin {
+        p.absences.push((source, begin, end, period));
+    }
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn control_rx_aggregation(p: *mut Control, vht_capability: u32) {
+    let p = unsafe { &mut *p };
+    p.rx_aggregation = vht_capability & (3 | (7 << 23));
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn control_switch_delay(p: *mut Control, elapsed_us: u64) {
+    let p = unsafe { &mut *p };
+    p.switch_us = p.switch_us.max(elapsed_us);
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn control_rx(
@@ -487,7 +524,7 @@ pub unsafe extern "C" fn control_rx(
 pub unsafe extern "C" fn control_free(p: *mut Control) {
     drop(unsafe { Box::from_raw(p) });
 }
-fn advertise_vht80(frame: &mut Vec<u8>) {
+fn advertise_vht80(frame: &mut Vec<u8>, rx_aggregation: u32) {
     if frame.len() < 40 || frame[0] != 0xd0 {
         return;
     }
@@ -511,10 +548,10 @@ fn advertise_vht80(frame: &mut Vec<u8>) {
         }
         at += 3 + len;
     }
-    // VHT80, two streams MCS0-9, short GI, 7991-byte MPDU, 64-KiB A-MPDU.
-    frame.extend_from_slice(&[
-        17, 14, 0, 191, 12, 0x21, 0, 0x80, 1, 0xfa, 0xff, 0, 0, 0xfa, 0xff, 0, 0,
-    ]);
+    // VHT80, two streams MCS0-9, short GI, local receive aggregation limits.
+    frame.extend_from_slice(&[17, 14, 0, 191, 12]);
+    frame.extend_from_slice(&(0x20 | rx_aggregation).to_le_bytes());
+    frame.extend_from_slice(&[0xfa, 0xff, 0, 0, 0xfa, 0xff, 0, 0]);
 }
 fn plan_changed(old: Option<&(i64, [u8; 16])>, base: i64, channels: &[u8; 16]) -> bool {
     old.is_none_or(|(start, previous)| {
@@ -526,7 +563,23 @@ fn plan_changed(old: Option<&(i64, [u8; 16])>, base: i64, channels: &[u8; 16]) -
             || (0..16).any(|i| channels[i] != previous[(i + slots as usize) % 16])
     })
 }
-// The advertised sequence, AW counter and election must describe one clock.
+fn reserve_switches(channels: &mut [u8; 16], delay_us: u64) {
+    // Complete the measured retune before advertising the next channel.
+    // Radios that fit in the regular 3 TU guard need no extra closed slot.
+    let count = delay_us.saturating_sub(3072).div_ceil(65536).min(16) as usize;
+    let original = *channels;
+    for i in 0..16 {
+        if original[i] != 0
+            && (1..=count).any(|ahead| {
+                let next = original[(i + ahead) % 16];
+                next != 0 && next != original[i]
+            })
+        {
+            channels[i] = 0;
+        }
+    }
+}
+// The advertised sequence, AW counter and election describe one clock.
 // Follow the selected peer's path to its master while serving that peer.
 fn advertise_follow(
     frame: &mut Vec<u8>,
@@ -534,6 +587,9 @@ fn advertise_follow(
     peer: &owly_awdl::peer::Peer,
     clock: &owly_awdl::sync::Clock,
     channels: [u8; 2],
+    absences: &[(u8, i64, i64, i64)],
+    switch_us: u64,
+    advertised: &mut Option<[u8; 16]>,
     now: Time,
 ) {
     use owly_awdl::{
@@ -551,17 +607,42 @@ fn advertise_follow(
     } else {
         node.clock()
     };
-    let sequence = Sequence {
+    let mut sequence = Sequence {
         encoding: Encoding::OpClass,
         slots: sequence
             .channels()
             .map(|c| [if channels.contains(&c) { c } else { 0 }, 0x80]),
     };
+    let mut advertised_channels = sequence.channels();
+    reserve_switches(&mut advertised_channels, switch_us);
+    let slot = clock.slot(now);
+    let base = now.0 as i64 + clock.next_slot_us(now) as i64 - 65536;
+    for offset in 0..16 {
+        let start = base + offset as i64 * 65536 + 3072;
+        let end = base + (offset + 1) as i64 * 65536 - 3072;
+        if absences.iter().any(|&(_, begins, ends, period)| {
+            let phase = (start - begins).rem_euclid(period);
+            phase < ends - begins || period - phase < end - start
+        }) {
+            advertised_channels[(slot + offset) % 16] = 0;
+        }
+    }
+    sequence.slots = advertised_channels.map(|c| [c, 0x80]);
+    if *advertised != Some(advertised_channels) {
+        println!(
+            "{}",
+            serde_json::json!({"event":"local-schedule", "elapsed_us":now.0,
+                "channels":advertised_channels, "slot_us":65536,
+                "epoch_us":base - slot as i64 * 65536,
+                "periodic_absences":absences, "switch_us":switch_us})
+        );
+        *advertised = Some(advertised_channels);
+    }
     let own = tlv::Own {
         addr: node.config().addr,
         name: &node.config().name,
         devclass: 1,
-        channel: sequence.channel(clock.slot(now)),
+        channel: advertised_channels[slot],
         master_channel: Channel(channels[0]),
         next_tu: clock.next_slot_tu(now),
         aw_counter: clock.current_aw(now),

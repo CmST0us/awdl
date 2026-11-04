@@ -45,12 +45,13 @@ struct run {
   unsigned active_channel, switches;
   int following;
   uint64_t plan_base, plan_open, plan_close, switch_max_us, switch_total_us;
-  uint64_t rx_delay_max_us;
+  uint64_t rx_delay_max_us, rx_capture_max_us;
   unsigned char plan_channels[16];
   int planned;
   char *congestion, *initial_window, *tx_queue, *reordering;
   unsigned char he[21];
   int has_he;
+  uint32_t vht_capability;
   int error;
 };
 static volatile sig_atomic_t stopped;
@@ -125,12 +126,14 @@ static void parse(const void *bytes, size_t len, const struct nlattr **attrs,
   const unsigned char *pos = bytes;
   while (len >= NLA_HDRLEN) {
     const struct nlattr *a = (const void *)pos;
-    if (a->nla_len < NLA_HDRLEN || (size_t)NLA_ALIGN(a->nla_len) > len)
+    if (a->nla_len < NLA_HDRLEN || a->nla_len > len)
       break;
     unsigned type = a->nla_type & NLA_TYPE_MASK;
     if (type < count)
       attrs[type] = a;
     size_t step = NLA_ALIGN(a->nla_len);
+    if (step > len)
+      break;
     pos += step;
     len -= step;
   }
@@ -201,7 +204,8 @@ static int family_reply(struct nlmsghdr *h, void *context) {
       const struct nlattr *g[CTRL_ATTR_MCAST_GRP_MAX + 1];
       parse(value(group), length(group), g, CTRL_ATTR_MCAST_GRP_MAX + 1);
       if (g[CTRL_ATTR_MCAST_GRP_NAME] &&
-          !strcmp(value(g[CTRL_ATTR_MCAST_GRP_NAME]), "mlme")) {
+          (!strcmp(value(g[CTRL_ATTR_MCAST_GRP_NAME]), "mlme") ||
+           !strcmp(value(g[CTRL_ATTR_MCAST_GRP_NAME]), "vendor"))) {
         uint32_t membership = number(g[CTRL_ATTR_MCAST_GRP_ID]);
         if (setsockopt(nl->fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP, &membership,
                        sizeof(membership)))
@@ -253,6 +257,7 @@ static int capabilities_reply(struct nlmsghdr *h, void *context) {
     return 0;
   parse(value(nan[NL80211_NAN_CAPA_PHY]), length(nan[NL80211_NAN_CAPA_PHY]),
         phy, NL80211_NAN_PHY_CAP_ATTR_MAX + 1);
+  r->vht_capability = number(phy[NL80211_NAN_PHY_CAP_ATTR_VHT_CAPA]);
   if (length(phy[NL80211_NAN_PHY_CAP_ATTR_HE_MAC]) != 6 ||
       length(phy[NL80211_NAN_PHY_CAP_ATTR_HE_PHY]) != 11 ||
       length(phy[NL80211_NAN_PHY_CAP_ATTR_HE_MCS_SET]) < 4)
@@ -604,25 +609,42 @@ static int receive(struct run *r) {
       struct genlmsghdr *g = NLMSG_DATA(h);
       const struct nlattr *a[NL80211_ATTR_MAX + 1];
       attrs(h, a, NL80211_ATTR_MAX + 1);
-      uint64_t wdev = 0;
-      if (length(a[NL80211_ATTR_WDEV]) == 8)
-        memcpy(&wdev, value(a[NL80211_ATTR_WDEV]), 8);
-      if (g->cmd == NL80211_CMD_UNEXPECTED_FRAME &&
+      if (g->cmd == NL80211_CMD_VENDOR &&
+          number(a[NL80211_ATTR_WIPHY]) == r->phy &&
+          number(a[NL80211_ATTR_VENDOR_ID]) == 0x001735 &&
+          number(a[NL80211_ATTR_VENDOR_SUBCMD]) == 0x4157444c &&
+          length(a[NL80211_ATTR_VENDOR_DATA]) >= 9) {
+        const unsigned char *data = value(a[NL80211_ATTR_VENDOR_DATA]);
+        uint64_t ended = 0;
+        for (int b = 0; b < 8; b++)
+          ended |= (uint64_t)data[b + 1] << (8 * b);
+        uint64_t received = ended / 1000;
+        int64_t relative = (int64_t)received - (int64_t)r->start + 1;
+        if (data[0] < 2 && length(a[NL80211_ATTR_VENDOR_DATA]) == 9) {
+          /* Firmware's 16 TU discovery window plus measured retune time.
+           * Notifications are stamped in RX, before workqueue scheduling.
+           */
+          control_absence(r->node, data[0], relative - 24 * 1024,
+                          relative + 4 * 1024, 512 * 1024);
+        } else if (data[0] == 2 && received >= r->start) {
+          r->rx++;
+          uint64_t delay = micros() - received;
+          if (delay > r->rx_delay_max_us)
+            r->rx_delay_max_us = delay;
+          delay = event.received - received;
+          if (delay > r->rx_capture_max_us)
+            r->rx_capture_max_us = delay;
+          control_rx(r->node, data + 9,
+                     length(a[NL80211_ATTR_VENDOR_DATA]) - 9, relative,
+                     micros() - r->start + 1);
+        }
+      } else if (g->cmd == NL80211_CMD_UNEXPECTED_FRAME &&
           number(a[NL80211_ATTR_IFINDEX]) == r->ndi &&
           length(a[NL80211_ATTR_MAC]) == 6) {
         const unsigned char *mac = value(a[NL80211_ATTR_MAC]);
         if (memcmp(mac, r->peer, 6))
           printf("{\"event\":\"sender-requested\",\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\"}\n",
                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-      } else if (g->cmd == NL80211_CMD_FRAME && wdev == r->nmi &&
-          a[NL80211_ATTR_FRAME]) {
-        r->rx++;
-        uint64_t delay = micros() - event.received;
-        if (delay > r->rx_delay_max_us)
-          r->rx_delay_max_us = delay;
-        control_rx(r->node, value(a[NL80211_ATTR_FRAME]),
-                   length(a[NL80211_ATTR_FRAME]), event.received - r->start + 1,
-                   micros() - r->start + 1);
       } else if (g->cmd == NL80211_CMD_FRAME_TX_STATUS &&
                  number(a[NL80211_ATTR_IFINDEX]) == r->ndi &&
                  length(a[NL80211_ATTR_FRAME]) >= 29 &&
@@ -726,6 +748,7 @@ static int follow_tick(struct run *r, uint64_t *next) {
     return rc;
   if (channel != r->active_channel) {
     uint64_t elapsed = micros() - began;
+    control_switch_delay(r->node, elapsed);
     r->switch_total_us += elapsed;
     if (elapsed > r->switch_max_us)
       r->switch_max_us = elapsed;
@@ -802,6 +825,9 @@ int main(int argc, char **argv) {
     rc = -ENODEV;
     goto close;
   }
+  /* Registration enables reception of foreign-BSSID AWDL actions.
+   * The vendor event supplies each frame with its driver ingress time.
+   */
   begin(&r.events, &m, r.events.family, NL80211_CMD_REGISTER_FRAME);
   put(&m, NL80211_ATTR_WDEV, &r.nmi, 8);
   put16(&m, NL80211_ATTR_FRAME_TYPE, 0xd0);
@@ -839,6 +865,9 @@ int main(int argc, char **argv) {
     goto cleanup;
   }
   r.capturing = 1;
+  control_rx_aggregation(r.node, r.vht_capability);
+  printf("AWDL_RX_AGGREGATION mpdu_code=%u ampdu_exponent=%u\n",
+         r.vht_capability & 3, (r.vht_capability >> 23) & 7);
   printf("{\"event\":\"started\"}\n");
   while (!stopped) {
     uint64_t next = r.start + control_tick(r.node, micros() - r.start + 1) - 1;
@@ -908,12 +937,13 @@ cleanup:;
          "\"control_tx\":%u,\"tx_completed\":%u,\"busy_drop\":%u,"
          "\"tx_completion_max_us\":%llu,\"switches\":%u,"
          "\"switch_total_us\":%llu,\"switch_max_us\":%llu,"
-         "\"rx_delay_max_us\":%llu}\n",
+         "\"rx_delay_max_us\":%llu,\"rx_capture_max_us\":%llu}\n",
          rc, cleanup, r.rx, r.tx, r.completions, r.busy_drop,
          (unsigned long long)r.tx_completion_max_us, r.switches,
          (unsigned long long)r.switch_total_us,
          (unsigned long long)r.switch_max_us,
-         (unsigned long long)r.rx_delay_max_us);
+         (unsigned long long)r.rx_delay_max_us,
+         (unsigned long long)r.rx_capture_max_us);
   if (r.node)
     control_free(r.node);
   if (cleanup)
