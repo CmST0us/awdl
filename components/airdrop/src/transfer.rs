@@ -1,7 +1,7 @@
 use crate::{Operation, configuration::Configuration};
 use anyhow::{Context, Result, bail, ensure};
 use aware_common::bus;
-use futures_util::{Stream, StreamExt};
+use futures_util::{FutureExt, Stream, StreamExt};
 use owly_airdrop::{
     driver::{
         mdns::Mdns,
@@ -129,24 +129,41 @@ async fn send(
     let sender = Sender::new(config)?;
     let radio = bus::proxy(connection, bus::NAME, bus::PATH, "org.wirelessd1.Awdl").await?;
     let discovery = async {
-        let mut tried = HashSet::new();
+        let mut peers: Vec<(String, u32)> = Vec::new();
+        let mut excluded = HashSet::new();
         let mut candidates = radio.receive_signal("Event").await?;
         loop {
             let mut signals = radio.receive_signal("Event").await?;
             let _: () = radio.call("Acquire", &("",)).await?;
-            let mac = loop {
-                let event = next(&mut candidates).await?;
+            // Keep transient failures eligible and give untried peers priority.
+            // A verified different system name is excluded for this request.
+            loop {
+                let event = match next(&mut candidates).now_or_never() {
+                    Some(result) => result?,
+                    None if peers.iter().any(|(mac, _)| !excluded.contains(mac)) => break,
+                    None => next(&mut candidates).await?,
+                };
                 if event["event"] == "peer" {
                     let mac = event["mac"]
                         .as_str()
                         .context("AWDL 对端缺少地址")?
                         .to_string();
-                    if tried.insert(mac.clone()) {
-                        break mac;
+                    if !peers.iter().any(|(known, _)| *known == mac) {
+                        peers.push((mac, 0));
                     }
                 }
-            };
-            emit(events, json!({"event":"candidate","mac":mac}));
+            }
+            let (mac, attempts) = peers
+                .iter_mut()
+                .filter(|(mac, _)| !excluded.contains(mac))
+                .min_by_key(|(_, attempts)| *attempts)
+                .context("没有可用的 AWDL 对端")?;
+            *attempts += 1;
+            let mac = mac.clone();
+            emit(
+                events,
+                json!({"event":"candidate","mac":mac,"attempt":attempts}),
+            );
             let attempt = async {
                 let _: () = radio.call("SelectPeer", &(&mac,)).await?;
                 let (index, _, address) = tokio::time::timeout(Duration::from_secs(cfg.service_seconds), link(&mut signals)).await??;
@@ -154,7 +171,10 @@ async fn send(
                 let peer = SocketAddrV6::new(address, service.port, 0, index);
                 let found = tokio::time::timeout(Duration::from_secs(cfg.service_seconds), sender.discover(peer)).await??.context("对端不可发现")?;
                 emit(events, json!({"event":"discovered","name":found.computer_name,"model":found.model_name,"address":peer.to_string()}));
-                ensure!(found.computer_name == name, "系统设备名不匹配");
+                if found.computer_name != name {
+                    excluded.insert(mac.clone());
+                    bail!("系统设备名不匹配");
+                }
                 Ok::<_, anyhow::Error>(peer)
             }.await;
             match attempt {
