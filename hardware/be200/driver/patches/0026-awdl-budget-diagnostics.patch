@@ -1,0 +1,38 @@
+Subject: [PATCH] 在 RATE 诊断中关联数据队列预算与空口完成
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tx.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tx.c
+@@ -1667,6 +1667,7 @@
+ 		return;
+ 
+ 	u64 opens = 0, closes = 0;
++	u32 pending = 0, cost_q8 = 0, phy_q8 = 0;
+ 
+ 	rcu_read_lock();
+ 	if (sta_id < mld->fw->ucode_capa.num_stations) {
+@@ -1677,18 +1678,23 @@
+ 			if (vif->nan_data_awdl) {
+ 				opens = READ_ONCE(vif->awdl_opens_ns);
+ 				closes = READ_ONCE(vif->awdl_closes_ns);
++				struct iwl_mld_txq *q = iwl_mld_txq_from_mac80211(link_sta->sta->txq[0]);
++				pending = atomic_read(&q->awdl_pending_bytes);
++				cost_q8 = READ_ONCE(q->awdl_ns_per_byte_q8);
++				phy_q8 = READ_ONCE(q->awdl_phy_ns_per_byte_q8);
+ 			}
+ 		}
+ 	}
+ 	rcu_read_unlock();
+ 	IWL_DEBUG_RATE(mld,
+-		"AWDL_BA mono_ns=%llu sta=%u sent=%u ack=%u rate=0x%x retry=%u rts=%u bytes=%u frames=%u media=%u tfd=%u opens=%llu closes=%llu\n",
++		"AWDL_BA mono_ns=%llu sta=%u sent=%u ack=%u rate=0x%x retry=%u rts=%u bytes=%u frames=%u media=%u tfd=%u opens=%llu closes=%llu pending=%u cost_q8=%u phy_q8=%u\n",
+ 		(unsigned long long)ktime_get_ns(), sta_id,
+ 		le16_to_cpu(ba_res->txed), le16_to_cpu(ba_res->done),
+ 		le32_to_cpu(ba_res->tx_rate), ba_res->retry_cnt,
+ 		ba_res->rts_retry_cnt, le32_to_cpu(ba_res->query_byte_cnt),
+ 		le16_to_cpu(ba_res->query_frame_cnt), le32_to_cpu(ba_res->wireless_time),
+-		tfd_cnt, (unsigned long long)opens, (unsigned long long)closes);
++		tfd_cnt, (unsigned long long)opens, (unsigned long long)closes,
++		pending, cost_q8, phy_q8);
+ 
+ 	iwl_mld_awdl_rate_feedback(mld, sta_id, le32_to_cpu(ba_res->tx_rate));
+ 	if (!tfd_cnt)

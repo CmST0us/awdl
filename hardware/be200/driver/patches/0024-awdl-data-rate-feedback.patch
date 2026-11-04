@@ -1,0 +1,18 @@
+Subject: [PATCH] 数据空口预算只使用数据队列的速率反馈
+
+管理帧的固定基础速率不代表 HE 数据速率。按固件通知中的 TID 区分。
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tx.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tx.c
+@@ -1438,7 +1438,10 @@
+ 			iwl_mld_tx_status(mld, skb, txq_id);
+ 	}
+ 
+-	iwl_mld_awdl_rate_feedback(mld, sta_id, le32_to_cpu(tx_resp->initial_rate));
++	/* Management frames use a fixed basic rate, not the data link rate. */
++	if (tid < IWL_MAX_TID_COUNT)
++		iwl_mld_awdl_rate_feedback(mld, sta_id,
++					   le32_to_cpu(tx_resp->initial_rate));
+ 	iwl_mld_awdl_completed(mld, txq_id, reclaimed_bytes, false, true);
+ 
+ 	IWL_DEBUG_TX_REPLY(mld,

@@ -24,8 +24,13 @@ struct Control *control_new(const unsigned char *mac, unsigned char channel,
                             const char *local_name, const unsigned char *he,
                             uint32_t tx_drain_us, control_emit emit, void *context);
 uint64_t control_tick(struct Control *, uint64_t now_us);
+/* received_us is the reception time, independent of delayed event handling.
+ * Both timestamps use the control epoch; now_us advances protocol timers.
+ */
 void control_rx(struct Control *, const unsigned char *, size_t,
-                uint64_t now_us);
+                uint64_t received_us, uint64_t now_us);
+/* Keep this session on its primary channel when another radio user needs it. */
+void control_use_primary(struct Control *);
 int control_select(struct Control *, const char *target);
 void control_free(struct Control *);
 

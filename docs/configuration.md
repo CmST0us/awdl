@@ -405,7 +405,7 @@ systemd 单元拥有进程启动、重启策略和外部停止期限；D-Bus 策
 
 ## AWDL 与 AirDrop 配置
 
-`config/awdl.toml` 提供公共 AWDL 节点名与启动、停止失败期限，安装到 `/etc/wirelessd/awdl.toml`；设备选择沿用 `/etc/wirelessd/config.toml`。BE200 沿用 NAN 数据频率配置，5745 / 5805 MHz 分别选择 149 / 161，并协商 HE80 / VHT80；其他频率的 AWDL 申请返回明确错误，NAN 服务继续运行。RTL 支持 149/161 同块跟随。
+`config/awdl.toml` 提供公共 AWDL 节点名与启动、停止失败期限，安装到 `/etc/wirelessd/awdl.toml`；设备选择沿用 `/etc/wirelessd/config.toml`。BE200 沿用 NAN 数据频率配置，5745 / 5805 MHz 分别选择 149 / 161 作为主信道，并协商 HE80 / VHT80；其他频率的 AWDL 申请返回明确错误，NAN 服务继续运行。BE200 与 RTL 均支持 149 / 161 同块跟随。BE200 存在活动 NDP 数据站点时，本次 AWDL 会话自动使用所配置主信道的公共时隙；接口释放恢复该主信道。瞬时跟随日程由协议和实际资源占用决定，不保存到配置文件。
 
 `hardware/be200/radio.toml` 的 `[awdl]` 提供会话 TCP 拥塞控制、初始窗口、乱序阈值、接口队列长度和发送排空余量；每项必填，重启 wirelessd 生效。默认算法 Scalable 要求目标内核提供 tcp_scalable，fq pacing 要求 sch_fq。显式 `radio_profile` 替代文件也须包含这些字段。BE200 模块电源策略与聚合上限保存在 `hardware/be200/driver/be200.conf`，安装后重新加载驱动生效。
 

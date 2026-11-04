@@ -16,3 +16,13 @@
 0016-awdl-window-budget.patch
 0017-awdl-rate-initialization.patch
 0018-awdl-tx-status-owner.patch
+0019-awdl-management-owner.patch
+0020-awdl-airtime-diagnostics.patch
+0021-awdl-channel-plan.patch
+0022-awdl-channel-completion.patch
+0023-awdl-control-status-owner.patch
+0024-awdl-data-rate-feedback.patch
+0025-awdl-control-priority.patch
+0026-awdl-budget-diagnostics.patch
+0027-awdl-channel-definition.patch
+0028-awdl-ready-window.patch

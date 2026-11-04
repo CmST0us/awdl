@@ -6,6 +6,7 @@
 #include <linux/tcp_metrics.h>
 #include <net/if.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -31,11 +32,22 @@ struct message {
 struct run {
   struct netlink cmd, events;
   struct Control *node;
+  int captured[2], capturing;
+  pthread_t capture_thread;
   uint32_t phy, ndi;
   uint64_t nmi, start;
   unsigned char local[6], peer[6];
-  unsigned tx, rx, completions;
+  unsigned tx, rx, completions, busy_drop;
+  unsigned char pending_control[2048];
+  size_t pending_control_len;
+  uint64_t tx_started, tx_completion_max_us;
   unsigned channel, tx_drain_tu;
+  unsigned active_channel, switches;
+  int following;
+  uint64_t plan_base, plan_open, plan_close, switch_max_us, switch_total_us;
+  uint64_t rx_delay_max_us;
+  unsigned char plan_channels[16];
+  int planned;
   char *congestion, *initial_window, *tx_queue, *reordering;
   unsigned char he[21];
   int has_he;
@@ -478,15 +490,19 @@ static int emit(void *context, uint32_t kind, const unsigned char *data,
   struct run *r = context;
   int rc = 0;
   if (kind == 0) {
-    struct message m;
-    begin(&r->events, &m, r->events.family, NL80211_CMD_FRAME);
-    put(&m, NL80211_ATTR_WDEV, &r->nmi, 8);
-    put32(&m, NL80211_ATTR_WIPHY_FREQ, 5000 + 5 * r->channel);
-    put(&m, NL80211_ATTR_TX_NO_CCK_RATE, NULL, 0);
-    put(&m, NL80211_ATTR_FRAME, data, len);
-    rc = send_message(&r->events, &m);
-    if (!rc)
-      r->tx++;
+    /* Synchronization describes the current slot. Keep one control frame
+     * in flight; the next protocol tick supplies fresh timing after completion.
+     */
+    if (r->tx != r->completions) {
+      r->busy_drop++;
+      return -EBUSY;
+    }
+    if (len > sizeof(r->pending_control))
+      return -EMSGSIZE;
+    if (r->pending_control_len)
+      r->busy_drop++;
+    memcpy(r->pending_control, data, len);
+    r->pending_control_len = len;
   } else if (kind == 1) {
     rc = len == 34 ? add_peer(r, data) : -EINVAL;
   } else if (kind == 4) {
@@ -505,6 +521,20 @@ static int emit(void *context, uint32_t kind, const unsigned char *data,
           window[1 + 8 * i + b] = absolute >> (8 * b);
       }
       rc = vendor(r, window, sizeof(window));
+      if (!rc) {
+        r->plan_open = relative[0] ? r->start + relative[0] - 1 : 0;
+        r->plan_close = relative[1] ? r->start + relative[1] - 1 : 0;
+      }
+    }
+  } else if (kind == 6) {
+    if (len != 26)
+      rc = -EINVAL;
+    else {
+      int64_t base;
+      memcpy(&base, data, 8);
+      r->plan_base = (int64_t)r->start + base - 1;
+      memcpy(r->plan_channels, data + 8, 16);
+      r->planned = 1;
     }
   } else if (kind == 7)
     rc = len == 28 ? peer_caps(r, data) : -EINVAL;
@@ -515,11 +545,50 @@ static int emit(void *context, uint32_t kind, const unsigned char *data,
   }
   return rc;
 }
+/* PHY commands wait for firmware completion. Receive independently so that
+ * this wait never becomes an error in the peer's synchronization clock.
+ */
+struct captured_event {
+  uint64_t received;
+  unsigned char bytes[32768];
+};
+static void *capture_events(void *context) {
+  struct run *r = context;
+  int error = 0;
+  for (;;) {
+    struct pollfd f[2] = {{.fd = r->events.fd, .events = POLLIN},
+                          {.fd = r->captured[1], .events = POLLIN}};
+    if (poll(f, 2, -1) < 0) {
+      if (errno == EINTR)
+        continue;
+      error = -errno;
+      break;
+    }
+    if (f[1].revents)
+      break;
+    if (f[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+      error = -EIO;
+      break;
+    }
+    struct captured_event event;
+    ssize_t len = recv(r->events.fd, event.bytes, sizeof(event.bytes), 0);
+    event.received = micros();
+    if (len < 0 || send(r->captured[1], &event, sizeof(event.received) + len,
+                        MSG_DONTWAIT | MSG_NOSIGNAL) < 0) {
+      error = -errno;
+      break;
+    }
+  }
+  close(r->captured[1]);
+  return (void *)(intptr_t)error;
+}
 static int receive(struct run *r) {
-  unsigned char buf[32768];
-  ssize_t len = recv(r->events.fd, buf, sizeof(buf), 0);
-  if (len < 0)
-    return -errno;
+  struct captured_event event;
+  ssize_t len = recv(r->captured[0], &event, sizeof(event), 0);
+  if (len < (ssize_t)sizeof(event.received))
+    return len < 0 ? -errno : -EIO;
+  len -= sizeof(event.received);
+  unsigned char *buf = event.bytes;
   for (struct nlmsghdr *h = (void *)buf; NLMSG_OK(h, len);
        h = NLMSG_NEXT(h, len)) {
     if (h->nlmsg_type == NLMSG_ERROR) {
@@ -533,34 +602,143 @@ static int receive(struct run *r) {
       uint64_t wdev = 0;
       if (length(a[NL80211_ATTR_WDEV]) == 8)
         memcpy(&wdev, value(a[NL80211_ATTR_WDEV]), 8);
-      if (wdev != r->nmi)
-        continue;
-      if (g->cmd == NL80211_CMD_FRAME && a[NL80211_ATTR_FRAME]) {
+      if (g->cmd == NL80211_CMD_FRAME && wdev == r->nmi &&
+          a[NL80211_ATTR_FRAME]) {
         r->rx++;
+        uint64_t delay = micros() - event.received;
+        if (delay > r->rx_delay_max_us)
+          r->rx_delay_max_us = delay;
         control_rx(r->node, value(a[NL80211_ATTR_FRAME]),
-                   length(a[NL80211_ATTR_FRAME]), micros() - r->start + 1);
+                   length(a[NL80211_ATTR_FRAME]), event.received - r->start + 1,
+                   micros() - r->start + 1);
       } else if (g->cmd == NL80211_CMD_FRAME_TX_STATUS &&
+                 number(a[NL80211_ATTR_IFINDEX]) == r->ndi &&
                  length(a[NL80211_ATTR_FRAME]) >= 29 &&
                  !memcmp((const unsigned char *)value(a[NL80211_ATTR_FRAME]) +
                              24,
-                         (const unsigned char[]){127, 0, 0x17, 0xf2, 8}, 5))
+                         (const unsigned char[]){127, 0, 0x17, 0xf2, 8}, 5)) {
         r->completions++;
+        uint64_t elapsed = event.received - r->tx_started;
+        if (elapsed > r->tx_completion_max_us)
+          r->tx_completion_max_us = elapsed;
+      }
     }
   }
   return 0;
 }
+
+/* The channel command can block. Stamp and submit the newest action only
+ * after it completes, on the primary that is actually active.
+ */
+static int send_control(struct run *r) {
+  if (!r->pending_control_len)
+    return 0;
+  uint64_t now = micros();
+  uint32_t physical = now - r->start + 1;
+  for (int b = 0; b < 4; b++)
+    r->pending_control[32 + b] = physical >> (8 * b);
+  struct message m;
+  begin(&r->events, &m, r->events.family, NL80211_CMD_FRAME);
+  put32(&m, NL80211_ATTR_IFINDEX, r->ndi);
+  put32(&m, NL80211_ATTR_WIPHY_FREQ, 5000 + 5 * r->active_channel);
+  put(&m, NL80211_ATTR_TX_NO_CCK_RATE, NULL, 0);
+  put(&m, NL80211_ATTR_FRAME, r->pending_control, r->pending_control_len);
+  int rc = send_message(&r->events, &m);
+  if (!rc) {
+    r->pending_control_len = 0;
+    r->tx++;
+    r->tx_started = now;
+  }
+  return rc;
+}
+
+/* Primary and window are one radio operation. An active NDP keeps the
+ * shared PHY at home; AWDL continues on its common primary-channel slots.
+ */
+static int follow_tick(struct run *r, uint64_t *next) {
+  if (!r->following || !r->planned)
+    return 0;
+  uint64_t now = micros(), opens = 0, closes = 0;
+  unsigned channel = r->active_channel;
+  if (now >= r->plan_base && now < r->plan_base + 16 * 65536) {
+    unsigned slot = (now - r->plan_base) / 65536;
+    for (; slot < 16; slot++) {
+      if (!r->plan_channels[slot])
+        continue;
+      channel = r->plan_channels[slot];
+      unsigned first = slot, end = slot + 1;
+      while (first && r->plan_channels[first - 1] == channel)
+        first--;
+      while (end < 16 && r->plan_channels[end] == channel)
+        end++;
+      opens = r->plan_base + first * 65536 + 3072;
+      closes = r->plan_base + end * 65536 - r->tx_drain_tu * 1024;
+      if (now >= closes) {
+        opens = closes = 0;
+        slot = end - 1;
+        continue;
+      }
+      /* Prepare the next primary during the closed part of the schedule.
+       * The kernel opens data only when the peer's next window begins.
+       */
+      if (closes < *next)
+        *next = closes;
+      break;
+    }
+  }
+  if (opens == r->plan_open && closes == r->plan_close &&
+      channel == r->active_channel)
+    return 0;
+  unsigned char command[18] = {4, channel};
+  uint64_t window[2] = {opens * 1000, closes * 1000};
+  for (int i = 0; i < 2; i++)
+    for (int b = 0; b < 8; b++)
+      command[2 + 8 * i + b] = window[i] >> (8 * b);
+  uint64_t began = micros();
+  int rc = vendor(r, command, sizeof(command));
+  if (rc == -EBUSY) {
+    memset(command + 2, 0, 16);
+    command[1] = r->channel;
+    rc = vendor(r, command, sizeof(command));
+    if (rc)
+      return rc;
+    r->following = r->planned = 0;
+    r->active_channel = r->channel;
+    r->plan_open = r->plan_close = 0;
+    control_use_primary(r->node);
+    printf("{\"event\":\"channel-policy\",\"mode\":\"primary\","
+           "\"reason\":\"native-ndp\"}\n");
+    return 0;
+  }
+  if (rc)
+    return rc;
+  if (channel != r->active_channel) {
+    uint64_t elapsed = micros() - began;
+    r->switch_total_us += elapsed;
+    if (elapsed > r->switch_max_us)
+      r->switch_max_us = elapsed;
+    r->switches++;
+    r->active_channel = channel;
+  }
+  r->plan_open = opens;
+  r->plan_close = closes;
+  return 0;
+}
+
 int main(int argc, char **argv) {
   if ((argc != 3 && argc != 5) || strncmp(argv[1], "phy", 3))
     return 2;
   int stopping = !strcmp(argv[2], "stop");
-  if (!stopping && (argc != 5 ||
-      (strcmp(argv[2], "149") && strcmp(argv[2], "161"))))
+  if (!stopping &&
+      (argc != 5 || (strcmp(argv[2], "149") && strcmp(argv[2], "161"))))
     return 2;
   char *end;
   unsigned long phy = strtoul(argv[1] + 3, &end, 10);
   if (*end || end == argv[1] + 3)
     return 2;
-  struct run r = {.phy = phy, .cmd.fd = -1, .events.fd = -1,
+  struct run r = {.phy = phy,
+                  .cmd.fd = -1,
+                  .events.fd = -1,
                   .channel = stopping ? 0 : (unsigned)atoi(argv[2])};
   if (!stopping) {
     r.congestion = getenv("AWARE_AWDL_TCP_CONGESTION");
@@ -632,16 +810,35 @@ int main(int argc, char **argv) {
   if (rc)
     goto cleanup;
   r.start = micros();
-  r.node = control_new(r.local, r.channel, 0, argv[3], argv[4],
-                       r.has_he ? r.he : NULL, r.tx_drain_tu * 1024, emit, &r);
+  r.active_channel = r.channel;
+  r.following = 1;
+  r.node = control_new(r.local, r.channel, r.channel == 149 ? 161 : 149,
+                       argv[3], argv[4], r.has_he ? r.he : NULL,
+                       r.tx_drain_tu * 1024, emit, &r);
+  if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, r.captured)) {
+    rc = -errno;
+    goto cleanup;
+  }
+  rc = pthread_create(&r.capture_thread, NULL, capture_events, &r);
+  if (rc) {
+    close(r.captured[0]);
+    close(r.captured[1]);
+    rc = -rc;
+    goto cleanup;
+  }
+  r.capturing = 1;
   printf("{\"event\":\"started\"}\n");
   while (!stopped) {
     uint64_t next = r.start + control_tick(r.node, micros() - r.start + 1) - 1;
+    if ((rc = follow_tick(&r, &next)))
+      break;
     if (stopped)
+      break;
+    if ((rc = send_control(&r)))
       break;
     uint64_t now = micros();
     int wait = next > now ? (next - now + 999) / 1000 : 0;
-    struct pollfd f[2] = {{.fd = r.events.fd, .events = POLLIN},
+    struct pollfd f[2] = {{.fd = r.captured[0], .events = POLLIN},
                           {.fd = STDIN_FILENO, .events = POLLIN}};
     int got = poll(f, 2, wait);
     if (got < 0) {
@@ -665,16 +862,46 @@ int main(int argc, char **argv) {
           (rc = control_select(r.node, input + 7)))
         break;
     }
-    if ((f[0].revents & POLLIN) && (rc = receive(&r)))
+    /* Apply only the newest plan after a blocking PHY command. Older
+     * captured frames still update peers, but must not trigger extra hops.
+     */
+    while (f[0].revents & POLLIN) {
+      if ((rc = receive(&r)))
+        break;
+      int ready;
+      do {
+        ready = poll(f, 1, 0);
+      } while (ready < 0 && errno == EINTR);
+      if (ready < 0) {
+        rc = -errno;
+        break;
+      }
+    }
+    if (rc)
       break;
   }
   if (r.error)
     rc = r.error;
 cleanup:;
+  if (r.capturing) {
+    void *error;
+    send(r.captured[0], "S", 1, MSG_DONTWAIT | MSG_NOSIGNAL);
+    pthread_join(r.capture_thread, &error);
+    close(r.captured[0]);
+    if (error)
+      rc = (int)(intptr_t)error;
+  }
   int cleanup = delete_data(&r);
   printf("{\"event\":\"stopped\",\"rc\":%d,\"cleanup\":%d,\"control_rx\":%u,"
-         "\"control_tx\":%u,\"tx_completed\":%u}\n",
-         rc, cleanup, r.rx, r.tx, r.completions);
+         "\"control_tx\":%u,\"tx_completed\":%u,\"busy_drop\":%u,"
+         "\"tx_completion_max_us\":%llu,\"switches\":%u,"
+         "\"switch_total_us\":%llu,\"switch_max_us\":%llu,"
+         "\"rx_delay_max_us\":%llu}\n",
+         rc, cleanup, r.rx, r.tx, r.completions, r.busy_drop,
+         (unsigned long long)r.tx_completion_max_us, r.switches,
+         (unsigned long long)r.switch_total_us,
+         (unsigned long long)r.switch_max_us,
+         (unsigned long long)r.rx_delay_max_us);
   if (r.node)
     control_free(r.node);
   if (cleanup)

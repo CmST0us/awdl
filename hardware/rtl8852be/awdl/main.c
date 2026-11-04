@@ -61,7 +61,7 @@ done:
 }
 static void event(void *context,const struct wa_event *e) {
  struct run *r=context;
- if(e->type==WA_NAN_EVENT_RX&&e->frame_len){r->rx++;control_rx(r->node,e->frame,e->frame_len,micros()-r->start+1);}
+ if(e->type==WA_NAN_EVENT_RX&&e->frame_len){r->rx++;uint64_t now=micros()-r->start+1;control_rx(r->node,e->frame,e->frame_len,now,now);}
  else if(e->type==WA_NAN_EVENT_TX_DONE&&e->cookie==r->active){if(e->acked==WA_NAN_ACK_YES)r->acks++;r->active=0;}
 }
 int main(int argc,char **argv) {

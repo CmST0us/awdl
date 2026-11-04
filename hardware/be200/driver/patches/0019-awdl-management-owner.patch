@@ -1,0 +1,91 @@
+Subject: [PATCH] 让 AWDL 管理帧归数据接口所有
+
+管理帧使用其所属 NAN_DATA 的发送队列，接口停止时一并停止取包和排空。
+NAN 管理接口不再借用其他接口的组播硬件队列。
+
+--- a/net/wireless/mlme.c
++++ b/net/wireless/mlme.c
+@@ -935,11 +935,11 @@
+ 			 * cfg80211 doesn't track the stations
+ 			 */
+ 			break;
+-		case NL80211_IFTYPE_NAN:
++		case NL80211_IFTYPE_NAN_DATA:
+ 			if (ieee80211_is_awdl_action(mgmt, params->len))
+ 				break;
+ 			fallthrough;
+-		case NL80211_IFTYPE_NAN_DATA:
++		case NL80211_IFTYPE_NAN:
+ 			if (mgmt->u.action.category !=
+ 			    WLAN_CATEGORY_PROTECTED_DUAL_OF_ACTION)
+ 				err = -EOPNOTSUPP;
+--- a/net/mac80211/offchannel.c
++++ b/net/mac80211/offchannel.c
+@@ -12,6 +12,7 @@
+  */
+ #include <linux/export.h>
+ #include <net/mac80211.h>
++#include <net/awdl.h>
+ #include "ieee80211_i.h"
+ #include "driver-ops.h"
+ 
+@@ -901,6 +902,9 @@
+ 	case NL80211_IFTYPE_NAN:
+ 		break;
+ 	case NL80211_IFTYPE_NAN_DATA:
++		if (sdata->vif.nan_data_awdl &&
++		    ieee80211_is_awdl_action(mgmt, params->len))
++			break;
+ 		if (is_multicast_ether_addr(mgmt->da))
+ 			return -EOPNOTSUPP;
+ 		break;
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tx.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tx.c
+@@ -724,6 +724,7 @@
+ 	 * - frames that are sent to an NMI sta, which is only used for management.
+ 	 */
+ 	if (unlikely(!sta || mld_sta->vif->type == NL80211_IFTYPE_NAN ||
++		     ieee80211_is_awdl_action(hdr, skb->len) ||
+ 		     info->control.flags & IEEE80211_TX_CTRL_RATE_INJECT)) {
+ 		flags |= IWL_TX_FLAGS_CMD_RATE;
+ 		rate_n_flags = iwl_mld_get_tx_rate_n_flags(mld, info, sta,
+@@ -769,15 +770,6 @@
+ 	return rcu_dereference(mld_vif->link[link_id]);
+ }
+ 
+-static void iwl_mld_awdl_mgmt_queue(void *data, u8 *mac,
+-				    struct ieee80211_vif *vif)
+-{
+-	struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
+-
+-	if (vif->nan_data_awdl)
+-		*(int *)data = mld_vif->nan.mcast_data_sta.queue_id;
+-}
+-
+ static int
+ iwl_mld_get_tx_queue_id(struct iwl_mld *mld, struct ieee80211_txq *txq,
+ 			struct sk_buff *skb)
+@@ -852,17 +844,14 @@
+ 		return mld_vif->aux_sta.queue_id;
+ 	case NL80211_IFTYPE_NAN:
+ 		WARN_ON(!ieee80211_is_mgmt(fc));
+-		if (ieee80211_is_awdl_action(hdr, skb->len)) {
+-			int queue = IWL_MLD_INVALID_QUEUE;
+-
+-			/* AWDL timing follows the data channel, not NAN DWs. */
+-			ieee80211_iterate_active_interfaces_atomic(mld->hw,
+-				IEEE80211_IFACE_ITER_NORMAL,
+-				iwl_mld_awdl_mgmt_queue, &queue);
+-			return queue;
+-		}
+ 		return iwl_mld_nan_get_mgmt_queue(mld, info->control.vif);
+ 	case NL80211_IFTYPE_NAN_DATA:
++		/* The AWDL interface owns control and data queue lifetimes. */
++		if (info->control.vif->nan_data_awdl &&
++		    ieee80211_is_awdl_action(hdr, skb->len)) {
++			mld_vif = iwl_mld_vif_from_mac80211(info->control.vif);
++			return mld_vif->nan.mcast_data_sta.queue_id;
++		}
+ 		WARN_ON(!ieee80211_is_data(fc));
+ 
+ 		if (!iwl_mld_nan_use_nan_stations(mld))

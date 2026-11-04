@@ -1,0 +1,123 @@
+Subject: [PATCH] 维护完整的 AWDL 临时信道定义
+
+主信道跟随使用已配置的 80 MHz 定义，保留中心频率与带宽的一致性。
+NAN 更新保持活动 AWDL 主信道；归还时恢复正常 NAN 定义。
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/phy.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/phy.c
+@@ -8,6 +8,7 @@
+ #include "iface.h"
+ #include "sta.h"
+ #include "tx.h"
++#include "tlc.h"
+ #include "hcmd.h"
+ #include "fw/api/phy-ctxt.h"
+ 
+@@ -224,6 +225,11 @@
+ 		iwl_mld_get_chandef_from_chanctx(mld, ctx);
+ 
+ 	phy->chandef = *chandef;
++	if (phy->awdl_primary) {
++		phy->chandef = ctx->def;
++		phy->chandef.chan = ieee80211_get_channel(mld->wiphy,
++						       5000 + 5 * phy->awdl_primary);
++	}
+ 	iwl_mld_phy_fw_action(mld, ctx, FW_CTXT_ACTION_MODIFY);
+ }
+ 
+@@ -237,7 +243,8 @@
+ 	struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
+ 	struct iwl_mld_phy *phy;
+ 	struct ieee80211_sta *sta;
+-	struct cfg80211_chan_def saved;
++	struct cfg80211_chan_def saved, desired;
++	u8 saved_primary;
+ 	struct ieee80211_channel *channel;
+ 	u64 began, synced, drained;
+ 	bool restore = !primary;
+@@ -268,14 +275,24 @@
+ 		struct iwl_mld_sta *s = iwl_mld_sta_from_mac80211(sta);
+ 
+ 		if (s->vif->type == NL80211_IFTYPE_NAN_DATA &&
+-		    !s->vif->nan_data_awdl && primary != ctx->def.chan->hw_value)
+-			return -EBUSY;
+-	}
+-	if (primary == phy->chandef.chan->hw_value)
+-		return 0;
++		    !s->vif->nan_data_awdl) {
++			if (primary != ctx->def.chan->hw_value)
++				return -EBUSY;
++			restore = true;
++		}
++	}
+ 	channel = ieee80211_get_channel(mld->wiphy, 5000 + 5 * primary);
+ 	if (!channel)
+ 		return -EINVAL;
++	/* min_def may have narrowed while an earlier candidate was removed.
++	 * A primary override must carry its complete 80-MHz definition.
++	 */
++	desired = restore ? *iwl_mld_get_chandef_from_chanctx(mld, ctx) : ctx->def;
++	desired.chan = channel;
++	if (cfg80211_chandef_identical(&desired, &phy->chandef)) {
++		phy->awdl_primary = restore ? 0 : primary;
++		return 0;
++	}
+ 
+ 	WRITE_ONCE(vif->awdl_opens_ns, 0);
+ 	WRITE_ONCE(vif->awdl_closes_ns, 0);
+@@ -314,14 +331,24 @@
+ 	}
+ 	drained = ktime_get_ns();
+ 	saved = phy->chandef;
+-	phy->chandef.chan = channel;
++	saved_primary = phy->awdl_primary;
++	phy->chandef = desired;
++	phy->awdl_primary = restore ? 0 : primary;
+ 	ret = iwl_mld_phy_fw_action(mld, ctx, FW_CTXT_ACTION_MODIFY);
+ 	IWL_DEBUG_RATE(mld,
+ 		       "AWDL_PHY primary=%u sync_us=%llu drain_us=%llu command_us=%llu ret=%d\n",
+ 		       primary, (synced - began) / 1000,
+ 		       (drained - synced) / 1000,
+ 		       (ktime_get_ns() - drained) / 1000, ret);
+-	if (ret)
++	if (ret) {
+ 		phy->chandef = saved;
++		phy->awdl_primary = saved_primary;
++	} else if (saved.width != desired.width) {
++		for_each_station(sta, mld->hw)
++			if (iwl_mld_sta_from_mac80211(sta)->vif == vif)
++				iwl_mld_config_tlc(mld, vif, sta);
++	}
++	IWL_DEBUG_RATE(mld, "AWDL_CHANNEL primary=%u width=%u center=%u restore=%u ret=%d\n",
++		       primary, desired.width, desired.center_freq1, restore, ret);
+ 	return ret;
+ }
+--- a/drivers/net/wireless/intel/iwlwifi/mld/phy.h
++++ b/drivers/net/wireless/intel/iwlwifi/mld/phy.h
+@@ -13,6 +13,7 @@
+  * @fw_id: fw id of the phy.
+  * @chandef: the last chandef that mac80211 configured the driver
+  *	with. Used to detect a no-op when the chanctx changes.
++ * @awdl_primary: temporary AWDL primary; zero uses the NAN channel definition
+  * @channel_load_by_us: channel load on this channel caused by
+  *	the NIC itself, as indicated by firmware
+  * @avg_channel_load_not_by_us: averaged channel load on this channel caused by
+@@ -23,6 +24,7 @@
+ 	/* Add here fields that need clean up on hw restart */
+ 	struct_group(zeroed_on_hw_restart,
+ 		u8 fw_id;
++		u8 awdl_primary;
+ 		struct cfg80211_chan_def chandef;
+ 	);
+ 	/* And here fields that survive a hw restart */
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tlc.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tlc.c
+@@ -736,6 +736,8 @@
+ 			continue;
+ 
+ 		chandef = iwl_mld_get_chandef_from_chanctx(mld, chan_ctx);
++		if (iwl_mld_phy_from_mac80211(chan_ctx)->awdl_primary)
++			chandef = &iwl_mld_phy_from_mac80211(chan_ctx)->chandef;
+ 
+ 		capa.smps_mode = IEEE80211_SMPS_OFF; /* always off */
+ 

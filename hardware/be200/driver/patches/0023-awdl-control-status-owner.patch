@@ -1,0 +1,13 @@
+Subject: [PATCH] 保留 AWDL 单播管理帧的完成归属
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tx.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tx.c
+@@ -39,7 +39,7 @@
+ 
+ 	rcu_read_lock();
+ 	txq = rcu_dereference(mld->fw_id_to_txq[id]);
+-	if (iwl_mld_awdl_data_queue(txq)) {
++	if (txq && txq->sta && txq->vif->nan_data_awdl) {
+ 		struct ieee80211_tx_status status = {
+ 			.skb = skb,
+ 			.info = IEEE80211_SKB_CB(skb),

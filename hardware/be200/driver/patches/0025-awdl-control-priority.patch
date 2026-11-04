@@ -1,0 +1,14 @@
+Subject: [PATCH] 固定速率的 AWDL 同步帧保留管理优先级
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/tx.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/tx.c
+@@ -735,6 +735,9 @@
+ 		/* These are important frames */
+ 		flags |= IWL_TX_FLAGS_HIGH_PRI;
+ 	}
++	/* AWDL synchronization still needs management priority at its basic rate. */
++	if (ieee80211_is_awdl_action(hdr, skb->len))
++		flags |= IWL_TX_FLAGS_HIGH_PRI;
+ 
+ 	tx_cmd = (void *)dev_tx_cmd->payload;
+ 

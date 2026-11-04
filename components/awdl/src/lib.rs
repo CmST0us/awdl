@@ -125,8 +125,21 @@ impl Control {
                         if self.channels[1] != 0
                             && let Some(mac) = self.peer
                         {
-                            if let Some(seq) = self.node.peer(mac).and_then(|p| p.sequence) {
-                                advertise_follow(&mut frame.bytes, seq.channels());
+                            if let (Some(peer), Some(clock)) = (
+                                self.node.peer(mac),
+                                self.vht_peers
+                                    .iter()
+                                    .find(|(addr, _)| *addr == mac)
+                                    .and_then(|(_, caps)| caps.clock.as_ref()),
+                            ) {
+                                advertise_follow(
+                                    &mut frame.bytes,
+                                    &self.node,
+                                    peer,
+                                    clock,
+                                    self.channels,
+                                    now,
+                                );
                             }
                         }
                         self.emit(0, &frame.bytes);
@@ -247,6 +260,8 @@ impl Control {
                             "slot_us": 65536,
                             "channels": sequence,
                             "usable_slots": usable,
+                            "clock_error_tu": self.node.clock().error_tu(
+                                now, clock.next_slot_tu(now), clock.current_aw(now)),
                         })
                     );
                     self.peer_sequence = Some((peer, sequence));
@@ -372,16 +387,30 @@ pub unsafe extern "C" fn control_new(
     }))
 }
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn control_use_primary(p: *mut Control) {
+    let p = unsafe { &mut *p };
+    p.channels[1] = 0;
+    p.plan = None;
+    p.window = (0, 0);
+    p.peer_sequence = None;
+}
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn control_tick(p: *mut Control, now: u64) -> u64 {
     let p = unsafe { &mut *p };
     p.input(Input::Timer(Time(now)), Time(now));
     p.deadline.0
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn control_rx(p: *mut Control, data: *const u8, len: usize, now: u64) {
+pub unsafe extern "C" fn control_rx(
+    p: *mut Control,
+    data: *const u8,
+    len: usize,
+    received: u64,
+    now: u64,
+) {
     let p = unsafe { &mut *p };
     let data = unsafe { std::slice::from_raw_parts(data, len) };
-    let reference = action_reference_time(data, Time(now));
+    let reference = action_reference_time(data, Time(received));
     if let Some((mac, delta)) = parse_caps(data, p.local_he.as_ref(), reference) {
         let index = match p.vht_peers.iter().position(|(addr, _)| *addr == mac) {
             Some(index) => index,
@@ -497,28 +526,70 @@ fn plan_changed(old: Option<&(i64, [u8; 16])>, base: i64, channels: &[u8; 16]) -
             || (0..16).any(|i| channels[i] != previous[(i + slots as usize) % 16])
     })
 }
-fn advertise_follow(frame: &mut [u8], channels: [u8; 16]) {
+// The advertised sequence, AW counter and election must describe one clock.
+// Follow the selected peer's path to its master while serving that peer.
+fn advertise_follow(
+    frame: &mut Vec<u8>,
+    node: &Node,
+    peer: &owly_awdl::peer::Peer,
+    clock: &owly_awdl::sync::Clock,
+    channels: [u8; 2],
+    now: Time,
+) {
+    use owly_awdl::{
+        channel::{Encoding, Sequence},
+        election::{Election, Ranking},
+        tlv,
+    };
+    let Some(sequence) = peer.sequence else {
+        return;
+    };
+    let mut election = Election::own(node.config().addr);
+    election.run(std::iter::once(&peer.election), Ranking::MetricFirst);
+    let clock = if election.sync == peer.mac {
+        clock
+    } else {
+        node.clock()
+    };
+    let sequence = Sequence {
+        encoding: Encoding::OpClass,
+        slots: sequence
+            .channels()
+            .map(|c| [if channels.contains(&c) { c } else { 0 }, 0x80]),
+    };
+    let own = tlv::Own {
+        addr: node.config().addr,
+        name: &node.config().name,
+        devclass: 1,
+        channel: sequence.channel(clock.slot(now)),
+        master_channel: Channel(channels[0]),
+        next_tu: clock.next_slot_tu(now),
+        aw_counter: clock.current_aw(now),
+        psf_interval_tu: 110,
+        sequence: &sequence,
+        election: &election,
+        ht: None,
+    };
+    let mut updated = frame[..40].to_vec();
+    // All synchronization fields below are sampled at this target time.
+    updated[32..36].copy_from_slice(&(now.0 as u32).to_le_bytes());
+    updated[36..40].copy_from_slice(&(now.0 as u32).to_le_bytes());
     let mut at = 40;
     while at + 3 <= frame.len() {
         let len = u16::from_le_bytes([frame[at + 1], frame[at + 2]]) as usize;
         if at + 3 + len > frame.len() {
             return;
         }
-        let offset = match frame[at] {
-            4 if len >= 71 => Some(33),
-            18 if len >= 38 => Some(0),
-            _ => None,
-        };
-        if let Some(offset) = offset {
-            let v = &mut frame[at + 3 + offset..at + 3 + offset + 38];
-            v[..6].copy_from_slice(&[15, 3, 0, 3, 255, 255]);
-            for (i, c) in channels.iter().enumerate() {
-                v[6 + i * 2] = if *c == 149 || *c == 161 { *c } else { 0 };
-                v[7 + i * 2] = 0x80;
-            }
+        match frame[at] {
+            4 => tlv::put_sync_params(&mut updated, &own),
+            5 => tlv::put_election_v1(&mut updated, &own),
+            18 => tlv::put_channel_sequence(&mut updated, &own),
+            24 => tlv::put_election_v2(&mut updated, &own),
+            _ => updated.extend_from_slice(&frame[at..at + 3 + len]),
         }
         at += 3 + len;
     }
+    *frame = updated;
 }
 
 // IO80211AWDLPeer::parseAwdlDataPathTLVAndTakeAction maps extended bit 8

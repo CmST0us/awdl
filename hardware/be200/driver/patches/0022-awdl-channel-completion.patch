@@ -1,0 +1,113 @@
+Subject: [PATCH] 由发送完成唤醒 AWDL 信道切换
+
+--- a/drivers/net/wireless/intel/iwlwifi/pcie/gen1_2/internal.h
++++ b/drivers/net/wireless/intel/iwlwifi/pcie/gen1_2/internal.h
+@@ -338,6 +338,7 @@
+  * @low_mark: low watermark, resume queue if free space more than this
+  * @high_mark: high watermark, stop queue if free space less than this
+  * @overflow_q: overflow queue for handling frames that didn't fit on HW queue
++ * @drain_wait: transport completion wakes queue drain waiters
+  * @overflow_tx: need to transmit from overflow
+  *
+  * A Tx queue consists of circular buffer of BDs (a.k.a. TFDs, transmit frame
+@@ -357,6 +358,7 @@
+  * data is a window overlaid over the HW queue.
+  */
+ struct iwl_txq {
++	wait_queue_head_t drain_wait;
+ 	void *tfds;
+ 	struct iwl_pcie_first_tb_buf *first_tb_bufs;
+ 	dma_addr_t first_tb_dma;
+@@ -926,6 +928,7 @@
+ void iwl_pcie_freeze_txq_timer(struct iwl_trans *trans,
+ 			       unsigned long txqs, bool freeze);
+ int iwl_trans_pcie_wait_txq_empty(struct iwl_trans *trans, int txq_idx);
++int iwl_trans_pcie_wait_txq_idle(struct iwl_trans *trans, int txq_idx);
+ int iwl_trans_pcie_wait_txqs_empty(struct iwl_trans *trans, u32 txq_bm);
+ 
+ /*****************************************************
+--- a/drivers/net/wireless/intel/iwlwifi/pcie/gen1_2/tx.c
++++ b/drivers/net/wireless/intel/iwlwifi/pcie/gen1_2/tx.c
+@@ -926,6 +926,7 @@
+ 	if (ret)
+ 		return ret;
+ 
++	init_waitqueue_head(&txq->drain_wait);
+ 	spin_lock_init(&txq->lock);
+ 	spin_lock_init(&txq->reclaim_lock);
+ 
+@@ -2488,6 +2489,7 @@
+ 	spin_unlock(&txq->lock);
+ out:
+ 	spin_unlock_bh(&txq->reclaim_lock);
++	wake_up_all(&txq->drain_wait);
+ }
+ 
+ /* Set wr_ptr of specific device and txq  */
+--- a/drivers/net/wireless/intel/iwlwifi/pcie/gen1_2/trans.c
++++ b/drivers/net/wireless/intel/iwlwifi/pcie/gen1_2/trans.c
+@@ -2635,6 +2635,36 @@
+ 	data->ur_bd_cb = trans_pcie->rxq[queue].used_bd_dma;
+ 	data->fr_bd_wid = 0;
+ 
++	return 0;
++}
++
++static bool iwl_pcie_txq_idle(struct iwl_txq *txq)
++{
++	bool idle;
++
++	spin_lock_bh(&txq->lock);
++	idle = txq->read_ptr == txq->write_ptr && !txq->overflow_tx &&
++	       skb_queue_empty(&txq->overflow_q);
++	spin_unlock_bh(&txq->lock);
++	return idle;
++}
++
++/* The caller has stopped producers. Completion owns descriptor release;
++ * the timeout reports a failed drain without changing queue ownership.
++ */
++int iwl_trans_pcie_wait_txq_idle(struct iwl_trans *trans, int txq_idx)
++{
++	struct iwl_trans_pcie *pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
++	struct iwl_txq *txq;
++
++	if (test_bit(STATUS_TRANS_DEAD, &trans->status))
++		return -ENODEV;
++	if (!test_bit(txq_idx, pcie->txqs.queue_used))
++		return -EINVAL;
++	txq = pcie->txqs.txq[txq_idx];
++	if (!wait_event_timeout(txq->drain_wait, iwl_pcie_txq_idle(txq),
++				msecs_to_jiffies(IWL_FLUSH_WAIT_MS)))
++		return -ETIMEDOUT;
+ 	return 0;
+ }
+ 
+--- a/drivers/net/wireless/intel/iwlwifi/iwl-trans.h
++++ b/drivers/net/wireless/intel/iwlwifi/iwl-trans.h
+@@ -968,6 +968,7 @@
+ int iwl_trans_wait_tx_queues_empty(struct iwl_trans *trans, u32 txqs);
+ 
+ int iwl_trans_wait_txq_empty(struct iwl_trans *trans, int queue);
++int iwl_trans_wait_txq_idle(struct iwl_trans *trans, int queue);
+ 
+ void iwl_trans_write8(struct iwl_trans *trans, u32 ofs, u8 val);
+ 
+--- a/drivers/net/wireless/intel/iwlwifi/iwl-trans.c
++++ b/drivers/net/wireless/intel/iwlwifi/iwl-trans.c
+@@ -765,6 +765,15 @@
+ }
+ IWL_EXPORT_SYMBOL(iwl_trans_txq_enable_cfg);
+ 
++int iwl_trans_wait_txq_idle(struct iwl_trans *trans, int queue)
++{
++	if (test_bit(STATUS_FW_ERROR, &trans->status) ||
++	    trans->state != IWL_TRANS_FW_ALIVE)
++		return -EIO;
++	return iwl_trans_pcie_wait_txq_idle(trans, queue);
++}
++IWL_EXPORT_SYMBOL(iwl_trans_wait_txq_idle);
++
+ int iwl_trans_wait_txq_empty(struct iwl_trans *trans, int queue)
+ {
+ 	if (unlikely(test_bit(STATUS_FW_ERROR, &trans->status)))

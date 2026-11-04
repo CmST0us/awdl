@@ -1,0 +1,118 @@
+Subject: [PATCH] 从 PHY 就绪时刻统计 AWDL 可发送窗口
+
+信道切换等待不进入数据完成的空口成本；已过期窗口保持关闭。
+PHY 完成时刻独立于对端日程，窗口更新可以提前或延后。
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/phy.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/phy.c
+@@ -175,6 +175,8 @@
+ 	ret = iwl_mld_send_cmd_pdu(mld, PHY_CONTEXT_CMD, &cmd);
+ 	if (ret)
+ 		IWL_ERR(mld, "Failed to send PHY_CONTEXT_CMD ret = %d\n", ret);
++	else
++		phy->ready_ns = ktime_get_ns();
+ 
+ 	return ret;
+ }
+@@ -237,7 +239,7 @@
+  * primary is overridden, and native NDP stations require the home primary.
+  */
+ int iwl_mld_awdl_primary(struct iwl_mld *mld, struct ieee80211_vif *vif,
+-			 u8 primary)
++			 u8 primary, u64 *ready)
+ {
+ 	struct ieee80211_chanctx_conf *ctx = NULL;
+ 	struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
+@@ -291,6 +293,8 @@
+ 	desired.chan = channel;
+ 	if (cfg80211_chandef_identical(&desired, &phy->chandef)) {
+ 		phy->awdl_primary = restore ? 0 : primary;
++		if (ready)
++			*ready = phy->ready_ns;
+ 		return 0;
+ 	}
+ 
+@@ -348,6 +352,8 @@
+ 			if (iwl_mld_sta_from_mac80211(sta)->vif == vif)
+ 				iwl_mld_config_tlc(mld, vif, sta);
+ 	}
++	if (ready)
++		*ready = phy->ready_ns;
+ 	IWL_DEBUG_RATE(mld, "AWDL_CHANNEL primary=%u width=%u center=%u restore=%u ret=%d\n",
+ 		       primary, desired.width, desired.center_freq1, restore, ret);
+ 	return ret;
+--- a/drivers/net/wireless/intel/iwlwifi/mld/phy.h
++++ b/drivers/net/wireless/intel/iwlwifi/mld/phy.h
+@@ -13,6 +13,7 @@
+  * @fw_id: fw id of the phy.
+  * @chandef: the last chandef that mac80211 configured the driver
+  *	with. Used to detect a no-op when the chanctx changes.
++ * @ready_ns: last successful PHY command completion, CLOCK_MONOTONIC ns
+  * @awdl_primary: temporary AWDL primary; zero uses the NAN channel definition
+  * @channel_load_by_us: channel load on this channel caused by
+  *	the NIC itself, as indicated by firmware
+@@ -25,6 +26,7 @@
+ 	struct_group(zeroed_on_hw_restart,
+ 		u8 fw_id;
+ 		u8 awdl_primary;
++		u64 ready_ns;
+ 		struct cfg80211_chan_def chandef;
+ 	);
+ 	/* And here fields that survive a hw restart */
+@@ -60,6 +62,6 @@
+ 				struct ieee80211_chanctx_conf *ctx);
+ 
+ int iwl_mld_awdl_primary(struct iwl_mld *mld, struct ieee80211_vif *vif,
+-			 u8 primary);
++			 u8 primary, u64 *ready);
+ 
+ #endif /* __iwl_mld_phy_h__ */
+--- a/drivers/net/wireless/intel/iwlwifi/mld/mac80211.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/mac80211.c
+@@ -896,7 +896,7 @@
+ 		struct iwl_mld_vif *mld_vif = iwl_mld_vif_from_mac80211(vif);
+ 		struct iwl_mld_int_sta *sta = &mld_vif->nan.mcast_data_sta;
+ 
+-		if (vif->nan_data_awdl && iwl_mld_awdl_primary(mld, vif, 0))
++		if (vif->nan_data_awdl && iwl_mld_awdl_primary(mld, vif, 0, NULL))
+ 			IWL_ERR(mld, "AWDL home channel restore failed\n");
+ 		if (sta->sta_id != IWL_INVALID_STA)
+ 			iwl_mld_remove_nan_mcast_data_sta(mld, sta);
+@@ -1963,7 +1963,7 @@
+ 
+ 				if (!awdl->nan_data_awdl)
+ 					continue;
+-				ret = iwl_mld_awdl_primary(mld, awdl, 0);
++				ret = iwl_mld_awdl_primary(mld, awdl, 0, NULL);
+ 				if (ret)
+ 					return ret;
+ 			}
+--- a/drivers/net/wireless/intel/iwlwifi/mld/vendor-cmd.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/vendor-cmd.c
+@@ -1018,13 +1018,22 @@
+ 	if (len == 18 && *(const u8 *)data == 4) {
+ 		struct ieee80211_vif *vif = wdev_to_ieee80211_vif(wdev);
+ 		struct iwl_mld *mld = iwl_mld_vif_from_mac80211(vif)->mld;
+-		int ret = iwl_mld_awdl_primary(mld, vif, ((const u8 *)data)[1]);
++		u64 opens = get_unaligned_le64((const u8 *)data + 2);
++		u64 closes = get_unaligned_le64((const u8 *)data + 10);
++		u64 ready;
++		int ret = iwl_mld_awdl_primary(mld, vif, ((const u8 *)data)[1], &ready);
+ 
+ 		if (ret)
+ 			return ret;
+-		return ieee80211_awdl_set_window(wdev,
+-			get_unaligned_le64((const u8 *)data + 2),
+-			get_unaligned_le64((const u8 *)data + 10));
++		/* PHY completion is independent of future peer schedule updates.
++		 * Switching time must not become a data airtime sample.
++		 */
++		if (opens) {
++			opens = max(opens, ready);
++			if (opens >= closes)
++				opens = closes = 0;
++		}
++		return ieee80211_awdl_set_window(wdev, opens, closes);
+ 	}
+ 	if (len == 1 && *(const u8 *)data == 1)
+ 		return ieee80211_nan_data_set_awdl(wdev);
