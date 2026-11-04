@@ -14,6 +14,7 @@ pub struct Control {
     window: (u64, u64),
     tx_drain_us: u64,
     plan: Option<(i64, [u8; 16])>,
+    peer_sequence: Option<(MacAddr, [u8; 16])>,
     applied: Option<[u8; 28]>,
     observed: u64,
     available: u64,
@@ -152,6 +153,7 @@ impl Control {
                         self.emit(4, &mac.0);
                         self.peer = None;
                         self.applied = None;
+                        self.peer_sequence = None;
                     }
                 }
                 _ => {}
@@ -230,6 +232,25 @@ impl Control {
                 .unwrap_or_else(|| self.node.clock());
             let boundary = now.0 + clock.next_slot_us(now);
             if let Some(seq) = self.node.peer(peer).and_then(|p| p.sequence) {
+                let sequence = seq.channels();
+                if self.peer_sequence != Some((peer, sequence)) {
+                    let usable = sequence
+                        .iter()
+                        .filter(|&&channel| channel != 0 && self.channels.contains(&channel))
+                        .count();
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "event": "peer-schedule",
+                            "peer": format_mac(peer),
+                            "elapsed_us": now.0,
+                            "slot_us": 65536,
+                            "channels": sequence,
+                            "usable_slots": usable,
+                        })
+                    );
+                    self.peer_sequence = Some((peer, sequence));
+                }
                 let slot = clock.slot(now);
                 let channels = std::array::from_fn(|i| match seq.channel((slot + i) % 16) {
                     channel if self.channels.contains(&channel) => channel,
@@ -333,6 +354,7 @@ pub unsafe extern "C" fn control_new(
         window: (0, 0),
         tx_drain_us: u64::from(tx_drain_us),
         plan: None,
+        peer_sequence: None,
         observed: 1,
         available: 0,
         report: 1,

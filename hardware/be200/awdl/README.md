@@ -44,8 +44,15 @@ Intel vendor command `0x001735 / 0x4157444c` 以 `awdl0` 的 ifindex 寻址：
 
 TCP 指标使用不带前缀长度的 IPv6 源／目的地址匹配，接口地址单独附加 `/64`。`AWDL_TCP_METRICS` 日志记录删除结果：`removed=1` 表示找到并删除旧记录，`removed=0` 表示没有匹配记录。无线策略在管理器启动时加载，修改后须重启 `wirelessd`，活动会话可通过 `ip -6 route show dev awdl0` 与 `ss -tin` 核对实际配置。
 
+## 高吞吐使用条件
+
+iPad mini 从控制中心断开 AP 连接、保留 Wi-Fi 无线功能时，149 信道在文件接收期间可扩展到 15/16 个时隙。无线运行配置使用 `frequency = 5745`，正常重启无线及应用服务后发送；同一份 500 MB 文件的三轮平均速度为 65.814–67.985 MB/s，完整数据见[验收记录](../../../docs/acceptance.md)。控制中心断开网络仍保留 AirDrop，见 [Apple 说明](https://support.apple.com/en-ca/102412)。
+
+`peer-schedule` 显示接收端完整日程与当前后端可用时隙数。接收端连接 AP 时，实测日程既有 6 个 161、2 个 149 的分配，也有 4 个 161、11 个 149 的分配。主信道需依据接收端实际日程选择，使用已有的 `frequency` 配置，沿用共享 NAN/NAN_DATA 和 TCP 策略。
+
 ## 限制
 
 - 仅一个 AWDL 数据对端；使用所选的 149 或 161，不在两者之间跟随切换。
 - 固件继续执行 NAN 本地日程；AWDL 发送窗口由主机控制，不是固件自主 AWDL/TSF 调度。
+- 50 MB/s 以上的整文件均速要求上述接收端日程；连接 AP 时不能保证同等吞吐。接收端 AP 状态与主信道不匹配时，可能没有共同可用窗口。
 - 实测链路和 AirDrop 验收范围见 [验收记录](../../../docs/acceptance.md)。
