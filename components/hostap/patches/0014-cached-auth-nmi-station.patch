@@ -1,0 +1,205 @@
+Subject: NAN：在缓存认证安装密钥前建立 NMI 站点
+
+认证管理站点先于对端日程存在；真实日程到达后沿用同一站点，
+认证失败或对端退出时按实际完成结果释放站点。
+
+--- a/src/nan/nan.h
++++ b/src/nan/nan.h
+@@ -604,6 +604,15 @@
+ 	 * instance ID; false otherse
+ 	 */
+ 	bool (*is_valid_publish_id)(void *ctx, u8 instance_id, u8 *service_id);
++
++	/**
++	 * set_peer_station - Create/remove an NMI station without a peer schedule
++	 * @ctx: Callback context from cb_ctx
++	 * @nmi_addr: Peer NMI address
++	 * @present: true to create, false to remove after unpairing
++	 * Returns: 0 after completion, negative on failure
++	 */
++	int (*set_peer_station)(void *ctx, const u8 *nmi_addr, bool present);
+ 
+ 	/**
+ 	 * set_peer_schedule - Configure peer schedule
+--- a/src/nan/nan_i.h
++++ b/src/nan/nan_i.h
+@@ -565,6 +565,8 @@
+ 	struct dl_list list;
+ 	u8 nmi_addr[ETH_ALEN];
+ 	bool configured;
++	/* NMI owned by authentication before peer availability is known. */
++	bool auth_station;
+ 	struct os_reltime last_seen;
+ 	struct nan_peer_info info;
+ 
+@@ -853,6 +855,7 @@
+ bool nan_is_ndpe_supported(struct nan_data *nan, const struct nan_peer *peer);
+ void nan_add_kde_hdr(struct wpabuf *buf, u32 kde, size_t data_len);
+ int nan_clear_peer_schedule(struct nan_data *nan, struct nan_peer *peer);
++int nan_prepare_auth_station(struct nan_data *nan, struct nan_peer *peer);
+ #ifdef CONFIG_PASN
+ int nan_nira_get_tag_nonce(const struct nan_config *nan, u8 *nonce, u8 *tag);
+ void nan_pairing_deinit_peer(struct nan_peer *peer);
+--- a/src/nan/nan.c
++++ b/src/nan/nan.c
+@@ -242,6 +242,10 @@
+ 			   "NAN: Peer delete while NDP setup is WIP");
+ 		nan_ndp_setup_stop(nan, peer);
+ 	}
++
++	/* Keep ownership when an authentication station could not be removed. */
++	if (peer->auth_station && nan_clear_peer_schedule(nan, peer))
++		return;
+ 
+ 	wpabuf_free(peer->bootstrap.npba);
+ 	peer->bootstrap.npba = NULL;
+@@ -1664,6 +1668,21 @@
+ 			     struct nan_peer_schedule *sched);
+ 
+ 
++int nan_prepare_auth_station(struct nan_data *nan, struct nan_peer *peer)
++{
++	int ret;
++
++	if (peer->configured || peer->auth_station)
++		return 0;
++	if (!nan->cfg->set_peer_station)
++		return -1;
++	ret = nan->cfg->set_peer_station(nan->cfg->cb_ctx, peer->nmi_addr, true);
++	if (!ret)
++		peer->auth_station = true;
++	return ret;
++}
++
++
+ int nan_configure_peer_schedule(struct nan_data *nan, struct nan_peer *peer,
+ 				const struct nan_schedule *local_sched)
+ {
+@@ -1712,7 +1731,8 @@
+ 	ulw_elems = nan_peer_build_ulw_attrs(&peer->info);
+ 
+ 	ret = nan->cfg->set_peer_schedule(nan->cfg->cb_ctx, peer->nmi_addr,
+-					  !peer->configured, capa->cdw_info,
++					  !peer->configured && !peer->auth_station,
++					  capa->cdw_info,
+ 					  peer->info.seq_id,
+ 					  capa->channel_switch_time, &sched,
+ 					  ulw_elems);
+@@ -1723,6 +1743,7 @@
+ 	}
+ 
+ 	peer->configured = true;
++	peer->auth_station = false;
+ 	return 0;
+ }
+ 
+@@ -1734,6 +1755,13 @@
+ 	wpa_printf(MSG_DEBUG, "NAN: Clear peer schedule, peer->configured=%d",
+ 		   peer->configured);
+ 
++	if (peer->auth_station) {
++		ret = nan->cfg->set_peer_station(nan->cfg->cb_ctx,
++					       peer->nmi_addr, false);
++		if (ret)
++			return ret;
++		peer->auth_station = false;
++	}
+ 	if (!peer->configured)
+ 		return 0;
+ 
+--- a/src/nan/nan_pairing.c
++++ b/src/nan/nan_pairing.c
+@@ -650,6 +650,14 @@
+ 	peer->pairing.peer_instance_id = peer_instance_id;
+ 	peer->pairing.flags = 0;
+ 
++	/* NM-TK installation precedes Auth2, even when discovery has not yet
++	 * supplied peer availability or the local schedule is being updated. */
++	ret = nan_prepare_auth_station(nan_data, peer);
++	if (ret) {
++		nan_pairing_deinit_peer(peer);
++		return ret;
++	}
++
+ 	/* Cached Auth1 can precede discovery. Keep the committed local schedule
+ 	 * during authentication; peer capabilities still gate NDP admission. */
+ 	if (responder && auth_mode == NAN_PASN_AUTH_MODE_PMK &&
+@@ -661,6 +669,8 @@
+ 		ret = nan_configure_peer_schedule(nan_data, peer, sched);
+ 	if (ret) {
+ 		wpa_printf(MSG_DEBUG, "NAN: Could not configure peer schedule");
++		if (peer->auth_station)
++			nan_clear_peer_schedule(nan_data, peer);
+ 		nan_pairing_deinit_peer(peer);
+ 		return ret;
+ 	}
+@@ -678,6 +688,8 @@
+ 				wpabuf_len(peer->pairing.pending_auth1));
+ 			wpabuf_free(peer->pairing.pending_auth1);
+ 			peer->pairing.pending_auth1 = NULL;
++			if (ret && peer->auth_station)
++				nan_clear_peer_schedule(nan_data, peer);
+ 
+ 			return ret;
+ 		}
+@@ -696,6 +708,8 @@
+ 
+ 	if (ret) {
+ 		wpa_printf(MSG_INFO, "NAN: Pairing: Failed to start PASN");
++		if (peer->auth_station)
++			nan_clear_peer_schedule(nan_data, peer);
+ 		nan_pairing_deinit_peer(peer);
+ 	}
+ 
+--- a/wpa_supplicant/nan_supplicant.c
++++ b/wpa_supplicant/nan_supplicant.c
+@@ -265,6 +265,25 @@
+ }
+ 
+ 
++static int wpas_nan_set_peer_station_cb(void *ctx, const u8 *nmi_addr,
++					bool present)
++{
++	struct wpa_supplicant *wpa_s = ctx;
++	struct hostapd_sta_add_params params;
++
++	if (!present) {
++		nan_pairing_unpair_peer(wpa_s->nan, nmi_addr);
++		return wpa_drv_sta_remove(wpa_s, nmi_addr);
++	}
++
++	os_memset(&params, 0, sizeof(params));
++	params.addr = nmi_addr;
++	params.flags = WPA_STA_AUTHENTICATED | WPA_STA_ASSOCIATED;
++	params.flags_mask = params.flags;
++	return wpa_drv_sta_add(wpa_s, &params);
++}
++
++
+ static int wpas_nan_set_peer_schedule_cb(void *ctx, const u8 *nmi_addr,
+ 					 bool new_sta, u16 cdw, u8 sequence_id,
+ 					 u16 max_channel_switch_time,
+@@ -321,14 +340,8 @@
+ 	}
+ 
+ 	if (new_sta) {
+-		struct hostapd_sta_add_params sta_params;
+-
+ 		wpa_printf(MSG_DEBUG, "NAN: New NMI station");
+-		os_memset(&sta_params, 0, sizeof(sta_params));
+-		sta_params.addr = nmi_addr;
+-		sta_params.flags = WPA_STA_AUTHENTICATED | WPA_STA_ASSOCIATED;
+-		sta_params.flags_mask = sta_params.flags;
+-		ret = wpa_drv_sta_add(wpa_s, &sta_params);
++		ret = wpas_nan_set_peer_station_cb(ctx, nmi_addr, true);
+ 		if (ret) {
+ 			wpa_printf(MSG_INFO, "NAN: Failed to add NMI station");
+ 			goto out;
+@@ -1406,6 +1419,7 @@
+ 		nan.send_naf = wpas_nan_send_naf_cb;
+ 		nan.get_chans = wpas_nan_get_chans_cb;
+ 		nan.is_valid_publish_id = wpas_nan_is_valid_publish_id_cb;
++		nan.set_peer_station = wpas_nan_set_peer_station_cb;
+ 		nan.set_peer_schedule = wpas_nan_set_peer_schedule_cb;
+ 		nan.set_group_key = wpas_nan_set_group_key_cb;
+ 		nan.get_seqnum = wpas_nan_get_seqnum_cb;

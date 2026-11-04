@@ -10,3 +10,4 @@
 0010-peer-capabilities-event.patch
 0012-cached-auth-local-schedule.patch
 0013-ndc-channel-coverage.patch
+0014-cached-auth-nmi-station.patch

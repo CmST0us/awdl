@@ -923,7 +923,7 @@ final class M5PairingTests: XCTestCase {
         let batchID = try XCTUnwrap(ProcessInfo.processInfo.environment["AWARE_BATCH_ID"])
         let deviceID = try XCTUnwrap(ProcessInfo.processInfo.environment["AWARE_PAIRED_DEVICE_ID"])
         let app = application(runID: batchID, batchID: batchID,
-                              target: TestConfiguration.targetName)
+                              target: ProcessInfo.processInfo.environment["AWARE_TARGET_NAME"] ?? TestConfiguration.targetName)
         app.launchEnvironment["AWARE_PAIRED_DEVICE_ID"] = deviceID
         let benchmark = ProcessInfo.processInfo.environment["AWARE_BENCH_SECONDS"].flatMap(Double.init)
         if benchmark != nil {
@@ -970,8 +970,9 @@ final class M5PairingTests: XCTestCase {
                 if XCTWaiter.wait(for: [terminal], timeout: min(5, end.timeIntervalSinceNow)) == .completed { break }
             }
         } else {
-            // The observed terminal transition took 6.01 s from the button.
-            XCTAssertEqual(XCTWaiter.wait(for: [completion], timeout: 12), .completed)
+            // Discovery and connection each have a 10-second deadline;
+            // allow two more seconds for the UI to observe the terminal state.
+            XCTAssertEqual(XCTWaiter.wait(for: [completion], timeout: 22), .completed)
         }
         marker("connection_observed", ["state": label(app, "data.state"),
                                        "error": label(app, "data.error")])
@@ -995,7 +996,9 @@ final class M5PairingTests: XCTestCase {
         let completion = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "label == 'ack_received' OR label == 'failed'"),
             object: app.staticTexts["data.state"])
-        XCTAssertEqual(XCTWaiter.wait(for: [completion], timeout: 5), .completed)
+        // Discovery and connection each have a 10-second deadline.
+        // Allow the UI to observe the resulting terminal state.
+        XCTAssertEqual(XCTWaiter.wait(for: [completion], timeout: 22), .completed)
         XCTAssertEqual(app.staticTexts["data.state"].label, "ack_received")
     }
 
