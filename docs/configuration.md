@@ -161,8 +161,9 @@ hardware = "be200"
 [nan]
 # NAN 发现主信道频率，单位 MHz；必填，当前后端要求 2437。
 discovery_frequency_mhz = 2437
-# hostap 的 NAN 双频配置，布尔值，必填；数据主信道由运行配置 frequency 指定。
-dual_band = true
+# NAN 发现是否同时使用 5 GHz，布尔值，必填；false 保留 2.4 GHz 发现。
+# 关闭可选的 5 GHz DW，避免其与 AWDL 主信道切换重叠；5 GHz 数据主信道仍由 frequency 指定。
+dual_band = false
 # NAN 主设备选择优先级，无量纲整数 0–255，必填。
 master_preference = 100
 # 发现信标间隔，单位 TU（1024 微秒）；正整数，必填。
@@ -207,6 +208,8 @@ data_slots = [4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 17, 18, 19, 20,
 `discovery_slots` 表示发现主信道上的额外本地可用时隙；空列表只保留协议 DW。当前后端采用 512 TU 周期、16 TU 时隙，槽号为 0–31；这些单位由后端支持的调度格式定义。公共编码将槽号转换成 hostap 位图，BE200 只发布数据主信道的 `ffffffff`，RTL 发布数据／发现位图 `f0f2ffff/0f0d0000`。`data_slots` 必须非空。
 
 数据主信道从运行配置的 `frequency` 取得。同一信道时使用已支持的单信道全周期策略；不同信道时两组槽不能重叠。对端协商和交集计算仍由 hostap 与后端执行。
+
+BE200 默认只在 2.4 GHz 执行 NAN 发现，减少可选的 5 GHz DW 与 AWDL 主信道切换重叠；NAN_DATA 与 AWDL 仍使用配置选定的 5 GHz 数据主信道。需要双频发现的部署可将 `dual_band` 设为 `true`，并接受额外发现窗口的空口占用。
 
 设备能力约束继续由实现检查。RTL 当前只接受指定的 master preference、dual_band 和 beacon interval；修改配置不会扩展固件能力。配置描述已支持的选择，驱动描述支持范围。
 

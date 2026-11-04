@@ -5,8 +5,9 @@ hardware = "be200"
 [nan]
 # NAN 发现主信道频率，单位 MHz；必填，当前后端要求 2437。
 discovery_frequency_mhz = 2437
-# hostap 的 NAN 双频配置，布尔值，必填；数据主信道由运行配置 frequency 指定。
-dual_band = true
+# NAN 发现是否同时使用 5 GHz，布尔值，必填；false 保留 2.4 GHz 发现。
+# 关闭可选的 5 GHz DW，避免其与 AWDL 主信道切换重叠；5 GHz 数据主信道仍由 frequency 指定。
+dual_band = false
 # NAN 主设备选择优先级，无量纲整数 0–255，必填。
 master_preference = 100
 # 发现信标间隔，单位 TU（1024 微秒）；正整数，必填。

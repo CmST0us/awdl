@@ -1,0 +1,68 @@
+Subject: [PATCH] 记录 NAN 通知到达、处理与 PHY 切换时刻
+
+--- a/drivers/net/wireless/intel/iwlwifi/mld/notif.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/notif.c
+@@ -563,6 +563,14 @@
+ 		if (!iwl_mld_notif_is_valid(mld, pkt, rx_h))
+ 			return;
+ 
++		if (rx_h->cmd_id == WIDE_ID(MAC_CONF_GROUP, NAN_DW_END_NOTIF)) {
++			const struct iwl_nan_dw_end_notif *dw = (const void *)pkt->data;
++
++			IWL_DEBUG_INFO(mld, "NAN_DW_RX mono_ns=%llu band=%u seq=%u\n",
++				       (unsigned long long)ktime_get_ns(), dw->band,
++				       le16_to_cpu(pkt->hdr.sequence));
++		}
++
+ 		if (rx_h->context == RX_HANDLER_SYNC) {
+ 			rx_h->fn(mld, pkt);
+ 			break;
+--- a/drivers/net/wireless/intel/iwlwifi/mld/nan.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/nan.c
+@@ -419,7 +419,15 @@
+ 			 "NAN: DW end without NAN started\n"))
+ 		return;
+ 
++	u64 began = ktime_get_ns();
++
++	IWL_DEBUG_INFO(mld, "NAN_DW_WORK mono_ns=%llu band=%u seq=%u\n",
++		       (unsigned long long)began, notif->band,
++		       le16_to_cpu(pkt->hdr.sequence));
+ 	iwl_mld_nan_flush(mld, mld->nan_device_vif);
++	IWL_DEBUG_INFO(mld, "NAN_DW_DONE mono_ns=%llu band=%u flush_us=%llu\n",
++		       (unsigned long long)ktime_get_ns(), notif->band,
++		       (ktime_get_ns() - began) / 1000);
+ 
+ 	/* TODO: currently the notification specified the band on which the DW
+ 	 * ended. Need to change that to the actual channel on which the next DW
+--- a/drivers/net/wireless/intel/iwlwifi/mld/phy.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/phy.c
+@@ -340,9 +340,11 @@
+ 	phy->awdl_primary = restore ? 0 : primary;
+ 	ret = iwl_mld_phy_fw_action(mld, ctx, FW_CTXT_ACTION_MODIFY);
+ 	IWL_DEBUG_RATE(mld,
+-		       "AWDL_PHY primary=%u sync_us=%llu drain_us=%llu command_us=%llu ret=%d\n",
+-		       primary, (synced - began) / 1000,
+-		       (drained - synced) / 1000,
++		       "AWDL_PHY primary=%u begin_ns=%llu command_ns=%llu ready_ns=%llu sync_us=%llu drain_us=%llu command_us=%llu ret=%d\n",
++		       primary, (unsigned long long)began,
++		       (unsigned long long)drained,
++		       (unsigned long long)phy->ready_ns,
++		       (synced - began) / 1000, (drained - synced) / 1000,
+ 		       (ktime_get_ns() - drained) / 1000, ret);
+ 	if (ret) {
+ 		phy->chandef = saved;
+--- a/drivers/net/wireless/intel/iwlwifi/mld/key.c
++++ b/drivers/net/wireless/intel/iwlwifi/mld/key.c
+@@ -222,7 +222,10 @@
+ 	if (WARN_ON(!sta_mask))
+ 		return;
+ 
+-	iwl_mld_send_cmd_pdu(mld, WIDE_ID(DATA_PATH_GROUP, SEC_KEY_CMD), &cmd);
++	int ret = iwl_mld_send_cmd_pdu(mld, WIDE_ID(DATA_PATH_GROUP, SEC_KEY_CMD), &cmd);
++
++	IWL_DEBUG_INFO(mld, "KEY_REMOVE sta_mask=0x%x key=%u ret=%d\n",
++		       sta_mask, keyidx, ret);
+ }
+ 
+ static struct ieee80211_key_conf **

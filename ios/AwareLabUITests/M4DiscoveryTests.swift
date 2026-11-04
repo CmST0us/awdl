@@ -47,6 +47,10 @@ final class M4DiscoveryTests: XCTestCase {
             app.buttons["discovery.system"].tap()
 
             let pickerShown = app.buttons["关闭"].waitForExistence(timeout: 5)
+            let allow = app.buttons.matching(
+                NSPredicate(format: "label IN %@", ["Always Allow", "始终允许"])
+            ).firstMatch
+            if allow.exists { allow.tap() }
             let tree = app.debugDescription
             let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
             screenshot.name = runID + "-system-discovery"
