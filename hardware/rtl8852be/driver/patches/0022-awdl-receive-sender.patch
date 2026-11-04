@@ -1,0 +1,92 @@
+--- a/include/wa_nan_uapi.h
++++ b/include/wa_nan_uapi.h
+@@ -120,7 +120,9 @@
+ };
+ 
+ enum wa_nan_event { WA_NAN_EVENT_RX = 1, WA_NAN_EVENT_TX_DONE,
+-	WA_NAN_EVENT_CLUSTER, WA_NAN_EVENT_DW };
++	WA_NAN_EVENT_CLUSTER, WA_NAN_EVENT_DW,
++	/* Unicast AWDL data from another sender; PEER_ADDR identifies it. */
++	WA_NAN_EVENT_AWDL_SENDER };
+ enum wa_nan_ack { WA_NAN_ACK_UNKNOWN, WA_NAN_ACK_NO, WA_NAN_ACK_YES };
+ enum wa_nan_feature {
+ 	WA_NAN_FEAT_MGMT_TX = 1U << 0,
+--- a/phl/wa_nan_uapi.h
++++ b/phl/wa_nan_uapi.h
+@@ -120,7 +120,9 @@
+ };
+ 
+ enum wa_nan_event { WA_NAN_EVENT_RX = 1, WA_NAN_EVENT_TX_DONE,
+-	WA_NAN_EVENT_CLUSTER, WA_NAN_EVENT_DW };
++	WA_NAN_EVENT_CLUSTER, WA_NAN_EVENT_DW,
++	/* Unicast AWDL data from another sender; PEER_ADDR identifies it. */
++	WA_NAN_EVENT_AWDL_SENDER };
+ enum wa_nan_ack { WA_NAN_ACK_UNKNOWN, WA_NAN_ACK_NO, WA_NAN_ACK_YES };
+ enum wa_nan_feature {
+ 	WA_NAN_FEAT_MGMT_TX = 1U << 0,
+--- a/phl/wa_nan_vendor.h
++++ b/phl/wa_nan_vendor.h
+@@ -50,7 +50,7 @@
+  const u8 *key, bool add, u64 key_cookie);
+ 
+ bool rtw_phl_awdl_probe_active(void *phl);
+-bool rtw_phl_awdl_net_rx(void *phl,const u8 *frame,u32 len,u32 flags);
++bool rtw_phl_awdl_net_rx(void *phl,const u8 *frame,u32 len,u32 flags,bool *sender);
+ int rtw_phl_awdl_probe(void *phl, struct rtw_wifi_role_t *role,
+  struct rtw_wifi_role_link_t *link, u32 op, u32 freq,
+  const u8 *frame, u16 len, u64 cookie);
+--- a/phl/wa_awdl_netdev.h
++++ b/phl/wa_awdl_netdev.h
+@@ -783,7 +783,7 @@
+  memcpy(skb_put(skb,bytes),p+16,bytes);skb->protocol=eth_type_trans(skb,n->dev);skb->ip_summed=CHECKSUM_NONE;
+  n->dev->stats.rx_packets++;n->dev->stats.rx_bytes+=bytes+ETH_HLEN;__skb_queue_tail(received,skb);
+ }
+-bool rtw_phl_awdl_net_rx(void *phl,const u8 *f,u32 len,u32 flags)
++bool rtw_phl_awdl_net_rx(void *phl,const u8 *f,u32 len,u32 flags,bool *sender)
+ {
+  struct wa_awdl_net *n;struct net_device *dev=NULL;struct sk_buff_head received;struct sk_buff *skb;
+  unsigned long irq;u32 h,at;u16 seq;u8 tid;bool handled=false,amsdu;
+@@ -800,8 +800,15 @@
+  }
+  if((f[0]&0x0c)!=8)goto out;handled=true;
+  if(n->stopping || !netif_running(n->dev))goto drop;
+- if(memcmp(f+16,wa_awdl_bssid,6)||memcmp(f+10,n->peer,6)||(!(f[4]&1)&&memcmp(f+4,n->dev->dev_addr,6))) {n->rx_wrong_peer++;goto drop;}
+  h=f[0]==0x88 ? 26:24;if(len<h+56 || f[1]&0x47 || flags&(WA_NAN_RX_CRC_ERROR|WA_NAN_RX_ICV_ERROR))goto format;
++ if(memcmp(f+16,wa_awdl_bssid,6)||(!(f[4]&1)&&memcmp(f+4,n->dev->dev_addr,6))) {n->rx_wrong_peer++;goto drop;}
++ if(memcmp(f+10,n->peer,6)) {
++  /* Ask userspace to select this sender after releasing the current station.
++   * Multicast discovery must not replace an active transfer's peer. */
++  if(!memcmp(f+4,n->dev->dev_addr,6) && is_valid_ether_addr(f+10))
++   *sender=true;
++  n->rx_wrong_peer++;goto drop;
++ }
+  tid=h==26 ? f[24]&15:16;seq=get_unaligned_le16(f+22)>>4;
+  if((f[1]&8)&&(n->rx_seen&BIT(tid))&&n->rx_sequence[tid]==seq){n->rx_duplicate++;goto drop;}
+  amsdu=h==26&&(f[24]&0x80);
+--- a/os_dep/linux/rtw_cfgvendor.c
++++ b/os_dep/linux/rtw_cfgvendor.c
+@@ -2082,7 +2082,14 @@
+ {
+ 	struct dvobj_priv *dvobj = drv;
+ 	_adapter *adapter = dvobj_get_primary_adapter(dvobj);
+- if (rtw_phl_awdl_net_rx(GET_PHL_INFO(dvobj),frame,len,flags)) return true;
++ bool sender = false;
++ if (rtw_phl_awdl_net_rx(GET_PHL_INFO(dvobj),frame,len,flags,&sender)) {
++  /* Emit outside the native RX lock; the frame remains owned by this call. */
++  if (sender)
++   wa_nan_emit(adapter, WA_NAN_EVENT_AWDL_SENDER, 0, frame+10, 6,
++    0, 0, 0, 0, WA_NAN_ACK_UNKNOWN, NULL);
++  return true;
++ }
+ 	if (rtw_phl_awdl_probe_active(GET_PHL_INFO(dvobj)) && len >= 30 &&
+      len <= WA_NAN_FRAME_MAX && !memcmp(frame+16, "\x00\x25\x00\xff\x94\x73", 6)) {
+   if (!(flags & (WA_NAN_RX_CRC_ERROR | WA_NAN_RX_ICV_ERROR)) &&
+@@ -2569,6 +2576,8 @@
+ 		       nla_put_u32(skb, WA_NAN_ATTR_FREQ, freq) ||
+ 		       nla_put_u32(skb, WA_NAN_ATTR_RX_FLAGS, flags) ||
+ 		       nla_put_u32(skb, WA_NAN_ATTR_RX_COUNTER, counter);
++	else if (event == WA_NAN_EVENT_AWDL_SENDER)
++		ret |= nla_put(skb, WA_NAN_ATTR_PEER_ADDR, 6, frame);
+ 	else if (event == WA_NAN_EVENT_CLUSTER)
+ 		ret |= nla_put(skb, WA_NAN_ATTR_CLUSTER_ID, 6, frame);
+ 	else if (event == WA_NAN_EVENT_DW)

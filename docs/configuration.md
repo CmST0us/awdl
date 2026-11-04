@@ -416,6 +416,8 @@ systemd 单元拥有进程启动、重启策略和外部停止期限；D-Bus 策
 
 `receive_write_buffer_bytes` 控制每个上传连接的文件写入批次；协议小块按顺序合并，文件结束时写出不足一批的余量。它只控制应用写入，不替代 TCP 接收窗口或文件系统刷盘。
 
+`upload_seconds` 是接受至成功响应的整次传输失败期限，持续收到数据不会延长它。500 MB 双向验收使用 600 秒；已有部署需要在 `/etc/airdrop/config.toml` 中明确设置并重启 AirDrop，安装保留原值。
+
 `components/airdrop/airdrop-tcp.conf` 是内核 TCP 接收自动调优的系统配置源，安装到 `/etc/sysctl.d/70-airdrop-tcp.conf`，已有文件保留。`net.ipv4.tcp_rmem` 的三项分别是最小、初始和最大接收内存，单位字节；IPv4 与 IPv6 均使用它。内核按连接需要增长至上限。安装到正在运行的系统时立即加载，暂存安装只复制文件；修改后使用 `sysctl -p /etc/sysctl.d/70-airdrop-tcp.conf` 加载，系统重启也会读取。此设置作用于本机 TCP 连接，由部署者维护，不属于网卡策略。
 
 安装选择决定 AirDrop 的无线依赖：BE200 使用 `wirelessd.service`，RTL 使用 `wirelessd-awdl.service`。单元从组件模板生成到 `.build/config`，生成文件不可作为第二份手工来源。配置文件不保存瞬时会话、对端选择和传输进度。AirDrop 的新会话身份与 Wi-Fi Aware 持久配对身份各自独立。运行操作见 [AirDrop 与 AWDL](airdrop.md)。

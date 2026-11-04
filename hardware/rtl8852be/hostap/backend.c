@@ -521,6 +521,11 @@ int wa_backend_receive(struct wa_backend *b) {
       memcpy(&e.cookie, value(a[WA_NAN_ATTR_COOKIE]), 8);
     if (size(a[WA_NAN_ATTR_ACKED]) == 1)
       memcpy(&e.acked, value(a[WA_NAN_ATTR_ACKED]), 1);
+    if (e.type == WA_NAN_EVENT_AWDL_SENDER) {
+      if (size(a[WA_NAN_ATTR_PEER_ADDR]) != 6)
+        continue;
+      memcpy(e.peer, value(a[WA_NAN_ATTR_PEER_ADDR]), 6);
+    }
     if (e.type == WA_NAN_EVENT_CLUSTER) {
       if (size(a[WA_NAN_ATTR_CLUSTER_ID]) != 6)
         continue;

@@ -120,7 +120,9 @@ enum wa_nan_tx_protection {
 };
 
 enum wa_nan_event { WA_NAN_EVENT_RX = 1, WA_NAN_EVENT_TX_DONE,
-	WA_NAN_EVENT_CLUSTER, WA_NAN_EVENT_DW };
+	WA_NAN_EVENT_CLUSTER, WA_NAN_EVENT_DW,
+	/* Unicast AWDL data from another sender; PEER_ADDR identifies it. */
+	WA_NAN_EVENT_AWDL_SENDER };
 enum wa_nan_ack { WA_NAN_ACK_UNKNOWN, WA_NAN_ACK_NO, WA_NAN_ACK_YES };
 enum wa_nan_feature {
 	WA_NAN_FEAT_MGMT_TX = 1U << 0,

@@ -62,6 +62,9 @@ done:
 static void event(void *context,const struct wa_event *e) {
  struct run *r=context;
  if(e->type==WA_NAN_EVENT_RX&&e->frame_len){r->rx++;uint64_t now=micros()-r->start+1;control_rx(r->node,e->frame,e->frame_len,now,now);}
+ else if(e->type==WA_NAN_EVENT_AWDL_SENDER)
+  printf("{\"event\":\"sender-requested\",\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\"}\n",
+   e->peer[0],e->peer[1],e->peer[2],e->peer[3],e->peer[4],e->peer[5]);
  else if(e->type==WA_NAN_EVENT_TX_DONE&&e->cookie==r->active){if(e->acked==WA_NAN_ACK_YES)r->acks++;r->active=0;}
 }
 int main(int argc,char **argv) {
