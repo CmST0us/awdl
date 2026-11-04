@@ -165,6 +165,7 @@ impl Session {
         let mut idle = Instant::now() + Duration::from_secs(self.cfg.receive_idle_seconds);
         let mut answer: Option<oneshot::Receiver<Answer>> = None;
         let mut staging: Option<Staging> = None;
+        let mut pending_write = Vec::new();
         let mut reporting = Instant::now();
         let mut eof = false;
         loop {
@@ -223,12 +224,18 @@ impl Session {
                             .await?
                     }
                     Event::Data(data) => {
-                        staging
-                            .as_mut()
-                            .context("缺少接收暂存目录")?
-                            .write(&data)
-                            .await?;
-                        self.bytes += data.len() as u64;
+                        // TLS/archive records are much smaller than disk writes.
+                        // Batch them before handing work to the filesystem pool.
+                        pending_write.extend_from_slice(&data);
+                        if pending_write.len() >= self.cfg.receive_write_buffer_bytes {
+                            staging
+                                .as_mut()
+                                .context("缺少接收暂存目录")?
+                                .write(&pending_write)
+                                .await?;
+                            self.bytes += pending_write.len() as u64;
+                            pending_write.clear();
+                        }
                         if reporting.elapsed() >= Duration::from_millis(500) {
                             self.report(
                                 json!({"event":"receive-progress","id":self.id,"bytes":self.bytes,
@@ -238,11 +245,13 @@ impl Session {
                         }
                     }
                     Event::EndFile => {
-                        staging
-                            .as_mut()
-                            .context("缺少接收暂存目录")?
-                            .end_file()
-                            .await?
+                        let staging = staging.as_mut().context("缺少接收暂存目录")?;
+                        if !pending_write.is_empty() {
+                            staging.write(&pending_write).await?;
+                            self.bytes += pending_write.len() as u64;
+                            pending_write.clear();
+                        }
+                        staging.end_file().await?
                     }
                     Event::UploadComplete => {
                         self.terminal = true;

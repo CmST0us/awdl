@@ -618,7 +618,17 @@ pub fn airdrop(root: &Path, cfg: &Settings) -> Result<()> {
                 0o755,
             ),
         ],
-        &[("config/airdrop.toml", "etc/airdrop/config.toml")],
+        &[
+            ("config/airdrop.toml", "etc/airdrop/config.toml"),
+            (
+                "components/airdrop/airdrop-tcp.conf",
+                "etc/sysctl.d/70-airdrop-tcp.conf",
+            ),
+        ],
     )?;
-    copy(&binary, &cfg.dest.join("usr/local/bin/airdrop"), 0o755)
+    copy(&binary, &cfg.dest.join("usr/local/bin/airdrop"), 0o755)?;
+    if cfg.dest == Path::new("/") {
+        run(Command::new("sysctl").args(["-p", "/etc/sysctl.d/70-airdrop-tcp.conf"]))?;
+    }
+    Ok(())
 }

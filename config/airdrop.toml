@@ -8,6 +8,9 @@ model = "Linux"
 hostname = "wireless-service"
 # 接收文件的目标绝对目录；缺失时创建，已有同名内容由协议库保留。
 directory = "/srv/airdrop"
+# 接收文件的批量写入缓冲大小，正整数字节；按文件顺序合并协议小块，文件结束时写完余量。
+# 每个正在上传的连接按需使用该缓冲，省略时为 1 MiB。
+receive_write_buffer_bytes = 1048576
 # 接收器在 AWDL IPv6 地址上监听的 TCP 端口，1–65535；发送端使用对端 SRV 端口。
 port = 8771
 # 是否自动接受收到的文件；false 时由 airdrop accept/decline 明确答复。

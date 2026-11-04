@@ -9,7 +9,7 @@ use owly_airdrop::{
         tls::Identity,
     },
     proto::{
-        mdns::{Burst, Service},
+        mdns::{Burst, RECEIVER_FLAGS, Service},
         sender::Outcome,
     },
 };
@@ -273,7 +273,7 @@ async fn receive(
                 host: cfg.hostname.clone(),
                 port: cfg.port,
                 addr: address,
-                flags: 0x089,
+                flags: RECEIVER_FLAGS,
             })
             .await?;
         emit(

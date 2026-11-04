@@ -8,6 +8,7 @@ pub struct Configuration {
     pub model: String,
     pub hostname: String,
     pub directory: PathBuf,
+    pub receive_write_buffer_bytes: usize,
     pub port: u16,
     pub auto_accept: bool,
     pub hci: u16,
@@ -42,6 +43,10 @@ impl Configuration {
         ensure!(
             value.directory.is_absolute() && value.port != 0,
             "接收目录必须为绝对路径，端口不能为 0"
+        );
+        ensure!(
+            value.receive_write_buffer_bytes > 0,
+            "接收写入缓冲必须为正整数字节"
         );
         ensure!(
             [

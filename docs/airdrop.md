@@ -74,6 +74,8 @@ BE200 接收模式先建立发现公告所需的数据站点，再依据内核�
 
 发送端使用接收者 mDNS TXT 中的 `flags` 协商正文格式：支持 DVZip 的接收者使用 DVZip，其余使用 gzip。`discovered.flags` 记录对端公告的能力；正文大小和速度按实际选定格式统计。
 
+接收端使用 gzip 正文。解包后的文件数据按 `receive_write_buffer_bytes` 合并写入，文件结束时写出余量，再提交暂存文件并答复。TCP 接收内存由随 AirDrop 安装的系统 sysctl 文件提供自动调优上限，配置所有权与生效方式见[配置说明](configuration.md#awdl-与-airdrop-配置)。
+
 BE200 在现有守护进程中注册两个协议接口，AWDL 释放不关闭 NAN。RTL 的两个运行单元共用 PCI 设备锁及 `org.wirelessd1`，同一网卡已被占用时启动报告忙。服务启动不自动停止其他无线服务。配置、配对和共享文件保留，默认开机启用设置保持原部署选择。
 
 ## 接口与进度

@@ -412,6 +412,10 @@ systemd 单元拥有进程启动、重启策略和外部停止期限；D-Bus 策
 
 `hardware/be200/radio.toml` 的 `[awdl]` 提供会话 TCP 拥塞控制、初始窗口、乱序阈值、接口队列长度和发送排空余量；每项必填，重启 wirelessd 生效。默认算法 Scalable 要求目标内核提供 tcp_scalable，fq pacing 要求 sch_fq。显式 `radio_profile` 替代文件也须包含这些字段。BE200 模块电源策略与聚合上限保存在 `hardware/be200/driver/be200.conf`，安装后重新加载驱动生效。
 
-`config/airdrop.toml` 提供 AirDrop 的产品显示名、mDNS 主机标签、接收目录和端口、手工或自动接受策略、专用 HCI 选择、发现、TLS 控制、接收空闲、接受与传输期限及公告周期，安装到 `/etc/airdrop/config.toml`。每项配置就地注明单位、约束与作用；已有文件不被安装器覆盖。
+`config/airdrop.toml` 提供 AirDrop 的产品显示名、mDNS 主机标签、接收目录和端口、文件写入缓冲、手工或自动接受策略、专用 HCI 选择、发现、TLS 控制、接收空闲、接受与传输期限及公告周期，安装到 `/etc/airdrop/config.toml`。每项配置就地注明单位、约束与作用；已有文件不被安装器覆盖。
+
+`receive_write_buffer_bytes` 控制每个上传连接的文件写入批次；协议小块按顺序合并，文件结束时写出不足一批的余量。它只控制应用写入，不替代 TCP 接收窗口或文件系统刷盘。
+
+`components/airdrop/airdrop-tcp.conf` 是内核 TCP 接收自动调优的系统配置源，安装到 `/etc/sysctl.d/70-airdrop-tcp.conf`，已有文件保留。`net.ipv4.tcp_rmem` 的三项分别是最小、初始和最大接收内存，单位字节；IPv4 与 IPv6 均使用它。内核按连接需要增长至上限。安装到正在运行的系统时立即加载，暂存安装只复制文件；修改后使用 `sysctl -p /etc/sysctl.d/70-airdrop-tcp.conf` 加载，系统重启也会读取。此设置作用于本机 TCP 连接，由部署者维护，不属于网卡策略。
 
 安装选择决定 AirDrop 的无线依赖：BE200 使用 `wirelessd.service`，RTL 使用 `wirelessd-awdl.service`。单元从组件模板生成到 `.build/config`，生成文件不可作为第二份手工来源。配置文件不保存瞬时会话、对端选择和传输进度。AirDrop 的新会话身份与 Wi-Fi Aware 持久配对身份各自独立。运行操作见 [AirDrop 与 AWDL](airdrop.md)。
