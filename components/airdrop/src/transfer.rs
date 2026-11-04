@@ -170,12 +170,12 @@ async fn send(
                 let service = tokio::time::timeout(Duration::from_secs(cfg.service_seconds), resolve(index, address, events)).await??;
                 let peer = SocketAddrV6::new(address, service.port, 0, index);
                 let found = tokio::time::timeout(Duration::from_secs(cfg.service_seconds), sender.discover(peer)).await??.context("对端不可发现")?;
-                emit(events, json!({"event":"discovered","name":found.computer_name,"model":found.model_name,"address":peer.to_string()}));
+                emit(events, json!({"event":"discovered","name":found.computer_name,"model":found.model_name,"address":peer.to_string(),"flags":service.flags}));
                 if found.computer_name != name {
                     excluded.insert(mac.clone());
                     bail!("系统设备名不匹配");
                 }
-                Ok::<_, anyhow::Error>(peer)
+                Ok::<_, anyhow::Error>((peer, service.flags))
             }.await;
             match attempt {
                 Ok(peer) => return Ok::<_, anyhow::Error>(peer),
@@ -187,7 +187,7 @@ async fn send(
             let _: () = radio.call("Release", &()).await?;
         }
     };
-    let peer = tokio::time::timeout(Duration::from_secs(cfg.discovery_seconds), discovery)
+    let (peer, flags) = tokio::time::timeout(Duration::from_secs(cfg.discovery_seconds), discovery)
         .await
         .context("设备发现超时")??;
     emit(
@@ -196,7 +196,7 @@ async fn send(
     );
     let (tx, mut rx) = mpsc::unbounded_channel();
     let payload = Payload::Files(vec![path]);
-    let transfer = sender.send(peer, &payload, 0, Some(tx));
+    let transfer = sender.send(peer, &payload, flags, Some(tx));
     tokio::pin!(transfer);
     let mut accepted: Option<Instant> = None;
     let mut compressed = 0;
