@@ -1,0 +1,33 @@
+--- a/phl/wa_awdl_netdev.h
++++ b/phl/wa_awdl_netdev.h
+@@ -697,7 +697,8 @@
+   n->gate_saved=rtw_hal_read32(n->phl->hal,0x9eb0+(n->sta->macid/32)*4)&BIT(n->sta->macid%32);
+   rtw_hal_awdl_pause(n->phl->hal,n->sta->macid,true);
+  }
+- if(!ret) {n->ba_filter_before=rtw_hal_read32(n->phl->hal,0xce24);rtw_hal_write32(n->phl->hal,0xce24,(n->ba_filter_before&~(3U<<18))|BIT(18));}
++ /* Both BAR and BA must reach PHL: BAR advances the native RX reorder head. */
++ if(!ret) {n->ba_filter_before=rtw_hal_read32(n->phl->hal,0xce24);rtw_hal_write32(n->phl->hal,0xce24,(n->ba_filter_before&~((3U<<16)|(3U<<18)))|BIT(16)|BIT(18));}
+  rtw_hal_wa_nan_command_end();
+  if(ret)goto fail;n->rate_ready=true;
+  if(!rtnl_trylock()){ret=-EBUSY;goto disable_rate;}
+--- a/phl/phl_rx.c
++++ b/phl/phl_rx.c
+@@ -1258,6 +1258,7 @@
+   head = r->head_seq_num;
+   released = r->stored_mpdu_num;
+   phl_release_reorder_frames(phl, r, seq, frames);
++  phl_reorder_release(phl, r, frames);
+   released -= r->stored_mpdu_num;
+   pr_info_ratelimited("WA_PROBE ndi-rx-bar macid=%u tid=%u head=%u next=%u released=%u\n",
+                       sta->macid, tid, head, seq, released);
+--- a/phl/wa_awdl_ba.h
++++ b/phl/wa_awdl_ba.h
+@@ -82,7 +82,7 @@
+     ret=rtw_hal_wa_nan_command_begin(n->phl->hal);
+     if(!ret) {rtw_phl_stop_rx_ba_session(n->phl,n->sta,tid);rtw_hal_wa_nan_command_end();n->rx_ba_mask&=~BIT(tid);}
+    } else if(!tid) {n->tx_ba=false;WRITE_ONCE(n->ba_requested,false);n->ba_attempts=0;}
+-   pr_info("AWDL_BA delete tid=%u initiator=%u result=%d\n",tid,!!(param&BIT(11)),ret);
++   pr_info("AWDL_BA delete tid=%u initiator=%u reason=%u result=%d\n",tid,!!(param&BIT(11)),get_unaligned_le16(b+4),ret);
+   }
+   dev_kfree_skb(event);
+  }

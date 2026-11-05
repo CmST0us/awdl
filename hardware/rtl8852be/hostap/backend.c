@@ -519,6 +519,10 @@ int wa_backend_receive(struct wa_backend *b) {
                          .tx_status = u32(a[WA_NAN_ATTR_TX_STATUS])};
     if (size(a[WA_NAN_ATTR_COOKIE]) == 8)
       memcpy(&e.cookie, value(a[WA_NAN_ATTR_COOKIE]), 8);
+    if (size(a[WA_NAN_ATTR_RX_MONOTONIC_NS]) == 8)
+      memcpy(&e.rx_monotonic_ns, value(a[WA_NAN_ATTR_RX_MONOTONIC_NS]), 8);
+    if (size(a[WA_NAN_ATTR_SWITCH_NS]) == 8)
+      memcpy(&e.switch_ns, value(a[WA_NAN_ATTR_SWITCH_NS]), 8);
     if (size(a[WA_NAN_ATTR_ACKED]) == 1)
       memcpy(&e.acked, value(a[WA_NAN_ATTR_ACKED]), 1);
     if (e.type == WA_NAN_EVENT_AWDL_SENDER) {

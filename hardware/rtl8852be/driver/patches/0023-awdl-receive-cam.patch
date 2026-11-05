@@ -1,0 +1,97 @@
+--- a/phl/wa_nan_stageb_api.h
++++ b/phl/wa_nan_stageb_api.h
+@@ -50,6 +50,7 @@
+ 
+ int rtw_hal_wa_nan_command_begin(void *hal);
+ int rtw_hal_wa_nan_data_drop(void *hal, struct rtw_phl_stainfo_t *sta);
++int rtw_hal_awdl_self_match(void *hal, u8 macid, bool pause, bool *saved);
+ int rtw_hal_wa_nan_mgmt_match(void *hal, u8 macid, bool enable);
+ int rtw_hal_wa_nan_data_rx_mode(void *hal, u8 macid, const u8 *cluster);
+ void rtw_hal_wa_nan_command_end(void);
+--- a/phl/hal_g6/wa_nan_hal.h
++++ b/phl/hal_g6/wa_nan_hal.h
+@@ -42,6 +42,21 @@
+  result=mac_upd_addr_cam(h->mac,&role->info,CHG);
+  pr_info("WA_PROBE ndi-mgmt-match macid=%u enabled=%u result=%u\n",macid,enable,result);
+  return result==MACSUCCESS ? 0 : -EIO;
++}
++
++/* A NO_LINK self entry matches A1 alone and otherwise shadows the AWDL
++ * peer's A1/A2 entry. Keep its allocation, restoring its saved admission bit. */
++int rtw_hal_awdl_self_match(void *hal, u8 macid, bool pause, bool *saved)
++{
++ struct hal_info_t *h=hal;
++ struct mac_role_tbl *role=mac_role_srch(h->mac,macid);
++ u32 result;
++ if (!role) return -ENOENT;
++ if (pause) *saved=role->info.a_info.valid;
++ role->info.a_info.valid=pause ? false:*saved;
++ result=mac_upd_addr_cam(h->mac,&role->info,CHG);
++ pr_info("AWDL_SELF_MATCH macid=%u enabled=%u result=%u\n",macid,role->info.a_info.valid,result);
++ return result==MACSUCCESS ? 0:-EIO;
+ }
+ 
+ int rtw_hal_wa_nan_data_drop(void *hal, struct rtw_phl_stainfo_t *sta)
+--- a/phl/wa_nan_stageb.h
++++ b/phl/wa_nan_stageb.h
+@@ -46,6 +46,7 @@
+ 	struct rtw_phl_stainfo_t *mgmt;
+ 	struct rtw_phl_stainfo_t *peer;
+ 	bool peer_ready;
++	bool awdl_self_paused, awdl_self_match_before;
+ 	bool key_attempted;
+ 	bool key_ready;
+ 	bool igtk_attempted, igtk_ready;
+@@ -191,6 +192,11 @@
+ 	struct hw_band_ctl_t *band;
+ 	int cleanup = 0;
+ 
++ if (ctx->awdl_self_paused) {
++  cleanup=rtw_hal_awdl_self_match(ctx->phl->hal,ctx->plan.macid_bcn,
++                                false,&ctx->awdl_self_match_before);
++  if (!cleanup) ctx->awdl_self_paused=false;
++ }
+ 	if (!cleanup && ctx->mgmt_allocated) {
+ 		if (wa_nan_mgmt_free(ctx->phl, ctx->mgmt))
+ 			cleanup = -EIO;
+--- a/phl/wa_awdl_probe.h
++++ b/phl/wa_awdl_probe.h
+@@ -135,6 +135,11 @@
+   ret=rtw_phl_wa_nan_peer(phl,frame,true);
+   if (!ret) ret=rtw_hal_wa_nan_data_rx_mode(ctx->phl->hal,ctx->peer->macid,wa_awdl_bssid);
+   if (!ret) ret=rtw_hal_wa_nan_mgmt_match(ctx->phl->hal,ctx->mgmt->macid,false);
++  if (!ret && !ctx->awdl_self_paused) {
++   ctx->awdl_self_paused=true;
++   ret=rtw_hal_awdl_self_match(ctx->phl->hal,ctx->plan.macid_bcn,
++                             true,&ctx->awdl_self_match_before);
++  }
+   if (!ret) wa_awdl_peer_macid=ctx->peer->macid;
+   rtw_hal_wa_nan_command_end();
+   pr_info("AWDL_PEER peer=%pM macid=%u result=%d\n",frame,wa_awdl_peer_macid,ret);
+--- a/phl/wa_awdl_ba.h
++++ b/phl/wa_awdl_ba.h
+@@ -26,7 +26,7 @@
+  x->phl_txreq->mdata.sw_seq=x->attrib.seqnum;x->phl_txreq->mdata.bk=1;
+  x->phl_txreq->mdata.f_rate=RTW_DATA_RATE_OFDM6;x->phl_txreq->mdata.userate_sel=1;
+  x->phl_txreq->mdata.hdr_len=12;
+- ret=wa_awdl_submit(n,x,0,0,wa_awdl_airtime(n,24+length,true,false),body[1]==0,body[2]);
++ ret=wa_awdl_submit(n,x,0,0,wa_awdl_airtime(24+length,true,false,60),body[1]==0,body[2]);
+  if(!ret)rtw_phl_tx_req_notify(n->phl);
+  return ret;
+ }
+--- a/phl/phl_rx.c
++++ b/phl/phl_rx.c
+@@ -618,10 +618,11 @@
+ 			}
+ 			if (rtw_phl_awdl_probe_active(phl_info) &&
+      !memcmp(frame+16, "\x00\x25\x00\xff\x94\x73", 6) && !(frame[4]&1))
+-    pr_info_ratelimited("AWDL_RX seq=%u retry=%u cam=%u valid=%u a1_match=%u macid=%u counter=%u len=%u\n",
++    pr_info_ratelimited("AWDL_RX seq=%u retry=%u cam=%u valid=%u a1_match=%u macid=%u counter=%u len=%u rate=%u bw=%u gi=%u ampdu=%u tid=%u\n",
+      (frame[22] | (frame[23]<<8))>>4, !!(frame[1]&8),
+      pos->r.mdata.addr_cam,pos->r.mdata.addr_cam_vld,pos->r.mdata.a1_match,
+-     pos->r.mdata.macid,pos->r.mdata.freerun_cnt,pos->r.pkt_list[0].length);
++     pos->r.mdata.macid,pos->r.mdata.freerun_cnt,pos->r.pkt_list[0].length,
++     pos->r.mdata.rx_rate,pos->r.mdata.bw,pos->r.mdata.rx_gi_ltf,pos->r.mdata.ampdu,pos->r.mdata.tid);
+    if (kind && kind != 3)
+ 				pr_info("WA_PROBE nan-mgmt-rx kind=%u counter=%u port=%u macid=%u cam=%u valid=%u a1_match=%u seq=%u len=%u channel=%u flags=%x ra=%pM ta=%pM bssid=%pM\n",
+ 					kind, pos->r.mdata.freerun_cnt, pos->r.mdata.hal_port,

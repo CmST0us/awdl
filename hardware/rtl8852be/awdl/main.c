@@ -12,7 +12,7 @@
 #include <unistd.h>
 #include "../../../components/awdl/control.h"
 
-struct run {struct wa_backend *backend;struct Control *node;uint64_t start,cookie,active;unsigned freq,tx,rx,busy,acks;int error,peer;unsigned char local[6];};
+struct run {struct wa_backend *backend;struct Control *node;uint64_t start,cookie,active,rx_capture_max_us;unsigned freq,tx,rx,busy,acks;int error,peer;unsigned char local[6];};
 static volatile sig_atomic_t stopped;
 static void stop_signal(int n){(void)n;stopped=1;}
 static uint64_t micros(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return (uint64_t)t.tv_sec*1000000+t.tv_nsec/1000;}
@@ -61,7 +61,16 @@ done:
 }
 static void event(void *context,const struct wa_event *e) {
  struct run *r=context;
- if(e->type==WA_NAN_EVENT_RX&&e->frame_len){r->rx++;uint64_t now=micros()-r->start+1;control_rx(r->node,e->frame,e->frame_len,now,now);}
+ if(e->type==WA_NAN_EVENT_RX&&e->frame_len) {
+  uint64_t now=micros(),captured=e->rx_monotonic_ns/1000;
+  if(!captured){r->error=-EPROTO;stopped=1;return;}
+  if(captured<r->start)return;
+  r->rx++;uint64_t delay=now-captured;
+  if(delay>r->rx_capture_max_us)r->rx_capture_max_us=delay;
+  control_rx(r->node,e->frame,e->frame_len,captured-r->start+1,now-r->start+1);
+ }
+ else if(e->type==WA_NAN_EVENT_AWDL_SWITCH)
+  control_switch_delay(r->node,(e->switch_ns+999)/1000);
  else if(e->type==WA_NAN_EVENT_AWDL_SENDER)
   printf("{\"event\":\"sender-requested\",\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\"}\n",
    e->peer[0],e->peer[1],e->peer[2],e->peer[3],e->peer[4],e->peer[5]);
@@ -83,6 +92,12 @@ int main(int argc,char **argv) {
  putchar('\n');
  memcpy(r.local,caps.nmi,6);rc=wa_backend_command(r.backend,0x100,0,r.freq,NULL,0);if(rc)goto close;
  r.start=micros();printf("AWDL_CLOCK monotonic_us=%llu\n",(unsigned long long)r.start);r.node=control_new(caps.nmi,ch,161,argv[3],argv[4],caps.he_supported?caps.he_cap:NULL,3072,emit,&r);
+ if(caps.vht_supported) {
+  uint32_t aggregation=(uint32_t)caps.vht_cap[0]|(uint32_t)caps.vht_cap[1]<<8|
+                       (uint32_t)caps.vht_cap[2]<<16|(uint32_t)caps.vht_cap[3]<<24;
+  control_rx_aggregation(r.node,aggregation);
+  printf("AWDL_LOCAL_RX mpdu_code=%u ampdu_exponent=%u\n",aggregation&3,(aggregation>>23)&7);
+ }
  printf("{\"event\":\"started\"}\n");
  while(!stopped){
   uint64_t now=micros();
@@ -102,7 +117,7 @@ int main(int argc,char **argv) {
  }
  if(r.error)rc=r.error;
  int cleanup=wa_backend_command(r.backend,0x101,0,0,NULL,0);
- printf("{\"event\":\"stopped\",\"rc\":%d,\"cleanup\":%d,\"control_rx\":%u,\"control_tx\":%u,\"busy_drop\":%u}\n",rc,cleanup,r.rx,r.tx,r.busy);
+ printf("{\"event\":\"stopped\",\"rc\":%d,\"cleanup\":%d,\"control_rx\":%u,\"control_tx\":%u,\"busy_drop\":%u,\"rx_capture_max_us\":%llu}\n",rc,cleanup,r.rx,r.tx,r.busy,(unsigned long long)r.rx_capture_max_us);
  control_free(r.node);if(cleanup)rc=cleanup;
 close:wa_backend_close(r.backend);return rc?1:0;
 }

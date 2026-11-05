@@ -81,6 +81,8 @@ enum wa_nan_attr {
 	WA_NAN_ATTR_CHANNELS, /* array of currently usable wa_nan_channel */
 	WA_NAN_ATTR_DATA_CHANNEL, /* wa_nan_channel for peer SET_SCHEDULE */
 	WA_NAN_ATTR_HE_CAP, /* normalized 5 GHz HE SU <=80 MHz capability body */
+	WA_NAN_ATTR_RX_MONOTONIC_NS, /* u64, kernel monotonic RX event capture time */
+	WA_NAN_ATTR_SWITCH_NS, /* u64, completed AWDL primary switch duration */
 	__WA_NAN_ATTR_AFTER_LAST,
 	WA_NAN_ATTR_MAX = __WA_NAN_ATTR_AFTER_LAST - 1
 };
@@ -122,7 +124,7 @@ enum wa_nan_tx_protection {
 enum wa_nan_event { WA_NAN_EVENT_RX = 1, WA_NAN_EVENT_TX_DONE,
 	WA_NAN_EVENT_CLUSTER, WA_NAN_EVENT_DW,
 	/* Unicast AWDL data from another sender; PEER_ADDR identifies it. */
-	WA_NAN_EVENT_AWDL_SENDER };
+	WA_NAN_EVENT_AWDL_SENDER, WA_NAN_EVENT_AWDL_SWITCH };
 enum wa_nan_ack { WA_NAN_ACK_UNKNOWN, WA_NAN_ACK_NO, WA_NAN_ACK_YES };
 enum wa_nan_feature {
 	WA_NAN_FEAT_MGMT_TX = 1U << 0,

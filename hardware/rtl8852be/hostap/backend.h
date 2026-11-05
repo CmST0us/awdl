@@ -18,6 +18,7 @@ struct wa_event {
   uint32_t dw_start, counter;
   int32_t status;
   uint64_t cookie, key_cookie;
+  uint64_t rx_monotonic_ns, switch_ns;
   uint32_t key_index;
   uint8_t peer[6], rx_pn[6], cluster[6];
   uint8_t acked;

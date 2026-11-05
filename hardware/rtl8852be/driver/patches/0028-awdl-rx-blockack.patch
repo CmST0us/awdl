@@ -1,0 +1,56 @@
+--- a/phl/wa_awdl_netdev.h
++++ b/phl/wa_awdl_netdev.h
+@@ -29,6 +29,8 @@
+  _adapter *adapter;
+  struct rtw_phl_stainfo_t *sta;
+  struct wa_nan_ndi_config config;
++ u8 rx_ba_request[16][9];
++ u16 rx_ba_size[16];
+  struct sk_buff_head queue, ba_queue;
+  atomic_t queued_bytes;
+  struct list_head prepared, live, free_buffers;
+--- a/phl/wa_awdl_ba.h
++++ b/phl/wa_awdl_ba.h
+@@ -35,17 +35,26 @@
+  struct sk_buff *event;
+  while((event=skb_dequeue(&n->ba_queue))) {
+   const u8 *b=event->data;
+-  u16 param,tid,size,status=37;
++  u16 param,tid,size,requested,limit,status=37;
+   bool first_rx;
+   int ret=0;
+   if(b[1]==0) {
+    u8 response[9]={3,1};
+-   param=get_unaligned_le16(b+3);tid=(param>>2)&15;size=param>>6;
+-   size=!size || size>64 ? 64:size;first_rx=!(n->rx_ba_mask&BIT(tid));
++   param=get_unaligned_le16(b+3);tid=(param>>2)&15;requested=param>>6;
++   /* The 8852B BA CAM supports 256 MPDUs for HE, 64 for HT/VHT. */
++   limit=n->config.he ? MAX_BA_BUFFER_SIZE_HE:64;
++   size=!requested || requested>limit ? limit:requested;
++   first_rx=!(n->rx_ba_mask&BIT(tid));
++   /* A retransmitted ADDBA request reuses the accepted window. Replacing it
++    * would discard buffered MPDUs and rewind both BA sequence spaces. */
++   if(!first_rx && !memcmp(n->rx_ba_request[tid],b,9)) {
++    size=n->rx_ba_size[tid];status=0;goto reply_rx;
++   }
+    ret=rtw_hal_wa_nan_command_begin(n->phl->hal);
+    if(!ret) {
+     if((param&2) && rtw_phl_start_rx_ba_session(n->phl,n->sta,b[2],0,get_unaligned_le16(b+7)>>4,0,tid,size)==RTW_PHL_STATUS_SUCCESS) {
+      n->rx_ba_mask|=BIT(tid);status=0;
++     memcpy(n->rx_ba_request[tid],b,9);n->rx_ba_size[tid]=size;
+      /* A peer opening its first RX aggregation session is a new readiness
+       * event. Re-arm an exhausted TX negotiation once, after native drain. */
+      if(!tid && first_rx && !n->tx_ba && n->ba_attempts>=3) {
+@@ -56,10 +65,11 @@
+     }
+     rtw_hal_wa_nan_command_end();
+    }
++reply_rx:
+    response[2]=b[2];put_unaligned_le16(status,response+3);
+    put_unaligned_le16((size<<6)|(tid<<2)|3,response+5);
+    ret=wa_awdl_ba_send(n,response,9);
+-   pr_info("AWDL_BA rx tid=%u size=%u status=%u response=%d\n",tid,size,status,ret);
++   pr_info("AWDL_BA rx tid=%u requested=%u size=%u status=%u response=%d\n",tid,requested,size,status,ret);
+   } else if(b[1]==1) {
+    bool expected;
+    param=get_unaligned_le16(b+5);tid=(param>>2)&15;size=param>>6;status=get_unaligned_le16(b+3);

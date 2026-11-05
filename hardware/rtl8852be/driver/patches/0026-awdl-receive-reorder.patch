@@ -1,0 +1,40 @@
+--- a/phl/phl_rx.c
++++ b/phl/phl_rx.c
+@@ -732,10 +732,18 @@
+ #define HT_RX_REORDER_BUF_TIMEOUT_MS 500
+ 
+ /* Called with tid_rx_lock held. All TIDs share this station timer. */
++/* A lost AWDL MPDU must not hold TCP recovery behind the vendor's 500 ms
++ * reorder fallback. Use mac80211's 100 ms receive-buffer lifetime; BAR and
++ * contiguous MPDUs still release buffered data immediately. */
++static u32 wa_nan_rx_reorder_timeout(struct phl_info_t *phl)
++{
++ return rtw_phl_awdl_probe_active(phl) ? 100 : HT_RX_REORDER_BUF_TIMEOUT_MS;
++}
++
+ static u32 wa_nan_rx_reorder_delay(struct phl_info_t *phl_info,
+                                  struct rtw_phl_stainfo_t *sta)
+ {
+- u32 now, delay = HT_RX_REORDER_BUF_TIMEOUT_MS;
++ u32 now, timeout = wa_nan_rx_reorder_timeout(phl_info), delay = timeout;
+  unsigned int tid;
+ 
+  if (!READ_ONCE(phl_info->wa_nan_radio_owned))
+@@ -753,7 +761,7 @@
+    if (!r->reorder_buf[index])
+     continue;
+    remaining = (s32)(r->reorder_time[index] +
+-                     HT_RX_REORDER_BUF_TIMEOUT_MS - now);
++                     timeout - now);
+    if (remaining <= 0)
+     return 1;
+    if ((u32)remaining < delay)
+@@ -813,7 +821,7 @@
+ 				continue;
+ 			}
+ 			if (skipped && (s32)(r->reorder_time[j] +
+-				HT_RX_REORDER_BUF_TIMEOUT_MS - cur_time) > 0)
++				wa_nan_rx_reorder_timeout(phl_info) - cur_time) > 0)
+ 				goto set_release_timer;
+ 
+ 			PHL_TRACE(COMP_PHL_RECV, _PHL_INFO_, "release an RX reorder frame due to timeout on earlier frames\n");

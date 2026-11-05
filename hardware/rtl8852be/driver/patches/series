@@ -20,3 +20,11 @@
 0020-awdl-rx-unlock.patch
 0021-awdl-rate-pack.patch
 0022-awdl-receive-sender.patch
+0023-awdl-receive-cam.patch
+0024-awdl-receive-bar.patch
+0025-awdl-receive-clock.patch
+0026-awdl-receive-reorder.patch
+0027-awdl-rx-dma-clock.patch
+0028-awdl-rx-blockack.patch
+0029-awdl-retune-guard.patch
+0030-native-rx-bottom-halves.patch

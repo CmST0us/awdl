@@ -1,0 +1,35 @@
+--- a/phl/wa_awdl_plan.h
++++ b/phl/wa_awdl_plan.h
+@@ -17,7 +17,7 @@
+ {
+  u64 now=ktime_get_ns(),base,start,open,close,wake;
+  u8 channels[16],channel,target,before,after;u32 slot,end;
+- unsigned long flags;bool planned;int ret;
++ unsigned long flags;bool planned,early;int ret;
+  spin_lock_irqsave(&wa_awdl_net_lock,flags);
+  planned=n->planned;base=n->plan_base;memcpy(channels,n->channels,16);before=n->before_channel;after=n->after_channel;
+  spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
+@@ -36,8 +36,12 @@
+  hrtimer_start(&n->timer,ns_to_ktime(wake),HRTIMER_MODE_ABS);
+  /* A closed slot belongs to retuning when the next announced channel differs.
+   * Pre-tune here so RX is ready before the peer's first aggregate arrives. */
+- target=channel ? channel:(end<16 ? channels[end]:after);
+- if(!channel) {
++ early=channel && now>=close && (end<16 ? channels[end]:after) &&
++       (end<16 ? channels[end]:after)!=channel;
++ /* The closing guard is already unavailable for data. Begin the retune
++  * there, instead of spending the next channel's opening guard on it. */
++ target=channel && !early ? channel:(end<16 ? channels[end]:after);
++ if(!channel || early) {
+   spin_lock_irqsave(&wa_awdl_net_lock,flags);wa_awdl_gate(n,false);n->opens=n->closes=0;spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
+   if(!target){WRITE_ONCE(wa_awdl_switching,false);return false;}
+  }
+@@ -68,7 +72,7 @@
+   pr_info_ratelimited("AWDL_PLAN ready primary=%u switches=%u elapsed_max_ns=%llu\n",target,n->switches,n->switch_max_ns);
+  }
+  WRITE_ONCE(wa_awdl_switching,false);
+- if(!channel)return false;
++ if(!channel || early)return false;
+  /* Only a new physical window resets quota. A refreshed plan cannot refill it. */
+  if(!n->budget_close || open>n->budget_close) {
+   n->budget_open=max(now,open);n->budget_close=close;n->budget_used=0;

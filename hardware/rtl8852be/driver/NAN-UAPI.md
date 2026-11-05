@@ -78,3 +78,15 @@ START失败调用相同清理流程。全部清理完成时返回原始失败码
 能力 `WA_NAN_FEAT_NDI_STA`（bit10）表示支持 `NDI_STA_ADD`。该操作要求原生 NAN、已认证 NMI peer、管理密钥、日程及持久 NDI 就绪，接收现有 `NDI_CONFIG` 布局，但 `ndp_id` 和 `initiator` 必须全零；NDP 协议身份由 hostap 持有。站点资源、本地 GTK、CONNECT 的实际硬件配置和 DEL 的排空/回收语义与原 NDI 路径一致。
 
 旧 `NDI_ADD` 仍要求有效 NDP ID 和发起方地址。`NDI_CONNECT` 必须匹配 ADD 或 STA_ADD 已保留的身份及本地 GTK；不能通过另一次 CONNECT 更换身份。新操作只追加命令和能力位，ABI4 的结构大小和原命令编号保持。
+
+## AWDL 接收与时钟
+
+AWDL 数据站点按 A1/A2 匹配对端。建立站点后，本机 NO_LINK 地址项暂停接收匹配，管理项与本机项仍保留资源所有权；停止时恢复本机项原有的有效位。数据包使用对端 MACID 的硬件 BlockAck 和软件重排队列。
+
+接收聚合公告取自本机 VHT 能力。HE 的 ADDBA 按对端请求与本机 256 帧上限协商，HT/VHT 上限为 64 帧；重复请求复用已接受的窗口。BAR 与 BA 均进入原生接收路径，BAR 推进序号后立即释放连续数据。AWDL 缺失 MPDU 的重排兜底为 100 ms，与 [mac80211 的接收缓冲期限](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/3c730b1041aefa2a92b96fcba9db237d28585922/net/mac80211/rx.c)一致；连续帧和 BAR 仍按到达事件推进。
+
+接收工作线程、BAR、重排定时器和刷新入口使用同一禁用软中断的排序锁，保持重排与 PN 校验顺序；交付网络栈期间不允许重入重排定时器。重新协商聚合窗口前解除指向旧窗口的 RX shortcut 缓存引用，再释放缓冲区。
+
+`RX` 事件附带 `RX_MONOTONIC_NS`（u64，纳秒），采样点为 PCIe DMA 收包处，早于 PHY 状态等待和重排。控制程序按该时刻解释同步帧，并独立使用当前时刻推进协议状态。缺失时间戳时停止会话并报告 `EPROTO`。
+
+`AWDL_SWITCH` 事件附带 `SWITCH_NS`（u64，纳秒），报告已成功完成的主信道切换耗时新高值。控制程序按实际切换成本发布可用日程；驱动在关闭时隙或旧信道的关闭保护期开始调谐，待发送完成事件释放在途资源后切换，并在新窗口开放前保持发送门关闭。

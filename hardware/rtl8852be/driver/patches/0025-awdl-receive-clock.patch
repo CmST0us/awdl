@@ -1,0 +1,147 @@
+--- a/include/wa_nan_uapi.h
++++ b/include/wa_nan_uapi.h
+@@ -81,6 +81,8 @@
+ 	WA_NAN_ATTR_CHANNELS, /* array of currently usable wa_nan_channel */
+ 	WA_NAN_ATTR_DATA_CHANNEL, /* wa_nan_channel for peer SET_SCHEDULE */
+ 	WA_NAN_ATTR_HE_CAP, /* normalized 5 GHz HE SU <=80 MHz capability body */
++	WA_NAN_ATTR_RX_MONOTONIC_NS, /* u64, kernel monotonic RX event capture time */
++	WA_NAN_ATTR_SWITCH_NS, /* u64, completed AWDL primary switch duration */
+ 	__WA_NAN_ATTR_AFTER_LAST,
+ 	WA_NAN_ATTR_MAX = __WA_NAN_ATTR_AFTER_LAST - 1
+ };
+@@ -122,7 +124,7 @@
+ enum wa_nan_event { WA_NAN_EVENT_RX = 1, WA_NAN_EVENT_TX_DONE,
+ 	WA_NAN_EVENT_CLUSTER, WA_NAN_EVENT_DW,
+ 	/* Unicast AWDL data from another sender; PEER_ADDR identifies it. */
+-	WA_NAN_EVENT_AWDL_SENDER };
++	WA_NAN_EVENT_AWDL_SENDER, WA_NAN_EVENT_AWDL_SWITCH };
+ enum wa_nan_ack { WA_NAN_ACK_UNKNOWN, WA_NAN_ACK_NO, WA_NAN_ACK_YES };
+ enum wa_nan_feature {
+ 	WA_NAN_FEAT_MGMT_TX = 1U << 0,
+--- a/phl/wa_nan_uapi.h
++++ b/phl/wa_nan_uapi.h
+@@ -81,6 +81,8 @@
+ 	WA_NAN_ATTR_CHANNELS, /* array of currently usable wa_nan_channel */
+ 	WA_NAN_ATTR_DATA_CHANNEL, /* wa_nan_channel for peer SET_SCHEDULE */
+ 	WA_NAN_ATTR_HE_CAP, /* normalized 5 GHz HE SU <=80 MHz capability body */
++	WA_NAN_ATTR_RX_MONOTONIC_NS, /* u64, kernel monotonic RX event capture time */
++	WA_NAN_ATTR_SWITCH_NS, /* u64, completed AWDL primary switch duration */
+ 	__WA_NAN_ATTR_AFTER_LAST,
+ 	WA_NAN_ATTR_MAX = __WA_NAN_ATTR_AFTER_LAST - 1
+ };
+@@ -122,7 +124,7 @@
+ enum wa_nan_event { WA_NAN_EVENT_RX = 1, WA_NAN_EVENT_TX_DONE,
+ 	WA_NAN_EVENT_CLUSTER, WA_NAN_EVENT_DW,
+ 	/* Unicast AWDL data from another sender; PEER_ADDR identifies it. */
+-	WA_NAN_EVENT_AWDL_SENDER };
++	WA_NAN_EVENT_AWDL_SENDER, WA_NAN_EVENT_AWDL_SWITCH };
+ enum wa_nan_ack { WA_NAN_ACK_UNKNOWN, WA_NAN_ACK_NO, WA_NAN_ACK_YES };
+ enum wa_nan_feature {
+ 	WA_NAN_FEAT_MGMT_TX = 1U << 0,
+--- a/phl/wa_nan_vendor.h
++++ b/phl/wa_nan_vendor.h
+@@ -8,6 +8,7 @@
+ bool wa_nan_vendor_rx(void *drv, const u8 *frame, u32 len,
+ 		     u32 counter, u8 channel, u32 flags);
+ void wa_nan_vendor_tx_done(void *drv, u64 cookie, u32 tx_status, u8 acked);
++void wa_nan_vendor_awdl_switch(void *drv, u64 elapsed_ns);
+ void wa_nan_vendor_cluster(void *drv, const u8 *cluster);
+ int rtw_phl_wa_nan_mgmt_tx(void *phl, const u8 *frame, u16 len,
+ 			 u32 freq, u64 request_cookie, u32 protection,
+--- a/os_dep/linux/rtw_cfgvendor.c
++++ b/os_dep/linux/rtw_cfgvendor.c
+@@ -2067,6 +2067,13 @@
+ 			0, 0, counter, 0, WA_NAN_ACK_UNKNOWN, NULL);
+ }
+ 
++void wa_nan_vendor_awdl_switch(void *drv, u64 elapsed_ns)
++{
++ struct dvobj_priv *dvobj=drv;
++ wa_nan_emit(dvobj_get_primary_adapter(dvobj),WA_NAN_EVENT_AWDL_SWITCH,0,
++             (const u8 *)&elapsed_ns,sizeof(elapsed_ns),0,0,0,0,WA_NAN_ACK_UNKNOWN,NULL);
++}
++
+ void wa_nan_vendor_cluster(void *drv, const u8 *cluster)
+ {
+ 	struct dvobj_priv *dvobj = drv;
+@@ -2564,6 +2571,7 @@
+ {
+ 	struct sk_buff *skb;
+ 	int ret;
++	u64 captured_ns=ktime_get_ns();
+ 	/* The NAN event is appended, preserving existing vendor event indices. */
+ 	skb = rtw_cfg80211_vendor_event_alloc(adapter_to_wiphy(adapter),
+ 		adapter->rtw_wdev, len + 192, ARRAY_SIZE(rtw_vendor_events) - 1,
+@@ -2575,7 +2583,10 @@
+ 		ret |= nla_put(skb, WA_NAN_ATTR_FRAME, len, frame) ||
+ 		       nla_put_u32(skb, WA_NAN_ATTR_FREQ, freq) ||
+ 		       nla_put_u32(skb, WA_NAN_ATTR_RX_FLAGS, flags) ||
+-		       nla_put_u32(skb, WA_NAN_ATTR_RX_COUNTER, counter);
++		       nla_put_u32(skb, WA_NAN_ATTR_RX_COUNTER, counter) ||
++         nla_put_u64_64bit(skb,WA_NAN_ATTR_RX_MONOTONIC_NS,captured_ns,WA_NAN_ATTR_PAD);
++ else if (event == WA_NAN_EVENT_AWDL_SWITCH)
++  ret |= nla_put(skb,WA_NAN_ATTR_SWITCH_NS,sizeof(u64),frame);
+ 	else if (event == WA_NAN_EVENT_AWDL_SENDER)
+ 		ret |= nla_put(skb, WA_NAN_ATTR_PEER_ADDR, 6, frame);
+ 	else if (event == WA_NAN_EVENT_CLUSTER)
+--- a/phl/wa_awdl_plan.h
++++ b/phl/wa_awdl_plan.h
+@@ -16,7 +16,7 @@
+ static bool wa_awdl_plan_ready(struct wa_awdl_net *n)
+ {
+  u64 now=ktime_get_ns(),base,start,open,close,wake;
+- u8 channels[16],channel,before,after;u32 slot,end;
++ u8 channels[16],channel,target,before,after;u32 slot,end;
+  unsigned long flags;bool planned;int ret;
+  spin_lock_irqsave(&wa_awdl_net_lock,flags);
+  planned=n->planned;base=n->plan_base;memcpy(channels,n->channels,16);before=n->before_channel;after=n->after_channel;
+@@ -34,11 +34,14 @@
+  wake=now<open && channel ? open:close;
+  if(now>=wake)wake=base+end*WA_AWDL_SLOT_NS;
+  hrtimer_start(&n->timer,ns_to_ktime(wake),HRTIMER_MODE_ABS);
++ /* A closed slot belongs to retuning when the next announced channel differs.
++  * Pre-tune here so RX is ready before the peer's first aggregate arrives. */
++ target=channel ? channel:(end<16 ? channels[end]:after);
+  if(!channel) {
+   spin_lock_irqsave(&wa_awdl_net_lock,flags);wa_awdl_gate(n,false);n->opens=n->closes=0;spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
+-  WRITE_ONCE(wa_awdl_switching,false);return false;
++  if(!target){WRITE_ONCE(wa_awdl_switching,false);return false;}
+  }
+- if(channel!=n->primary) {
++ if(target!=n->primary) {
+   spin_lock_irqsave(&wa_awdl_net_lock,flags);wa_awdl_gate(n,false);n->opens=n->closes=0;spin_unlock_irqrestore(&wa_awdl_net_lock,flags);
+   /* Gate new SDF submissions before checking both native ownership domains.
+    * Their completion callbacks resume this worker; no timed drain loop. */
+@@ -47,20 +50,25 @@
+   if(ret || atomic_read(&n->pending))return false;
+   ret=rtw_hal_wa_nan_command_begin(n->phl->hal);
+   if(!ret) {
+-   u64 began=ktime_get_ns();
+-   ret=rtw_hal_awdl_primary(n->phl->hal,n->sta->rlink->hw_band,channel);
++   u64 began=ktime_get_ns(),elapsed;
++   ret=rtw_hal_awdl_primary(n->phl->hal,n->sta->rlink->hw_band,target);
+    rtw_hal_wa_nan_command_end();
+-   n->switch_max_ns=max(n->switch_max_ns,ktime_get_ns()-began);
++   elapsed=ktime_get_ns()-began;
++   if(!ret && elapsed>n->switch_max_ns) {
++    n->switch_max_ns=elapsed;
++    wa_nan_vendor_awdl_switch(n->phl->phl_com->drv_priv,elapsed);
++   }
+   }
+-  if(ret) {n->switch_fail++;pr_err_ratelimited("AWDL_PLAN switch_failed primary=%u result=%d\n",channel,ret);return false;}
+-  n->primary=channel;n->switches++;n->budget_close=0;
+-  n->sta->chandef.chan=channel;n->sta->chandef.offset=channel==149 ? CHAN_OFFSET_UPPER:CHAN_OFFSET_LOWER;
++  if(ret) {n->switch_fail++;pr_err_ratelimited("AWDL_PLAN switch_failed primary=%u result=%d\n",target,ret);return false;}
++  n->primary=target;n->switches++;n->budget_close=0;
++  n->sta->chandef.chan=target;n->sta->chandef.offset=target==149 ? CHAN_OFFSET_UPPER:CHAN_OFFSET_LOWER;
+   n->sta->rlink->chandef=n->sta->chandef;
+   GET_PRIMARY_LINK(n->adapter)->mlmeextpriv.chandef=n->sta->chandef;
+   WRITE_ONCE(wa_awdl_switching,false);
+-  pr_info_ratelimited("AWDL_PLAN ready primary=%u switches=%u elapsed_max_ns=%llu\n",channel,n->switches,n->switch_max_ns);
++  pr_info_ratelimited("AWDL_PLAN ready primary=%u switches=%u elapsed_max_ns=%llu\n",target,n->switches,n->switch_max_ns);
+  }
+  WRITE_ONCE(wa_awdl_switching,false);
++ if(!channel)return false;
+  /* Only a new physical window resets quota. A refreshed plan cannot refill it. */
+  if(!n->budget_close || open>n->budget_close) {
+   n->budget_open=max(now,open);n->budget_close=close;n->budget_used=0;

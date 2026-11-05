@@ -1,0 +1,165 @@
+--- a/phl/phl_trx_def.h
++++ b/phl/phl_trx_def.h
+@@ -560,6 +560,7 @@
+  * Note, this structure are visible to core, phl and hal layer
+  */
+ struct rtw_recv_pkt {
++	u64 wa_rx_monotonic_ns; /* DMA receipt, before PHY-status/reorder queues */
+ 	void *os_priv;
+ 	struct rtw_r_meta_data mdata;
+ 	u8 shortcut_id;
+--- a/phl/hci/phl_trx_pcie.c
++++ b/phl/hci/phl_trx_pcie.c
+@@ -4331,6 +4331,7 @@
+ 	phl_info->rx_stats.rx_type_all++;
+ #endif
+ 
++ phl_rx->r.wa_rx_monotonic_ns=ktime_get_ns();
+  if (rtw_phl_awdl_probe_active(phl_info) && phl_rx->type == RTW_RX_TYPE_WIFI) {
+   struct rtw_r_meta_data *m = &phl_rx->r.mdata;
+   u8 *f = phl_rx->r.pkt_list[0].vir_addr;
+--- a/include/wa_nan_vendor.h
++++ b/include/wa_nan_vendor.h
+@@ -6,7 +6,7 @@
+ struct phl_info_t;
+ struct rtw_phl_stainfo_t;
+ bool wa_nan_vendor_rx(void *drv, const u8 *frame, u32 len,
+-		     u32 counter, u8 channel, u32 flags);
++		     u32 counter, u8 channel, u32 flags, u64 captured_ns);
+ void wa_nan_vendor_tx_done(void *drv, u64 cookie, u32 tx_status, u8 acked);
+ void wa_nan_vendor_cluster(void *drv, const u8 *cluster);
+ int rtw_phl_wa_nan_mgmt_tx(void *phl, const u8 *frame, u16 len,
+--- a/phl/wa_nan_vendor.h
++++ b/phl/wa_nan_vendor.h
+@@ -6,7 +6,7 @@
+ struct phl_info_t;
+ struct rtw_phl_stainfo_t;
+ bool wa_nan_vendor_rx(void *drv, const u8 *frame, u32 len,
+-		     u32 counter, u8 channel, u32 flags);
++		     u32 counter, u8 channel, u32 flags, u64 captured_ns);
+ void wa_nan_vendor_tx_done(void *drv, u64 cookie, u32 tx_status, u8 acked);
+ void wa_nan_vendor_awdl_switch(void *drv, u64 elapsed_ns);
+ void wa_nan_vendor_cluster(void *drv, const u8 *cluster);
+--- a/os_dep/linux/rtw_cfgvendor.c
++++ b/os_dep/linux/rtw_cfgvendor.c
+@@ -1739,7 +1739,7 @@
+ static atomic_t wa_nan_rx_oversize = ATOMIC_INIT(0);
+ static void wa_nan_emit(_adapter *adapter, u32 event, u64 cookie,
+ 			const u8 *frame, u32 len, u32 freq, u32 flags,
+-			u32 counter, u32 tx_status, u8 acked, const struct wa_nan_verified_rx *verified);
++			u32 counter, u32 tx_status, u8 acked, const struct wa_nan_verified_rx *verified, u64 captured_ns);
+ 
+ static const struct nla_policy wa_nan_policy[WA_NAN_ATTR_MAX + 1] = {
+ 	[WA_NAN_ATTR_VERSION] = { .type = NLA_U32 },
+@@ -2064,14 +2064,14 @@
+ 	if (adapter && adapter->phl_role &&
+ 	    adapter->phl_role->type == PHL_RTYPE_NAN)
+ 		wa_nan_emit(adapter, WA_NAN_EVENT_DW, 0, (const u8 *)&tsf, sizeof(tsf),
+-			0, 0, counter, 0, WA_NAN_ACK_UNKNOWN, NULL);
++			0, 0, counter, 0, WA_NAN_ACK_UNKNOWN, NULL, 0);
+ }
+ 
+ void wa_nan_vendor_awdl_switch(void *drv, u64 elapsed_ns)
+ {
+  struct dvobj_priv *dvobj=drv;
+  wa_nan_emit(dvobj_get_primary_adapter(dvobj),WA_NAN_EVENT_AWDL_SWITCH,0,
+-             (const u8 *)&elapsed_ns,sizeof(elapsed_ns),0,0,0,0,WA_NAN_ACK_UNKNOWN,NULL);
++             (const u8 *)&elapsed_ns,sizeof(elapsed_ns),0,0,0,0,WA_NAN_ACK_UNKNOWN,NULL, 0);
+ }
+ 
+ void wa_nan_vendor_cluster(void *drv, const u8 *cluster)
+@@ -2081,11 +2081,11 @@
+ 	if (adapter && adapter->phl_role &&
+ 	    adapter->phl_role->type == PHL_RTYPE_NAN)
+ 		wa_nan_emit(adapter, WA_NAN_EVENT_CLUSTER, 0, cluster, 6,
+-			0, 0, 0, 0, WA_NAN_ACK_UNKNOWN, NULL);
++			0, 0, 0, 0, WA_NAN_ACK_UNKNOWN, NULL, 0);
+ }
+ 
+ bool wa_nan_vendor_rx(void *drv, const u8 *frame, u32 len,
+-		     u32 counter, u8 channel, u32 flags)
++		     u32 counter, u8 channel, u32 flags, u64 captured_ns)
+ {
+ 	struct dvobj_priv *dvobj = drv;
+ 	_adapter *adapter = dvobj_get_primary_adapter(dvobj);
+@@ -2094,7 +2094,7 @@
+   /* Emit outside the native RX lock; the frame remains owned by this call. */
+   if (sender)
+    wa_nan_emit(adapter, WA_NAN_EVENT_AWDL_SENDER, 0, frame+10, 6,
+-    0, 0, 0, 0, WA_NAN_ACK_UNKNOWN, NULL);
++    0, 0, 0, 0, WA_NAN_ACK_UNKNOWN, NULL, 0);
+   return true;
+  }
+ 	if (rtw_phl_awdl_probe_active(GET_PHL_INFO(dvobj)) && len >= 30 &&
+@@ -2104,7 +2104,7 @@
+       !memcmp(frame+4, GET_PRIMARY_LINK(adapter)->wrlink->mac_addr, 6)))
+    wa_nan_emit(adapter, WA_NAN_EVENT_RX, 0, frame, len,
+     wa_nan_frequency(channel), flags | WA_NAN_RX_RAW,
+-    counter, 0, WA_NAN_ACK_UNKNOWN, NULL);
++    counter, 0, WA_NAN_ACK_UNKNOWN, NULL, captured_ns);
+   return true;
+  }
+  if (adapter && adapter->phl_role && adapter->phl_role->type == PHL_RTYPE_NAN &&
+@@ -2112,7 +2112,7 @@
+ 	    !memcmp(frame+16, "\x50\x6f\x9a\x01", 4)) {
+ 		wa_nan_emit(adapter, WA_NAN_EVENT_RX, 0, frame, len,
+ 			wa_nan_frequency(channel), flags | WA_NAN_RX_RAW,
+-			counter, 0, WA_NAN_ACK_UNKNOWN, NULL);
++			counter, 0, WA_NAN_ACK_UNKNOWN, NULL, captured_ns);
+ 		return false;
+ 	}
+ 	if (!adapter || !adapter->phl_role ||
+@@ -2135,17 +2135,17 @@
+ 		if (!ret) wa_nan_emit(adapter, WA_NAN_EVENT_RX, 0, verified->frame,
+ 			verified->len, wa_nan_frequency(channel),
+ 			(flags & ~WA_NAN_RX_RAW) | WA_NAN_RX_PROTECTED | WA_NAN_RX_CCMP_VERIFIED,
+-			counter, 0, WA_NAN_ACK_UNKNOWN, verified);
++			counter, 0, WA_NAN_ACK_UNKNOWN, verified, captured_ns);
+ 		else wa_nan_emit(adapter, WA_NAN_EVENT_RX, 0, frame, len,
+ 			wa_nan_frequency(channel), flags | WA_NAN_RX_RAW | WA_NAN_RX_PROTECTED,
+-			counter, 0, WA_NAN_ACK_UNKNOWN, NULL);
++			counter, 0, WA_NAN_ACK_UNKNOWN, NULL, captured_ns);
+ 		memzero_explicit(verified, sizeof(*verified)); kfree(verified);
+ 		return true;
+ 	}
+ 	/* Protected Dual has no valid unprotected representation on the air. */
+ 	if (frame[0] == 0xd0 && frame[24] == 9) return true;
+ 	wa_nan_emit(adapter, WA_NAN_EVENT_RX, 0, frame, len,
+-		wa_nan_frequency(channel), flags, counter, 0, WA_NAN_ACK_UNKNOWN, NULL);
++		wa_nan_frequency(channel), flags, counter, 0, WA_NAN_ACK_UNKNOWN, NULL, captured_ns);
+ 	return true;
+ }
+ 
+@@ -2154,7 +2154,7 @@
+ 	struct dvobj_priv *dvobj = drv;
+ 	_adapter *adapter = dvobj_get_primary_adapter(dvobj);
+ 	if (adapter) wa_nan_emit(adapter, WA_NAN_EVENT_TX_DONE, cookie,
+-		NULL, 0, 0, 0, 0, tx_status, acked, NULL);
++		NULL, 0, 0, 0, 0, tx_status, acked, NULL, 0);
+ }
+ 
+ static const struct wiphy_vendor_command rtw_vendor_cmds[] = {
+@@ -2567,11 +2567,10 @@
+ 
+ static void wa_nan_emit(_adapter *adapter, u32 event, u64 cookie,
+ 			const u8 *frame, u32 len, u32 freq, u32 flags,
+-			u32 counter, u32 tx_status, u8 acked, const struct wa_nan_verified_rx *verified)
++			u32 counter, u32 tx_status, u8 acked, const struct wa_nan_verified_rx *verified, u64 captured_ns)
+ {
+ 	struct sk_buff *skb;
+ 	int ret;
+-	u64 captured_ns=ktime_get_ns();
+ 	/* The NAN event is appended, preserving existing vendor event indices. */
+ 	skb = rtw_cfg80211_vendor_event_alloc(adapter_to_wiphy(adapter),
+ 		adapter->rtw_wdev, len + 192, ARRAY_SIZE(rtw_vendor_events) - 1,
+--- a/phl/phl_rx.c
++++ b/phl/phl_rx.c
+@@ -650,7 +650,7 @@
+ 					frame[24] | (frame[25] << 8), rxflags, frame + 4, frame + 10);
+ 			if (wa_nan_vendor_rx(phl_info->phl_com->drv_priv, frame,
+ 				pos->r.pkt_list[0].length, pos->r.mdata.freerun_cnt,
+-				pos->r.phy_info.ch_idx, rxflags)) {
++				pos->r.phy_info.ch_idx, rxflags, pos->r.wa_rx_monotonic_ns)) {
+ 				list_del(&pos->list);
+ 				hci_trx_ops->recycle_rx_pkt(phl_info, pos);
+ 				continue;

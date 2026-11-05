@@ -1,0 +1,118 @@
+--- a/phl/phl_rx.c
++++ b/phl/phl_rx.c
+@@ -855,18 +855,18 @@
+ 
+ static void wa_nan_ordered_phl_sta_rx_reorder_timer_expired(void *t);
+ 
+-/* A released batch must reach PN validation before the next batch. */
++/* Serialize reorder and PN delivery against the timer softirq. Nested BH
++ * unlocks and netif_rx must not run that timer while this lock is held. */
+ void phl_sta_rx_reorder_timer_expired(void *t)
+ {
+ 	struct phl_info_t *owner = (struct phl_info_t *)((struct rtw_phl_stainfo_t *)t)->wrole->phl_com->phl_priv;
+ 	bool ordered = READ_ONCE(owner->wa_nan_radio_owned);
+-	unsigned long flags = 0;
+ 
+ 	if (ordered)
+-		spin_lock_irqsave(&wa_nan_rx_order_lock, flags);
++		spin_lock_bh(&wa_nan_rx_order_lock);
+ 	wa_nan_ordered_phl_sta_rx_reorder_timer_expired(t);
+ 	if (ordered)
+-		spin_unlock_irqrestore(&wa_nan_rx_order_lock, flags);
++		spin_unlock_bh(&wa_nan_rx_order_lock);
+ }
+ 
+ static void wa_nan_ordered_phl_sta_rx_reorder_timer_expired(void *t)
+@@ -924,18 +924,18 @@
+ 
+ static void wa_nan_ordered_rtw_phl_flush_reorder_buf(void *phl, struct rtw_phl_stainfo_t *sta);
+ 
+-/* A released batch must reach PN validation before the next batch. */
++/* Serialize reorder and PN delivery against the timer softirq. Nested BH
++ * unlocks and netif_rx must not run that timer while this lock is held. */
+ void rtw_phl_flush_reorder_buf(void *phl, struct rtw_phl_stainfo_t *sta)
+ {
+ 	struct phl_info_t *owner = phl;
+ 	bool ordered = READ_ONCE(owner->wa_nan_radio_owned);
+-	unsigned long flags = 0;
+ 
+ 	if (ordered)
+-		spin_lock_irqsave(&wa_nan_rx_order_lock, flags);
++		spin_lock_bh(&wa_nan_rx_order_lock);
+ 	wa_nan_ordered_rtw_phl_flush_reorder_buf(phl, sta);
+ 	if (ordered)
+-		spin_unlock_irqrestore(&wa_nan_rx_order_lock, flags);
++		spin_unlock_bh(&wa_nan_rx_order_lock);
+ }
+ 
+ static void wa_nan_ordered_rtw_phl_flush_reorder_buf(void *phl, struct rtw_phl_stainfo_t *sta)
+@@ -1638,18 +1638,18 @@
+ 
+ static void wa_nan_ordered_rtw_phl_rx_bar(void *phl, struct rtw_phl_stainfo_t *sta, u8 tid, u16 seq);
+ 
+-/* A released batch must reach PN validation before the next batch. */
++/* Serialize reorder and PN delivery against the timer softirq. Nested BH
++ * unlocks and netif_rx must not run that timer while this lock is held. */
+ void rtw_phl_rx_bar(void *phl, struct rtw_phl_stainfo_t *sta, u8 tid, u16 seq)
+ {
+ 	struct phl_info_t *owner = phl;
+ 	bool ordered = READ_ONCE(owner->wa_nan_radio_owned);
+-	unsigned long flags = 0;
+ 
+ 	if (ordered)
+-		spin_lock_irqsave(&wa_nan_rx_order_lock, flags);
++		spin_lock_bh(&wa_nan_rx_order_lock);
+ 	wa_nan_ordered_rtw_phl_rx_bar(phl, sta, tid, seq);
+ 	if (ordered)
+-		spin_unlock_irqrestore(&wa_nan_rx_order_lock, flags);
++		spin_unlock_bh(&wa_nan_rx_order_lock);
+ }
+ 
+ static void wa_nan_ordered_rtw_phl_rx_bar(void *phl, struct rtw_phl_stainfo_t *sta, u8 tid, u16 seq)
+--- a/phl/hci/phl_trx_pcie.c
++++ b/phl/hci/phl_trx_pcie.c
+@@ -4004,18 +4004,18 @@
+ 
+ static void wa_nan_ordered_phl_rx_handle_normal(struct phl_info_t *phl_info, struct rtw_phl_rx_pkt *phl_rx);
+ 
+-/* A released batch must reach PN validation before the next batch. */
++/* Serialize reorder and PN delivery against the timer softirq. Nested BH
++ * unlocks and netif_rx must not run that timer while this lock is held. */
+ void phl_rx_handle_normal(struct phl_info_t *phl_info, struct rtw_phl_rx_pkt *phl_rx)
+ {
+ 	struct phl_info_t *owner = phl_info;
+ 	bool ordered = READ_ONCE(owner->wa_nan_radio_owned);
+-	unsigned long flags = 0;
+ 
+ 	if (ordered)
+-		spin_lock_irqsave(&wa_nan_rx_order_lock, flags);
++		spin_lock_bh(&wa_nan_rx_order_lock);
+ 	wa_nan_ordered_phl_rx_handle_normal(phl_info, phl_rx);
+ 	if (ordered)
+-		spin_unlock_irqrestore(&wa_nan_rx_order_lock, flags);
++		spin_unlock_bh(&wa_nan_rx_order_lock);
+ }
+ 
+ static void wa_nan_ordered_phl_rx_handle_normal(struct phl_info_t *phl_info, struct rtw_phl_rx_pkt *phl_rx)
+--- a/phl/phl_rx_agg.c
++++ b/phl/phl_rx_agg.c
+@@ -268,8 +268,18 @@
+ 
+ 	/* apply */
+ 	_os_spinlock(drv_priv, &sta->tid_rx_lock, _bh, NULL);
+-	if (sta->tid_rx[tid])
++	if (sta->tid_rx[tid]) {
++#ifdef PHL_RXSC_AMPDU
++		/* Renegotiation replaces the reorder window just like DELBA. */
++		_os_spinlock(drv_priv, &phl_info->phl_com->rxsc_entry.rxsc_lock,
++		             _bh, NULL);
++		if (phl_info->phl_com->rxsc_entry.cached_r == sta->tid_rx[tid])
++			phl_info->phl_com->rxsc_entry.cached_r = NULL;
++		_os_spinunlock(drv_priv, &phl_info->phl_com->rxsc_entry.rxsc_lock,
++		               _bh, NULL);
++#endif
+ 		phl_tid_ampdu_rx_free(sta->tid_rx[tid]);
++	}
+ 	sta->tid_rx[tid] = r;
+ 	_os_spinunlock(drv_priv, &sta->tid_rx_lock, _bh, NULL);
+ 
