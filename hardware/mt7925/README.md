@@ -1,6 +1,6 @@
 # MT7925 原生 NAN 接入
 
-MT7925 PCIe（`14c3:7925`）接入公共 Rust `wirelessd`、hostap 的 `nl80211` 后端和公共文件服务，不复制用户态协议栈。已完成 Q8B 的模块构建、安装、加载及 iPad Pro 系统发现；**新配对仍在进入 PIN 前失败，安全 NDP 与数据传输尚未通过**。
+MT7925 PCIe（`14c3:7925`）接入公共 Rust `wirelessd`、hostap 的 `nl80211` 后端和公共文件服务，不复制用户态协议栈。已完成 Q8B 的模块构建、安装、加载及 iPad Pro 系统发现；诊断版已进入 PIN 和 PASN 认证交换，**完整配对、安全 NDP 与数据传输尚未通过**。
 
 ## 固定来源
 
@@ -8,7 +8,7 @@ MT7925 PCIe（`14c3:7925`）接入公共 Rust `wirelessd`、hostap 的 `nl80211`
 | --- | --- | --- |
 | linux-firmware | `5a3f625f2e9d9f70134af2340d82af3f19ae6891` | WM `20261016233029`、MCU patch `20261016232915a`、原始授权与 WHENCE |
 | wireless-next | `8db0381351fe6af82f81693d5085790e291b2f17`，Linux 7.3.0 | 同源 cfg80211、mac80211、MT76，包含首批 NAN 及 15 个运行／NDP 修复 |
-| MT76 安全补丁 | `20260927210306.737669-1-sean.wang@kernel.org` | 应用其中 22 个补丁，保留 NAN 密钥、管理帧时隙及事件处理 |
+| MT76 安全补丁 | `20260927210306.737669-1-sean.wang@kernel.org` | 应用其中 22 个补丁，保留 NAN 密钥及事件处理；DW-WTBL 路径由项目补丁 `0026` 修正 |
 | 项目接收修复 | `hardware/be200/driver/patches/0003-mac80211-nan-address.patch` | 按接收地址分发 NAN 单播管理帧，复用既有实现 |
 | Linux 7.0 适配 | `driver/backport/patches/series` | AES-CMAC / FILS 使用原内核 shash API，移除新内核专有的转发路径字段 |
 
@@ -17,6 +17,8 @@ MT7925 PCIe（`14c3:7925`）接入公共 Rust `wirelessd`、hostap 的 `nl80211`
 固定 WM 原始能力字节为 `0x80`（CNM），未声明 NAN。该公开镜像实机支持主机 NAN 命令、真实 DW_START / DW_END 和 iPad 服务发现；项目补丁 `0024` 仅在 MT7925 文件路径、1,390,712 字节大小、构建时间 `20261016233029` 和原始能力字节全部匹配时补全驱动 NAN 能力。准备与安装另核对固定 SHA-256，固件二进制不修改，其他版本不自动套用该修正。`inspect.py` 仍如实报告原始 `nan: false`。
 
 补丁 `0025` 在 ENABLE 请求中传递初始 NMI，保持固件信标地址和 mac80211 管理地址一致。单独的 NMI setter 用于运行中更新，在 ENABLE 前调用会被此固件拒绝。未加入周期性伪造发现窗口、无条件能力覆盖或未验证的固件属性命令。
+
+补丁 `0026` 修正未建立对端日程时的管理帧发送。固定固件下，DW-WTBL 路径的配对引导响应未获确认；改用接口 WTBL 后，iPad 收到响应并完成 PIN 输入和 PASN Auth2 校验。没有已提交日程的未加密管理帧使用接口 WTBL；已有固件日程的对端保留其 WTBL 和时隙约束，加密帧保留密钥对应的 WTBL。无用途的 DW 专用站点、固件索引命令和专用 TX 状态期限一并移除。此收发对照来自诊断版；整理后的正式模块已通过构建与生命周期检查，完整 iPad 配对回归尚未完成。
 
 ## 构建与安装
 
@@ -52,12 +54,14 @@ scripts/aware-build install-fileserver --destdir "$PWD/.build/stage-mt7925"
 | 发现窗口 | 固件产生真实 DW_START（59）与 DW_END（60），hostap 据此发送同步服务发现帧 |
 | iPad Pro 真机 | 12.9 英寸第六代，iPadOS 27.0.1；WiFiAware 能力检查、公共客户端签名构建与安装通过 |
 | iPad 系统发现 | 系统选择器显示 `MT7925 Q8B` 和“设置”；双端日志确认对应 NMI 与服务名 |
-| 新配对 | 点击“设置”后、进入 PIN 前失败；iPad 的 wifip2pd 返回错误 12，报告 DCEA 未启用配对缓存 |
+| 新配对 | 诊断版进入 PIN、收到 Auth1、发送并确认 Auth2，iPad 验证 MIC 后因对端缓存满而拒绝安装密钥；完整配对未通过 |
 | 安全 NDP / 文件传输 | 未进入，不能报告成功或吞吐 |
 
-hostap 发出的服务发现帧含 DCEA 配对／缓存位和 NIRA；iPad 的首次发现结果也报告 `pairSetup=YES`、`caching=YES`，但创建配对会话时仍报告缓存位缺失。驱动没有收到对应的单播引导或 PASN 帧。固件信标属性与服务发现属性的一致性尚待确认，不能把推测写成已定位根因。公开厂商参考中的 UPDATE_ATTR 与 VENDOR_PAYLOAD 诊断请求返回成功，但未消除该错误，未纳入正式补丁。
+hostap 发出的服务发现帧含 DCEA 配对／缓存位和 NIRA；iPad 首次发现结果报告 `pairSetup=YES`、`caching=YES`，但部分样本在创建配对会话时仍返回错误 12，报告 DCEA 缓存位缺失。补充完整 DCEA / NIRA 的诊断版曾连续进入引导，后续仍复现该错误，因此不能认定信标属性一致性已修复。逐属性更新与附加属性命令均返回成功，但未稳定消除错误，未纳入正式交付。公共 hostap 的配对能力与固件信标更新仍需继续验证。
 
-正式七模块的运行 build-id、安装文件和暂存文件一致。正常停止后 NAN、NDI、hostap 及运行目录均释放；随后恢复正常 hostap 路径并重启，wirelessd / fileserver 为 active，配对窗口关闭，保持原有 disabled 开机状态。本次正式加载区间无新增内核警告、Oops 或固件异常。
+进入 PASN 的样本中，iPad 报告 `Peer cache is full`，NM-TK 安装返回 `ENOMEM`；这是无线运行时对端缓存，不能通过删除持久配对记录掩盖。关闭再打开 Wi-Fi 的恢复检查还记录了固件／主机缓存计数不一致。iPad 重启后的新配对复测尚未完成，不能据此判断 MT7925 的后续密钥与 NDP 路径已可用。
+
+包含 `0026` 的正式七模块完成固定补丁重放、编译、modpost、链接和暂存安装；运行 build-id、安装文件和暂存文件一致。正常停止后 NAN、NDI、hostap 及运行目录均释放，正常 hostap 路径下的服务再次启动通过。wirelessd / fileserver 为 active，配对窗口关闭，保持原有 disabled 开机状态；正式加载检查区间无新增内核警告、Oops 或固件异常。
 
 早期 `20260414` 固件虽然声明 `0xa0`，仍未产生主机发现窗口；当前来源已替换为上述实际通过发现的公开版本。新配对、缓存身份重连、安全 NDP、IPv6 双向文件及 NDP 会话释放仍需继续验收。原有 iPad 配对记录、板端身份与共享文件保留。
 

@@ -24,3 +24,4 @@
 ../../../be200/driver/patches/0003-mac80211-nan-address.patch
 0024-mt7925-firmware-20261016-nan-capability.patch
 0025-mt7925-initialize-firmware-nmi.patch
+0026-mt7925-nan-interface-wtbl-before-peer-schedule.patch
