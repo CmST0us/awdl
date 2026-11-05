@@ -1,0 +1,52 @@
+Subject: wifi: mt76: mt7925: double the retry budget for NAN unicast management
+Link: https://lore.kernel.org/all/20260927210306.737669-17-sean.wang@kernel.org/
+
+From: Jacobs Wu <jacobs.wu at mediatek.com>
+
+The NAN setup handshakes are one-shot at the host: wpa_supplicant aborts
+PASN on the first unacknowledged authentication frame and completes the
+NDP state machine without retransmitting an unacknowledged key-install.
+Right after the data path confirm both peers transmit at each other
+nearly simultaneously, and with half-duplex radios one 15-retry burst
+regularly dies inside the peer's own TX window (measured ~50% loss of
+the key-install on an MT7925 pair, killing the NDP setup).
+
+Double the TXD retry budget to the field maximum for NAN unicast
+management so the burst outlives the cross-fire window.
+
+Co-developed-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Jacobs Wu <jacobs.wu at mediatek.com>
+---
+ drivers/net/wireless/mediatek/mt76/mt7925/mac.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/drivers/net/wireless/mediatek/mt76/mt7925/mac.c b/drivers/net/wireless/mediatek/mt76/mt7925/mac.c
+index 101f571b027f..f19d0451f373 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/mac.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/mac.c
+@@ -806,6 +806,19 @@ mt7925_mac_write_txwi(struct mt76_dev *dev, __le32 *txwi,
+ 
+ 	val = FIELD_PREP(MT_TXD3_REM_TX_COUNT, 15);
+ 
++	/* NAN setup handshakes are one-shot at the host: a single lost burst
++	 * kills the NDP (peers transmit at each other nearly simultaneously
++	 * after M3 and half-duplex radios miss the reply). Double the retry
++	 * budget so the burst outlives the cross-fire window.
++	 */
++	if (vif && vif->type == NL80211_IFTYPE_NAN) {
++		struct ieee80211_hdr *nan_hdr = (struct ieee80211_hdr *)skb->data;
++
++		if (ieee80211_is_mgmt(nan_hdr->frame_control) &&
++		    !is_multicast_ether_addr(nan_hdr->addr1))
++			val = FIELD_PREP(MT_TXD3_REM_TX_COUNT, 31);
++	}
++
+ 	if (key)
+ 		val |= MT_TXD3_PROTECT_FRAME;
+ 	if (info->flags & IEEE80211_TX_CTL_NO_ACK)
+-- 
+2.43.0
+
+
+

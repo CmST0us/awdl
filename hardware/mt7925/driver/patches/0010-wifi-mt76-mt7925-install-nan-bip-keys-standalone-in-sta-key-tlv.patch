@@ -1,0 +1,55 @@
+Subject: wifi: mt76: mt7925: install NAN BIP keys standalone in sta_key_tlv
+Link: https://lore.kernel.org/all/20260927210306.737669-11-sean.wang@kernel.org/
+
+From: Chengwei Yu <chengwei.yu at mediatek.com>
+
+mt7925_mcu_sta_key_tlv() packs a BIP_CMAC_128 key together with the CCMP
+key that sta_key_conf cached from an earlier key installation on the same
+link: cipher_id BIP_CMAC_128, key_len 32, the CCMP key in the first 16
+bytes and the CMAC key in the second 16, indexed by the CCMP key's id.
+That matches STA/AP mode, where the IGTK always follows the GTK on the
+same WTBL.
+
+A NAN interface has no such pairing. No CCMP key is ever installed on a
+NAN or NAN_DATA interface WTBL, so sta_key_conf is still zeroed when a NAN
+TX IGTK/BIGTK arrives: the command would carry 16 bytes of zeros as the
+first half of the key material and key_id 0 instead of the real 4-7 key
+index.
+
+Restrict the combined-key path to non-NAN interfaces so that a NAN BIP key
+takes the generic path instead and is installed standalone, with its own
+keyidx and its own 16-byte key material.
+
+Co-developed-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Chengwei Yu <chengwei.yu at mediatek.com>
+---
+ drivers/net/wireless/mediatek/mt76/mt7925/mcu.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/wireless/mediatek/mt76/mt7925/mcu.c b/drivers/net/wireless/mediatek/mt76/mt7925/mcu.c
+index 76dcbbffabfc..d494753cdf04 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/mcu.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/mcu.c
+@@ -1378,7 +1378,15 @@ mt7925_mcu_sta_key_tlv(struct mt76_wcid *wcid,
+ 		if (cipher == CONNAC3_CIPHER_NONE)
+ 			return -EOPNOTSUPP;
+ 
+-		if (cipher == CONNAC3_CIPHER_BIP_CMAC_128) {
++		/* STA/AP mode installs the IGTK together with the CCMP GTK that
++		 * sta_key_conf cached earlier on the same link.  NAN has no such
++		 * pairing: no CCMP key is ever installed on a NAN interface WTBL,
++		 * so sta_key_conf would contribute a zero key and a stale key_id.
++		 * Install the NAN BIP key standalone via the generic path instead.
++		 */
++		if (cipher == CONNAC3_CIPHER_BIP_CMAC_128 &&
++		    vif->type != NL80211_IFTYPE_NAN &&
++		    vif->type != NL80211_IFTYPE_NAN_DATA) {
+ 			sec->cipher_id = CONNAC3_CIPHER_BIP_CMAC_128;
+ 			sec->key_id = sta_key_conf->keyidx;
+ 			sec->key_len = 32;
+-- 
+2.43.0
+
+
+

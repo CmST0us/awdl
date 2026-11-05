@@ -1,0 +1,20 @@
+{
+  "kernel": {
+    "repository": "https://github.com/radxa/kernel.git",
+    "commit": "c00e1e17e65104c8143a8f3d559ef723ae5824d3",
+    "file": "radxa-kernel-c00e1e17e65104c8143a8f3d559ef723ae5824d3.tar.gz",
+    "url": "https://codeload.github.com/radxa/kernel/tar.gz/c00e1e17e65104c8143a8f3d559ef723ae5824d3",
+    "sha256": "a4c9b6b9f70ff22bf3522a8a8bfc5ecdc419061d5a10361a1902c18974fdece3",
+    "directory": "kernel-c00e1e17e65104c8143a8f3d559ef723ae5824d3",
+    "version": "7.0.11",
+    "license": "GPL-2.0-only; per-file SPDX licenses retained"
+  },
+  "packaging": {
+    "repository": "https://github.com/radxa-pkg/linux-qcom.git",
+    "commit": "36c48caffbbf509a153331a33638a068a5210a88",
+    "file": "linux-qcom-36c48caffbbf509a153331a33638a068a5210a88.tar.gz",
+    "url": "https://codeload.github.com/radxa-pkg/linux-qcom/tar.gz/36c48caffbbf509a153331a33638a068a5210a88",
+    "sha256": "aa7d72e911351b8e72d9e2d1c58b8ca6c56290190e7d70ecbb025e140c773d12",
+    "directory": "linux-qcom-36c48caffbbf509a153331a33638a068a5210a88"
+  }
+}

@@ -1,0 +1,57 @@
+Subject: wifi: mt76: mt7925: let TX status of DW-held NAN frames outlive the DW period
+Link: https://lore.kernel.org/all/20260927210306.737669-18-sean.wang@kernel.org/
+
+From: Jacobs Wu <jacobs.wu at mediatek.com>
+
+Frames on the NAN DW-WTBL legitimately wait up to a full discovery
+window period (524ms) in a paused queue before they air, but the TX
+status tracking times a packet out MT_TX_STATUS_SKB_TIMEOUT (250ms)
+after DMA completion and reports it as failed. wpa_supplicant treats
+the false no-ack as a delivery failure and retransmits: a NIK follow-up
+held to the DW is then re-queued every cycle, the peer receives one
+copy per DW (56 copies measured over one 30s window), and the resulting
+pairing-confirm storm poisons the pairing-verification state, which
+never triggers and times out.
+
+Extend the TX status lifetime for frames tracked on the DW wcid so the
+status is reported from the actual transmission.
+
+Co-developed-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Jacobs Wu <jacobs.wu at mediatek.com>
+---
+ drivers/net/wireless/mediatek/mt76/tx.c | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/wireless/mediatek/mt76/tx.c b/drivers/net/wireless/mediatek/mt76/tx.c
+index 72a4bc505aed..4197b8221f73 100644
+--- a/drivers/net/wireless/mediatek/mt76/tx.c
++++ b/drivers/net/wireless/mediatek/mt76/tx.c
+@@ -185,11 +185,20 @@ mt76_tx_status_skb_get(struct mt76_dev *dev, struct mt76_wcid *wcid, int pktid,
+ 		struct mt76_tx_cb *cb = mt76_tx_skb_cb(skb);
+ 
+ 		if (pktid >= 0) {
++			unsigned long timeout = MT_TX_STATUS_SKB_TIMEOUT;
++
+ 			if (!(cb->flags & MT_TX_CB_DMA_DONE))
+ 				continue;
+ 
+-			if (time_is_after_jiffies(cb->jiffies +
+-						   MT_TX_STATUS_SKB_TIMEOUT))
++			/* A frame held to the NAN DW legitimately waits up to
++			 * a full DW period (524ms) before it airs; timing its
++			 * status out earlier reports a false no-ack to the
++			 * one-shot NAN handshakes (PASN, NDP key install).
++			 */
++			if (wcid->nan_dw)
++				timeout = HZ;
++
++			if (time_is_after_jiffies(cb->jiffies + timeout))
+ 				continue;
+ 		}
+ 
+-- 
+2.43.0
+
+
+

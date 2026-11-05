@@ -1,5 +1,7 @@
 # 构建与安装
 
+MT7925 / Dragon Q8B 的固定固件、无线内核、安全补丁与板级参考输入见 [MT7925 准备说明](../hardware/mt7925/README.md)。目前仅提供依赖准备，不属于下述已支持的驱动构建与安装目标。
+
 在仓库根目录运行脚本。公共服务使用 Rust 1.93 或更新版本，Cargo.lock 固定依赖；Linux 用户态需要 C 工具链、make、bison、flex、bc、libelf 开发库、pkg-config、libnl 3、libnl-genl 3 和 OpenSSL 开发库。源码准备需要 curl、tar、patch；RTL 驱动还需要 Python 3.12、带 MIPS16 后端的 Clang 21、GNU MIPS little-endian binutils、目标内核 headers 和 Linux 目标工具链。
 
 ## 构建选择

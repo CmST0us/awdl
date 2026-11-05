@@ -1,0 +1,229 @@
+Subject: wifi: mt76: mt7925: add NDC-aware TX GTK table for NAN_DATA
+Link: https://lore.kernel.org/all/20260927210306.737669-9-sean.wang@kernel.org/
+
+From: Chengwei Yu <chengwei.yu at mediatek.com>
+
+NAN TX GTK is NDC-scoped: every station in the same NAN Data Cluster
+shares one key, and a single NAN_DATA vif can join multiple NDCs
+concurrently. Add mt792x_nan.nan_tx_gtk_table[] (up to
+MT792X_MAX_NAN_NDC = 8 RCU on-demand entries, one per NDC) and route
+interface-directed NAN_DATA multicast through the matching WTBL in
+mt792x_tx(), falling back to the interface WTBL when no entry exists.
+
+Teardown lives in mt7925_remove_interface(), not the shared
+mt792x_remove_interface(): NAN_DATA vifs are mt7925-only so cleanup
+in the shared path would never run.
+
+NOTE: NDC selection from skb context is not yet implemented; the
+lookup always picks the first installed entry until mt7925_nan_set_key()
+populates the table.
+
+Co-developed-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Chengwei Yu <chengwei.yu at mediatek.com>
+---
+ .../net/wireless/mediatek/mt76/mt7925/main.c  | 36 +++++++++++
+ drivers/net/wireless/mediatek/mt76/mt792x.h   | 64 ++++++++++++++++++-
+ .../net/wireless/mediatek/mt76/mt792x_core.c  | 27 ++++++--
+ 3 files changed, 122 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/net/wireless/mediatek/mt76/mt7925/main.c b/drivers/net/wireless/mediatek/mt76/mt7925/main.c
+index 2d3bf7d806a7..1b253989f43b 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/main.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/main.c
+@@ -486,12 +486,22 @@ mt7925_add_interface(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
+ 		INIT_DELAYED_WORK(&mvif->nan.mac_rand_work,
+ 				  mt7925_nan_mac_rand_work);
+ 
++	if (vif->type == NL80211_IFTYPE_NAN_DATA) {
++		/* nan_tx_gtk_table[] slots are NULL from mac80211's kzalloc of
++		 * drv_priv; entries are allocated on demand by set_key when a
++		 * TX GTK is installed.
++		 */
++		spin_lock_init(&mvif->nan.nan_tx_gtk_lock);
++	}
+ out:
+ 	mt792x_mutex_release(dev);
+ 
+ 	return ret;
+ }
+ 
++static void mt7925_nan_gtk_table_cleanup(struct mt792x_dev *dev,
++					 struct mt792x_vif *mvif);
++
+ static void
+ mt7925_remove_interface(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
+ {
+@@ -516,6 +526,9 @@ mt7925_remove_interface(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
+ 	mconf = mt792x_link_conf_to_mconf(&vif->bss_conf);
+ 	mt792x_mac_link_bss_remove(dev, mconf, &mvif->sta.deflink);
+ 
++	if (vif->type == NL80211_IFTYPE_NAN_DATA)
++		mt7925_nan_gtk_table_cleanup(dev, mvif);
++
+ 	mt792x_mutex_release(dev);
+ }
+ 
+@@ -1331,6 +1344,29 @@ static void mt7925_nan_wcid_free(struct mt76_dev *mdev, struct mt76_wcid *wcid)
+ 	wcid->idx = MT792x_WCID_IDX_UNSET;
+ }
+ 
++/* Free all TX GTK WTBL entries for a NAN_DATA vif on interface teardown.
++ * Caller must hold dev->mt76.mutex.
++ */
++static void mt7925_nan_gtk_table_cleanup(struct mt792x_dev *dev,
++					 struct mt792x_vif *mvif)
++{
++	int i;
++
++	for (i = 0; i < MT792X_MAX_NAN_NDC; i++) {
++		struct mt792x_nan_gtk_entry *e;
++
++		e = rcu_dereference_protected(mvif->nan.nan_tx_gtk_table[i],
++					      lockdep_is_held(&dev->mt76.mutex));
++		if (!e)
++			continue;
++		rcu_assign_pointer(mvif->nan.nan_tx_gtk_table[i], NULL);
++		rcu_assign_pointer(dev->mt76.wcid[e->wcid.idx], NULL);
++		mt76_wcid_cleanup(&dev->mt76, &e->wcid);
++		mt76_wcid_mask_clear(dev->mt76.wcid_mask, e->wcid.idx);
++		kfree(e);
++	}
++}
++
+ /* Release any lazily-allocated per-peer NAN group key WTBLs for a departing
+  * station.  Called from mt7925_mac_link_sta_remove() after the primary WTBL
+  * is already freed, so the NAN-specific cleanup is clearly separated from the
+diff --git a/drivers/net/wireless/mediatek/mt76/mt792x.h b/drivers/net/wireless/mediatek/mt76/mt792x.h
+index 707ca24193f9..342733e1001c 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt792x.h
++++ b/drivers/net/wireless/mediatek/mt76/mt792x.h
+@@ -155,7 +155,7 @@ struct mt792x_sta {
+ 	struct mt792x_sta_nan_sched nan_sched;
+ 
+ 	/* NAN per-peer group key WTBLs (allocated lazily when keys are installed)
+-	 * Note: TX GTK is interface-level, see mt792x_vif->nan_tx_gtk_table
++	 * Note: TX GTK is interface-level, see mvif->nan.nan_tx_gtk_table
+ 	 */
+ 	struct mt76_wcid nan_rx_gtk_wcid;    /* NAN_DATA peer: RX GTK WTBL (per-peer) */
+ 	struct mt76_wcid nan_rx_igtk_wcid;   /* NAN peer: RX IGTK/BIGTK WTBL (per-peer) */
+@@ -183,6 +183,60 @@ struct mt792x_nan_conf {
+ 	bool enable_dw_notification;
+ };
+ 
++/*
++ * NAN WTBL layout (mt7925)
++ *
++ * TX scope -- determined by who shares the encrypting key:
++ *
++ *   mvif->sta.deflink.wcid          [NAN vif, interface-level]
++ *     TX IGTK/BIGTK: multicast management TX.  Shared by all NMI peers;
++ *     installed via the normal hardware key path (set_key fallback).
++ *
++ *   mvif->sta.deflink.wcid          [NAN_DATA vif, interface-level]
++ *     TX GTK fallback when nan.nan_tx_gtk_table[] has no entry for the NDC.
++ *
++ *   mvif->nan.nan_tx_gtk_table[i]->wcid [NAN_DATA vif, NDC-level, on-demand]
++ *     TX GTK: multicast data TX.  All peers in the same NAN Data Cluster
++ *     share one TX GTK; different NDCs use independent keys.  Each slot
++ *     is NULL until set_key installs a key for that NDC (up to
++ *     MT792X_MAX_NAN_NDC concurrent NDCs).
++ *     NOTE: currently returns -EOPNOTSUPP -- mac80211 does not pass an
++ *     NDC ID at set_key time, so the correct table slot cannot be
++ *     selected.
++ *
++ * RX scope -- always per-peer because each sender has its own key:
++ *
++ *   msta->deflink.wcid              [NMI or NDI peer, peer-level]
++ *     NM-TK (NMI unicast) or ND-TK (NDI unicast).
++ *
++ *   msta->nan_rx_gtk_wcid           [NDI peer under NAN_DATA vif, peer-level]
++ *     RX GTK: multicast data RX.  Keyidx 1-2; allocated lazily in set_key.
++ *
++ *   msta->nan_rx_igtk_wcid          [NMI peer under NAN vif, peer-level]
++ *     RX IGTK/BIGTK: multicast management RX.  Keyidx 4-7; allocated
++ *     lazily in set_key.
++ *
++ * Example -- 2 peers in different NDCs, full security (design intent):
++ *   1  NAN vif WTBL                 TX IGTK/BIGTK
++ *   1  NAN_DATA vif WTBL            TX GTK fallback
++ *   2  NMI peer WTBLs               NM-TK (one per peer)
++ *   2  NDI peer WTBLs               ND-TK (one per peer)
++ *   2  TX GTK WTBLs                 nan.nan_tx_gtk_table[], one per NDC
++ *   2  RX GTK WTBLs                 nan_rx_gtk_wcid, one per NDI peer
++ *   2  RX IGTK/BIGTK WTBLs          nan_rx_igtk_wcid, one per NMI peer
++ *  = 12 WTBLs total
++ *
++ * Maximum concurrent NDCs is based on NAN_MAX_CONN_CFG (8 peers).
++ */
++#define MT792X_MAX_NAN_NDC	8
++
++/* TX GTK WTBL for one NAN Data Cluster; allocated only when the key is installed */
++struct mt792x_nan_gtk_entry {
++	u8 ndc_id[ETH_ALEN];
++	struct mt76_wcid wcid;
++	u8 key_idx;
++};
++
+ struct mt792x_nan {
+ 	struct mt792x_nan_conf conf;
+ 
+@@ -208,6 +262,14 @@ struct mt792x_nan {
+ 	 */
+ 	struct delayed_work mac_rand_work;
+ 	u32 mac_rand_period_sec;
++
++	/* NAN_DATA TX GTK table (mt7925 only): one entry per NAN Data Cluster,
++	 * allocated on demand when set_key installs a TX GTK for that NDC.
++	 * Protected by nan_tx_gtk_lock; slots are NULL until populated.
++	 */
++	struct mt792x_nan_gtk_entry __rcu *nan_tx_gtk_table[MT792X_MAX_NAN_NDC];
++	/* Protects nan_tx_gtk_table. */
++	spinlock_t nan_tx_gtk_lock;
+ };
+ 
+ struct mt792x_vif {
+diff --git a/drivers/net/wireless/mediatek/mt76/mt792x_core.c b/drivers/net/wireless/mediatek/mt76/mt792x_core.c
+index 0ad33f74c228..c8e42447f43a 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt792x_core.c
++++ b/drivers/net/wireless/mediatek/mt76/mt792x_core.c
+@@ -187,11 +187,30 @@ void mt792x_tx(struct ieee80211_hw *hw, struct ieee80211_tx_control *control,
+ 		wcid = &mlink->wcid;
+ 	}
+ 
++	/* NAN_DATA multicast: route through the NDC-specific TX GTK WTBL.
++	 * Full WTBL layout is documented in mt792x.h.
++	 * NOTE: NDC selection is not yet implemented; always falls back to
++	 * the interface WTBL until set_key populates nan_tx_gtk_table[].
++	 */
+ 	if (vif && !control->sta) {
+-		struct mt792x_vif *mvif;
+-
+-		mvif = (struct mt792x_vif *)vif->drv_priv;
+-		wcid = &mvif->sta.deflink.wcid;
++		struct mt792x_vif *mvif = (struct mt792x_vif *)vif->drv_priv;
++
++		if (vif->type == NL80211_IFTYPE_NAN_DATA) {
++			struct mt792x_nan_gtk_entry *entry = NULL;
++			int i;
++
++			rcu_read_lock();
++			for (i = 0; i < MT792X_MAX_NAN_NDC; i++) {
++				entry = rcu_dereference(mvif->nan.nan_tx_gtk_table[i]);
++				if (entry)
++					break;
++			}
++			rcu_read_unlock();
++
++			wcid = entry ? &entry->wcid : &mvif->sta.deflink.wcid;
++		} else {
++			wcid = &mvif->sta.deflink.wcid;
++		}
+ 	}
+ 
+ 	if (vif && control->sta && ieee80211_vif_is_mld(vif) &&
+-- 
+2.43.0
+
+
+

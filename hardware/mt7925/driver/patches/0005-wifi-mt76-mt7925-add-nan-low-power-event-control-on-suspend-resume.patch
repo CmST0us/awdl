@@ -1,0 +1,242 @@
+Subject: wifi: mt76: mt7925: add NAN low power event control on suspend/resume
+Link: https://lore.kernel.org/all/20260927210306.737669-6-sean.wang@kernel.org/
+
+From: Chengwei Yu <chengwei.yu at mediatek.com>
+
+Disable NAN low power event reporting when the interface suspends so
+the firmware stops firing peer-schedule notifications into a quiesced
+system, and re-enable it on resume.
+
+Re-enabling is conditional: it only fires if firmware has previously
+reported an active peer schedule (non-zero peer_sch_record_tx_map in
+the LOWPOWER_CTRL event). This avoids sending the command on every
+resume when no peer connection is in progress.
+
+Co-developed-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Chengwei Yu <chengwei.yu at mediatek.com>
+---
+ .../net/wireless/mediatek/mt76/mt7925/mcu.c   |  9 ++
+ .../net/wireless/mediatek/mt76/mt7925/nan.c   | 93 +++++++++++++++++++
+ .../net/wireless/mediatek/mt76/mt7925/nan.h   | 18 ++++
+ drivers/net/wireless/mediatek/mt76/mt792x.h   |  7 ++
+ 4 files changed, 127 insertions(+)
+
+diff --git a/drivers/net/wireless/mediatek/mt76/mt7925/mcu.c b/drivers/net/wireless/mediatek/mt76/mt7925/mcu.c
+index 2afd3f5e3266..76dcbbffabfc 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/mcu.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/mcu.c
+@@ -296,6 +296,7 @@ void mt7925_mcu_set_suspend_iter(void *priv, u8 *mac,
+ 	bool suspend = !test_bit(MT76_STATE_RUNNING, &phy->state);
+ 	struct ieee80211_hw *hw = phy->hw;
+ 	struct cfg80211_wowlan *wowlan = hw->wiphy->wowlan_config;
++	struct mt792x_dev *dev = mt792x_hw_dev(hw);
+ 	int i;
+ 
+ 	mt76_connac_mcu_set_gtk_rekey(phy->dev, vif, suspend);
+@@ -306,6 +307,14 @@ void mt7925_mcu_set_suspend_iter(void *priv, u8 *mac,
+ 		mt7925_mcu_set_wow_pattern(phy->dev, vif, i, suspend,
+ 					   &wowlan->patterns[i]);
+ 	mt7925_connac_mcu_set_wow_ctrl(phy, vif, suspend, wowlan);
++
++	/*
++	 * Disable NAN low power event reporting while suspended, and
++	 * re-enable it on resume so firmware resumes reporting peer
++	 * schedule activity.
++	 */
++	if (vif->type == NL80211_IFTYPE_NAN)
++		mt7925_nan_send_lowpower_ctrl_cmd(dev, !suspend);
+ }
+ 
+ #endif /* CONFIG_PM */
+diff --git a/drivers/net/wireless/mediatek/mt76/mt7925/nan.c b/drivers/net/wireless/mediatek/mt76/mt7925/nan.c
+index 0b94bd4005d4..73e45be8b40e 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/nan.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/nan.c
+@@ -654,6 +654,44 @@ mt7925_nan_handle_sched_update_done(struct mt792x_dev *dev, struct tlv *tlv)
+ 	ieee80211_queue_work(dev->mt76.hw, &dev->nan_deferred_work);
+ }
+ 
++static void
++mt7925_nan_handle_lowpower_ctrl(struct mt792x_dev *dev, struct tlv *tlv)
++{
++	struct mt7925_nan_lowpower_ctrl_evt *evt;
++	struct mt792x_vif *mvif;
++	u16 len;
++
++	if (!dev || !tlv)
++		return;
++
++	len = le16_to_cpu(tlv->len);
++	if (len < sizeof(*tlv) + sizeof(*evt)) {
++		dev_warn(dev->mt76.dev,
++			 "nan: short lowpower_ctrl event tlv len=%u\n", len);
++		return;
++	}
++
++	if (!dev->nan_vif || !ieee80211_vif_nan_started(dev->nan_vif))
++		return;
++
++	evt = (struct mt7925_nan_lowpower_ctrl_evt *)tlv->data;
++
++	dev_dbg(dev->mt76.dev,
++		"nan: lowpower_ctrl event - peer_sch_record_tx_map=0x%x\n",
++		evt->peer_sch_record_tx_map);
++
++	if (!evt->peer_sch_record_tx_map)
++		return;
++
++	/*
++	 * Firmware reports an active peer schedule; remember it so the
++	 * next resume re-enables low power event reporting instead of
++	 * sending the command unconditionally every suspend/resume cycle.
++	 */
++	mvif = (struct mt792x_vif *)dev->nan_vif->drv_priv;
++	mvif->nan.lowpower_mode = true;
++}
++
+ void mt7925_nan_mcu_event(struct mt792x_dev *dev, struct sk_buff *skb)
+ {
+ 	struct tlv *tlv;
+@@ -688,6 +726,9 @@ void mt7925_nan_mcu_event(struct mt792x_dev *dev, struct sk_buff *skb)
+ 		case NAN_UNI_EVENT_ID_SCHED_UPDATE_DONE:
+ 			mt7925_nan_handle_sched_update_done(dev, tlv);
+ 			break;
++		case NAN_UNI_EVENT_LOWPOWER_CTRL:
++			mt7925_nan_handle_lowpower_ctrl(dev, tlv);
++			break;
+ 		default:
+ 			break;
+ 		}
+@@ -745,6 +786,58 @@ int mt7925_nan_set_ndi_address(struct ieee80211_vif *vif,
+ 	return 0;
+ }
+ 
++int mt7925_nan_send_lowpower_ctrl_cmd(struct mt792x_dev *dev, bool enable)
++{
++	struct mt7925_nan_lowpower_ctrl_tlv *lp_tlv;
++	struct mt7925_nan_common_hdr *hdr;
++	struct mt792x_vif *mvif;
++	struct mt76_dev *mdev;
++	struct sk_buff *skb;
++	struct tlv *tlv;
++
++	if (!dev)
++		return -EINVAL;
++
++	/*
++	 * Only re-enabling (on resume) is gated on firmware having reported
++	 * an active peer schedule while suspended; disabling (on suspend)
++	 * always goes through so firmware stops reporting immediately.
++	 */
++	if (enable) {
++		if (!dev->nan_vif)
++			return 0;
++
++		mvif = (struct mt792x_vif *)dev->nan_vif->drv_priv;
++		if (!mvif->nan.lowpower_mode)
++			return 0;
++
++		mvif->nan.lowpower_mode = false;
++	}
++
++	mdev = &dev->mt76;
++
++	skb = mt76_mcu_msg_alloc(mdev, NULL,
++				 sizeof(struct mt7925_nan_common_hdr) +
++				 sizeof(struct mt7925_nan_lowpower_ctrl_tlv));
++	if (!skb)
++		return -ENOMEM;
++
++	hdr = (struct mt7925_nan_common_hdr *)skb_put(skb, sizeof(*hdr));
++	memset(hdr, 0, sizeof(*hdr));
++
++	tlv = mt76_connac_mcu_add_tlv(skb, NAN_UNI_CMD_LOWPOWER_CTRL,
++				      sizeof(struct mt7925_nan_lowpower_ctrl_tlv));
++	if (!tlv) {
++		dev_kfree_skb(skb);
++		return -ENOMEM;
++	}
++
++	lp_tlv = (struct mt7925_nan_lowpower_ctrl_tlv *)tlv;
++	lp_tlv->enabled = enable ? 1 : 0;
++
++	return mt76_mcu_skb_send_msg(mdev, skb, MCU_UNI_CMD(NAN), true);
++}
++
+ void mt7925_nan_mac_rand_work(struct work_struct *work)
+ {
+ 	struct mt792x_vif *mvif = container_of(work, struct mt792x_vif,
+diff --git a/drivers/net/wireless/mediatek/mt76/mt7925/nan.h b/drivers/net/wireless/mediatek/mt76/mt7925/nan.h
+index 191134825c3b..3a14ec384e4f 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/nan.h
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/nan.h
+@@ -88,6 +88,7 @@ enum nan_uni_cmd_tag {
+ 	NAN_UNI_CMD_UPDATE_PEER_CAPABILITY	= 21,
+ 	NAN_UNI_CMD_CHANGE_NMI_ADDRESS		= 24,
+ 	NAN_UNI_CMD_SET_DW_INTERVAL		= 26,
++	NAN_UNI_CMD_LOWPOWER_CTRL		= 37,
+ 	NAN_UNI_CMD_SET_SYNC_RSSI		= 39,
+ 	NAN_UNI_CMD_SET_CLUSTER_ID		= 40,
+ 	NAN_UNI_CMD_KEY_MANAGEMENT		= 53,
+@@ -95,6 +96,7 @@ enum nan_uni_cmd_tag {
+ 
+ enum nan_uni_event_tag {
+ 	NAN_UNI_EVENT_ID_DE_EVENT_IND		= 19,
++	NAN_UNI_EVENT_LOWPOWER_CTRL		= 37,
+ 	NAN_UNI_EVENT_ID_ULW_UPDATE		= 39,
+ 	NAN_UNI_EVENT_ID_SCHED_UPDATE_DONE	= 43,
+ 	NAN_UNI_EVENT_REPORT_DW_START		= 59,
+@@ -476,6 +478,20 @@ struct mt7925_nan_update_phy_setting_tlv {
+ 	struct mt7925_nan_phy_setting phy_5g;
+ } __packed __aligned(4);
+ 
++/* NAN Low Power Control Command */
++struct mt7925_nan_lowpower_ctrl_tlv {
++	__le16 tag;
++	__le16 len;
++	u8 enabled;
++	u8 reserved[3];
++} __packed __aligned(4);
++
++/* NAN Low Power Control Event */
++struct mt7925_nan_lowpower_ctrl_evt {
++	u8 peer_sch_record_tx_map;
++	u8 reserved[7];
++} __packed __aligned(4);
++
+ int mt7925_nan_update_phy_setting(struct mt792x_dev *dev);
+ 
+ struct ieee80211_chanctx_conf *
+@@ -510,6 +526,8 @@ void mt7925_nan_start_mac_randomization(struct ieee80211_vif *vif,
+ 
+ void mt7925_nan_stop_mac_randomization(struct ieee80211_vif *vif);
+ 
++int mt7925_nan_send_lowpower_ctrl_cmd(struct mt792x_dev *dev, bool enable);
++
+ void mt7925_nan_local_sched_changed(struct mt792x_dev *dev,
+ 				    struct ieee80211_vif *vif);
+ 
+diff --git a/drivers/net/wireless/mediatek/mt76/mt792x.h b/drivers/net/wireless/mediatek/mt76/mt792x.h
+index 64cca8852359..fa28a77d12bb 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt792x.h
++++ b/drivers/net/wireless/mediatek/mt76/mt792x.h
+@@ -182,6 +182,13 @@ struct mt792x_nan {
+ 	/* Connection index bitmap, up to NAN_MAX_CONN_CFG peers */
+ 	unsigned long conn_bitmap;
+ 
++	/*
++	 * Set when firmware reports an active peer schedule via
++	 * NAN_UNI_EVENT_LOWPOWER_CTRL; cleared once the re-enable command
++	 * has been sent on resume.
++	 */
++	bool lowpower_mode;
++
+ 	/*
+ 	 * NMI/NDI MAC address randomization. Kept per-vif (rather than a
+ 	 * single pointer on mt792x_dev) because up to two NAN_DATA vifs can
+-- 
+2.43.0
+
+
+

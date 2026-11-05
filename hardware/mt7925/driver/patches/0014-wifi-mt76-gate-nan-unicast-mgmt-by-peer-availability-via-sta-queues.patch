@@ -1,0 +1,56 @@
+Subject: wifi: mt76: gate NAN unicast mgmt by peer availability via STA queues
+Link: https://lore.kernel.org/all/20260927210306.737669-15-sean.wang@kernel.org/
+
+From: Jacobs Wu <jacobs.wu at mediatek.com>
+
+Host-initiated NAN action frames (NDP Request/Response/Confirm) were
+sent on MT_TXQ_PSD -> MT_LMAC_ALTX0 through the interface WTBL: a
+force-TX path with no relation to the NAN timeline. With a partial
+availability bitmap the peer is off-channel most of the time, so the
+15-retry burst (~11-51ms) regularly misses the peer entirely and NDP
+setup fails probabilistically (half ~2/3, quarter ~0), and per spec
+unicast NAN mgmt must be transmitted within the peer availability
+windows.
+
+Route unicast NAN mgmt through the peer STA WTBL on its AC queue
+instead: the FW pauses/resumes the peer WTBL AC queues according to
+the peer schedule record (the committed-window intersection computed
+by the supplicant), which is the same gating the NDP data path already
+relies on. Multicast NAN mgmt (and unicast without a peer STA) keeps
+using the interface WTBL, which has no pause driver.
+
+Co-developed-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Jacobs Wu <jacobs.wu at mediatek.com>
+---
+ drivers/net/wireless/mediatek/mt76/tx.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/drivers/net/wireless/mediatek/mt76/tx.c b/drivers/net/wireless/mediatek/mt76/tx.c
+index 3707ee19e4ae..a3688b9fe635 100644
+--- a/drivers/net/wireless/mediatek/mt76/tx.c
++++ b/drivers/net/wireless/mediatek/mt76/tx.c
+@@ -681,6 +681,18 @@ mt76_txq_schedule_pending_wcid(struct mt76_phy *phy, struct mt76_wcid *wcid,
+ 		     head == &wcid->tx_offchannel))
+ 			qid = MT_TXQ_PSD;
+ 
++		/* NAN unicast mgmt (NAFs) must stay on its AC queue: the
++		 * PSD path maps to the ALTX (force-TX) hardware queue,
++		 * which escapes the per-peer STA_PAUSE availability gating
++		 * and transmits regardless of the peer's committed bitmap.
++		 */
++		if (qid == MT_TXQ_PSD && wcid->sta &&
++		    info->control.vif &&
++		    (info->control.vif->type == NL80211_IFTYPE_NAN ||
++		     info->control.vif->type == NL80211_IFTYPE_NAN_DATA) &&
++		    head != &wcid->tx_offchannel)
++			qid = skb_get_queue_mapping(skb);
++
+ 		q = phy->q_tx[qid];
+ 		if (mt76_txq_stopped(q) || test_bit(MT76_RESET, &phy->state)) {
+ 			ret = -1;
+-- 
+2.43.0
+
+
+

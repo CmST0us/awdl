@@ -1,0 +1,41 @@
+Subject: wifi: mt76: mt7925: make NMI address TLV tail padding explicit
+Link: https://lore.kernel.org/all/20260927210306.737669-2-sean.wang@kernel.org/
+
+From: Chengwei Yu <chengwei.yu at mediatek.com>
+
+struct mt7925_nan_nmi_addr_tlv is __packed __aligned(4). tag+len+
+nmi_addr is 10 bytes, so the aligned attribute already inserts 2
+bytes of implicit tail padding to round the struct up to 12 bytes;
+sizeof() is unchanged by this patch.
+
+Every sibling NAN TLV struct in this file (cluster_id, sync_rssi,
+peer_rec, map_sta_rec, ...) declares its tail padding as an explicit
+reserved[] member instead of relying on implicit compiler padding.
+Make mt7925_nan_nmi_addr_tlv consistent with that convention, and
+give the field a name so it shows up (zeroed) in TLV dumps instead
+of appearing as anonymous struct padding.
+
+Co-developed-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Chengwei Yu <chengwei.yu at mediatek.com>
+---
+ drivers/net/wireless/mediatek/mt76/mt7925/nan.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/net/wireless/mediatek/mt76/mt7925/nan.h b/drivers/net/wireless/mediatek/mt76/mt7925/nan.h
+index d81d84a222d9..297c2856578e 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/nan.h
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/nan.h
+@@ -346,6 +346,7 @@ struct mt7925_nan_nmi_addr_tlv {
+ 	__le16 tag;
+ 	__le16 len;
+ 	u8 nmi_addr[ETH_ALEN];
++	u8 reserved[2];
+ } __packed __aligned(4);
+ 
+ struct mt7925_nan_avail_ctrl_tlv {
+-- 
+2.43.0
+
+
+

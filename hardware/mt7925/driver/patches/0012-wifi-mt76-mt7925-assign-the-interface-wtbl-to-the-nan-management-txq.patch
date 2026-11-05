@@ -1,0 +1,59 @@
+Subject: wifi: mt76: mt7925: assign the interface WTBL to the NAN management TXQ
+Link: https://lore.kernel.org/all/20260927210306.737669-13-sean.wang@kernel.org/
+
+From: Jacobs Wu <jacobs.wu at mediatek.com>
+
+mac80211 does not allocate vif->txq for a NAN device, so every SDF the
+host sends - multicast discovery and unicast follow-up alike - is queued
+on the dedicated management TXQ (vif->txq_mgmt) with txq->sta == NULL.
+
+mt7925_mac_link_bss_add() only programs the wcid of vif->txq, so the
+management TXQ keeps its initial wcid of 0. The mt76 TXQ scheduler then
+resolves dev->wcid[0], i.e. the global WTBL, and every host-originated
+SDF is transmitted on it. That WTBL only carries the parameters used for
+beacons and has no usable unicast rate, so a unicast follow-up sent on it
+is frequently not heard by the peer and the send is reported as failed.
+Multicast SDFs are unaffected because they need no acknowledgment.
+
+Program the management TXQ with the same interface WTBL that the beacon
+and interface paths already use, which is fully initialised here.
+
+Instrumenting the TX descriptor write shows every follow-up leaving on
+WTBL 0 before the fix and on the interface WTBL after it; a 100-frame
+unicast follow-up burst goes from 92-96 frames received to 100.
+
+Fixes: 0f3605e4f8de ("wifi: mt76: mt7925: wire up NAN operations")
+Co-developed-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Jacobs Wu <jacobs.wu at mediatek.com>
+---
+ drivers/net/wireless/mediatek/mt76/mt7925/main.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/drivers/net/wireless/mediatek/mt76/mt7925/main.c b/drivers/net/wireless/mediatek/mt76/mt7925/main.c
+index 6c603d57e89f..64853fc7f60e 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/main.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/main.c
+@@ -447,6 +447,17 @@ static int mt7925_mac_link_bss_add(struct mt792x_dev *dev,
+ 		mtxq->wcid = idx;
+ 	}
+ 
++	/* A NAN vif has no vif->txq; its SDFs are queued on vif->txq_mgmt,
++	 * whose wcid was never set and defaults to 0 (WTBL 0 has no unicast
++	 * rate), so unicast follow-ups go unacknowledged. Point txq_mgmt at
++	 * the same interface WTBL as the beacon path so SDFs continue to use
++	 * txq_mgmt but with a properly initialised wcid.
++	 */
++	if (vif->txq_mgmt) {
++		mtxq = (struct mt76_txq *)vif->txq_mgmt->drv_priv;
++		mtxq->wcid = idx;
++	}
++
+ out:
+ 	return ret;
+ }
+-- 
+2.43.0
+
+
+

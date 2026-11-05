@@ -1,0 +1,53 @@
+Subject: wifi: mt76: mt7925: do not disable RX NAPI twice on unload
+Link: https://lore.kernel.org/all/20260927210306.737669-12-sean.wang@kernel.org/
+
+From: Jacobs Wu <jacobs.wu at mediatek.com>
+
+mt7925e_unregister_device() disables every RX NAPI and then calls
+mt792x_dma_cleanup(), whose mt76_dma_cleanup() disables them again.
+The second napi_disable() spins waiting for NAPI_STATE_SCHED, which the
+first one already set and nobody will clear, so module unload hangs in
+D state and the module refcount underflows to -1; only a reboot recovers.
+
+Drop the redundant loop and leave the RX NAPI teardown to
+mt76_dma_cleanup(), making driver hot-reload work again.
+
+Co-developed-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Jacobs Wu <jacobs.wu at mediatek.com>
+---
+ drivers/net/wireless/mediatek/mt76/mt7925/pci.c | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/wireless/mediatek/mt76/mt7925/pci.c b/drivers/net/wireless/mediatek/mt76/mt7925/pci.c
+index 24585c992ff5..09153d624fd5 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/pci.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/pci.c
+@@ -40,7 +40,6 @@ static int mt7925e_init_reset(struct mt792x_dev *dev)
+ 
+ static void mt7925e_unregister_device(struct mt792x_dev *dev)
+ {
+-	int i;
+ 	struct mt76_connac_pm *pm = &dev->pm;
+ 	struct ieee80211_hw *hw = mt76_hw(dev);
+ 
+@@ -50,8 +49,12 @@ static void mt7925e_unregister_device(struct mt792x_dev *dev)
+ 	cancel_work_sync(&dev->reset_work);
+ 	cancel_work_sync(&dev->init_work);
+ 	mt76_unregister_device(&dev->mt76);
+-	mt76_for_each_q_rx(&dev->mt76, i)
+-		napi_disable(&dev->mt76.napi[i]);
++	/* Do not disable the RX NAPIs here: mt76_dma_cleanup(), reached below
++	 * via mt792x_dma_cleanup(), disables them as part of the generic
++	 * teardown. Disabling twice makes the second napi_disable() wait
++	 * forever for NAPI_STATE_SCHED to clear, hanging module unload in D
++	 * state with the module refcount left at -1.
++	 */
+ 	cancel_delayed_work_sync(&pm->ps_work);
+ 	cancel_delayed_work_sync(&dev->mlo_pm_work);
+ 	cancel_work_sync(&pm->wake_work);
+-- 
+2.43.0
+
+
+

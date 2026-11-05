@@ -1,0 +1,74 @@
+Subject: wifi: mt76: mt7925: bound the lifetime of NAN unicast management frames
+Link: https://lore.kernel.org/all/20260927210306.737669-23-sean.wang@kernel.org/
+
+From: Jacobs Wu <jacobs.wu at mediatek.com>
+
+A NAN unicast management frame sent to a peer that has disappeared never
+comes back to the host. The frame sits on the gated DW-WTBL queue, the
+gate opens at every discovery window and the hardware retransmits, but
+the retry budget is re-armed each time the queue is released, so it
+never runs out and no TX status is ever generated. The host keeps the
+skb in its status table indefinitely, the supplicant waits for a TX
+status that does not arrive, and every later management frame on that
+queue lines up behind the dead one. In practice a single lost peer stalls
+all further NAN handshakes on the interface.
+
+Set MAX_TX_TIME in the TXD for these frames so the hardware bounds them
+in time rather than in attempts. When the limit expires the frame is
+dropped with the lifetime-expired bit set, the host sees a no-ACK
+status, and the queue drains. Forty-six units of 64 TU is about 3 s, six
+discovery windows, which is beyond the 2 s NDP handshake deadline so a
+frame that still has a chance to be delivered is never cut short.
+
+Fixes: 0f3605e4f8de ("wifi: mt76: mt7925: wire up NAN operations")
+Co-developed-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Jacobs Wu <jacobs.wu at mediatek.com>
+---
+ drivers/net/wireless/mediatek/mt76/mt7925/mac.c    | 12 +++++++++++-
+ drivers/net/wireless/mediatek/mt76/mt7925/mt7925.h |  3 +++
+ 2 files changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/wireless/mediatek/mt76/mt7925/mac.c b/drivers/net/wireless/mediatek/mt76/mt7925/mac.c
+index f19d0451f373..75d2081b0920 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/mac.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/mac.c
+@@ -815,8 +815,18 @@ mt7925_mac_write_txwi(struct mt76_dev *dev, __le32 *txwi,
+ 		struct ieee80211_hdr *nan_hdr = (struct ieee80211_hdr *)skb->data;
+ 
+ 		if (ieee80211_is_mgmt(nan_hdr->frame_control) &&
+-		    !is_multicast_ether_addr(nan_hdr->addr1))
++		    !is_multicast_ether_addr(nan_hdr->addr1)) {
+ 			val = FIELD_PREP(MT_TXD3_REM_TX_COUNT, 31);
++
++			/* The retry budget alone never finalises a frame whose
++			 * peer has gone: the DW-WTBL gate re-arms it every DW,
++			 * so firmware holds the frame indefinitely and the host
++			 * never gets a TX status. Bound it in time instead -
++			 * about six DWs, beyond the 2 s handshake deadline.
++			 */
++			txwi[2] |= cpu_to_le32(FIELD_PREP(MT_TXD2_MAX_TX_TIME,
++							  NAN_MGMT_MAX_TX_TIME));
++		}
+ 	}
+ 
+ 	if (key)
+diff --git a/drivers/net/wireless/mediatek/mt76/mt7925/mt7925.h b/drivers/net/wireless/mediatek/mt76/mt7925/mt7925.h
+index 33782d9ba9ed..bc335740638b 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/mt7925.h
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/mt7925.h
+@@ -26,6 +26,9 @@
+ #define MT7925_SKU_MAX_DELTA_IDX	MT7925_SKU_RATE_NUM
+ #define MT7925_SKU_TABLE_SIZE		(MT7925_SKU_RATE_NUM + 1)
+ 
++/* NAN unicast mgmt TXD MAX_TX_TIME, units of 64 TU: 46 is about 3 s */
++#define NAN_MGMT_MAX_TX_TIME		46
++
+ #define MCU_UNI_EVENT_ROC  0x27
+ 
+ #define HIF_TRAFFIC_IDLE 0x2
+-- 
+2.43.0
+
+
+

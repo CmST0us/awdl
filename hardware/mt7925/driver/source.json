@@ -1,0 +1,11 @@
+{
+  "repository": "https://git.kernel.org/pub/scm/linux/kernel/git/wireless/wireless-next.git",
+  "commit": "8db0381351fe6af82f81693d5085790e291b2f17",
+  "file": "wireless-next-8db0381351fe6af82f81693d5085790e291b2f17.tar.gz",
+  "url": "https://git.kernel.org/pub/scm/linux/kernel/git/wireless/wireless-next.git/snapshot/wireless-next-8db0381351fe6af82f81693d5085790e291b2f17.tar.gz",
+  "sha256": "814f2480a832e01eb3bf63c58f710da35350659d84c28608e977448e99dd44bd",
+  "directory": "wireless-next-8db0381351fe6af82f81693d5085790e291b2f17",
+  "version": "7.3.0",
+  "license": "GPL-2.0-only; per-file SPDX licenses retained",
+  "patch_series": "patches/series"
+}

@@ -1,0 +1,67 @@
+Subject: wifi: mt76: mt7925: stop queueing resets once the device is being removed
+Link: https://lore.kernel.org/all/20260927210306.737669-22-sean.wang@kernel.org/
+
+From: Jacobs Wu <jacobs.wu at mediatek.com>
+
+mt7925e_unregister_device() cancels reset_work before it tears the device
+down, but every source that can raise a reset stays live past that point:
+the MCU command path, the system error recovery and interrupt handlers,
+and the MAC watchdog all
+call mt792x_reset(), and the interrupt tasklet is only disabled at the very
+end of the function. A reset raised in that window is queued behind the
+cancel and then runs while the device is being dismantled -
+mt7925_mac_reset_work() sets hw_full_reset, stops the queues and
+cancels the PM works before it can notice that the device is gone.
+
+mt792x_reset() already bails out on !hw_init_done, and that flag has no
+other consumer: it is set once during hardware init and read only there.
+Clear it at the top of the teardown so no reset can be queued for its whole
+duration.
+
+Measured on rauru with kprobes on mt792x_reset() (queue), on
+mt7925_mac_reset_work() (execution) and on mt76_unregister_device(), which
+runs immediately after the cancel and so serves as the anchor, while
+chip_reset was written in a loop across the module unload:
+
+  before: 205 resets queued and 415 mt7925_mac_reset_work() runs after the
+          anchor, that is after cancel_work_sync() had already returned
+  after:  no run after the anchor; mt792x_reset() is still entered but
+          returns early
+
+A chip_reset on a running device still triggers a reset as before, and
+unload/reload cycles stay clean.
+
+Fixes: c948b5da6bbe ("wifi: mt76: mt7925: add Mediatek Wi-Fi7 driver for mt7925 chips")
+Co-developed-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Jacobs Wu <jacobs.wu at mediatek.com>
+---
+ drivers/net/wireless/mediatek/mt76/mt7925/pci.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/drivers/net/wireless/mediatek/mt76/mt7925/pci.c b/drivers/net/wireless/mediatek/mt76/mt7925/pci.c
+index 09153d624fd5..f7b57a82f2d4 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/pci.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/pci.c
+@@ -46,6 +46,16 @@ static void mt7925e_unregister_device(struct mt792x_dev *dev)
+ 	if (dev->phy.chip_cap & MT792x_CHIP_CAP_WF_RF_PIN_CTRL_EVT_EN)
+ 		wiphy_rfkill_stop_polling(hw->wiphy);
+ 
++	/* Stop new resets from being queued for the rest of the teardown.
++	 * mt792x_reset() bails out on !hw_init_done, which is otherwise only
++	 * set once at init, so clearing it here closes the window in which an
++	 * MCU timeout, a system error recovery interrupt or the watchdog
++	 * could still schedule
++	 * reset_work behind the cancel below and run it against a device that
++	 * is already being dismantled.
++	 */
++	dev->hw_init_done = false;
++
+ 	cancel_work_sync(&dev->reset_work);
+ 	cancel_work_sync(&dev->init_work);
+ 	mt76_unregister_device(&dev->mt76);
+-- 
+2.43.0
+
+
+

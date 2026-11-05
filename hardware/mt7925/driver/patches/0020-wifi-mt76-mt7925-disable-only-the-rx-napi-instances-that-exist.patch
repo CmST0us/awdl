@@ -1,0 +1,66 @@
+Subject: wifi: mt76: mt7925: disable only the RX NAPI instances that exist
+Link: https://lore.kernel.org/all/20260927210306.737669-21-sean.wang@kernel.org/
+
+From: Jacobs Wu <jacobs.wu at mediatek.com>
+
+mt7925e_mac_reset() picks the RX NAPI instances to disable from the
+interrupt masks, but the instances themselves are created per allocated
+RX queue by mt76_dma_init(). On mt7925 the two do not agree: the tx-done
+ring is only described by the mt7928 DMA layout, so q_rx[MT_RXQ_MCU_WA]
+is never allocated and never gets a NAPI, while mt7925_irq_map still
+carries rx.wm2_complete_mask.
+
+A MAC reset therefore calls napi_disable() on an instance whose
+net_device pointer is NULL. The fault happens inside napi_disable()
+while the reset work holds the RTNL, so networking goes down with it and
+the machine is left answering ping with no usable userspace; only a
+power cycle recovers it. Repeated NAN data path setup and teardown hits
+this reliably on a busy channel, where MAC resets are frequent.
+
+Iterate the RX queues instead, the same way the restore path further
+down re-enables them, so only instances that were actually added are
+touched.
+
+Fixes: c948b5da6bbe ("wifi: mt76: mt7925: add Mediatek Wi-Fi7 driver for mt7925 chips")
+Co-developed-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Jacobs Wu <jacobs.wu at mediatek.com>
+---
+ .../wireless/mediatek/mt76/mt7925/pci_mac.c   | 19 +++++++++++++------
+ 1 file changed, 13 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/net/wireless/mediatek/mt76/mt7925/pci_mac.c b/drivers/net/wireless/mediatek/mt76/mt7925/pci_mac.c
+index 6e9daf96da88..32463ef30ebb 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/pci_mac.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/pci_mac.c
+@@ -127,12 +127,19 @@ int mt7925e_mac_reset(struct mt792x_dev *dev)
+ 	mt76_txq_schedule_all(&dev->mphy);
+ 
+ 	mt76_worker_disable(&dev->mt76.tx_worker);
+-	if (irq_map->rx.data_complete_mask)
+-		napi_disable(&dev->mt76.napi[MT_RXQ_MAIN]);
+-	if (irq_map->rx.wm_complete_mask)
+-		napi_disable(&dev->mt76.napi[MT_RXQ_MCU]);
+-	if (irq_map->rx.wm2_complete_mask)
+-		napi_disable(&dev->mt76.napi[MT_RXQ_MCU_WA]);
++
++	/*
++	 * Disable the RX NAPI instances that were actually created. They are
++	 * added per allocated RX queue by mt76_dma_init(), while the interrupt
++	 * masks describe what the hardware is able to raise - on mt7925 the
++	 * tx-done queue is never allocated (only mt7928 defines that ring), so
++	 * its NAPI has no net_device and napi_disable() faults on it while
++	 * holding the RTNL, wedging the whole machine. Iterate the queues, the
++	 * same way the restore path below re-enables them.
++	 */
++	mt76_for_each_q_rx(&dev->mt76, i)
++		napi_disable(&dev->mt76.napi[i]);
++
+ 	if (irq_map->tx.all_complete_mask)
+ 		napi_disable(&dev->mt76.tx_napi);
+ 
+-- 
+2.43.0
+
+
+

@@ -1,0 +1,55 @@
+Subject: wifi: mt76: mt7925: do not deactivate shared NAN BSS on peer STA removal
+Link: https://lore.kernel.org/all/20260927210306.737669-14-sean.wang@kernel.org/
+
+From: Jacobs Wu <jacobs.wu at mediatek.com>
+
+mt7925_mac_sta_remove_links() sent BSS_INFO(active=0) for every vif type
+except AP when a peer STA was removed. NAN (nan0) and NAN_DATA (ndi0)
+BSSes host multiple peer STAs like an AP does: removing the NMI peer on
+NDP teardown deactivated the shared NAN sync BSS in FW, after which FW
+dropped every host-initiated NAN mgmt frame (TXM: An MMPDU for an
+inactive BSS_INFO) until the next NAN_START. With partial availability
+bitmaps this made every NDP re-establishment after a teardown fail
+(unicast NAF TXCNT 15/15 no-ack); full bitmaps masked the bug. It also
+tears down the shared data BSS while other NDPs on the same NDI live.
+
+Exclude NAN and NAN_DATA vifs like AP.
+
+Verified on 187/235: teardown no longer emits the BSS disable cmd, the
+FW drop flood is gone, and half-bitmap re-establishment after
+nan_ndp_terminate succeeds repeatedly (was 100% fail).
+
+Co-developed-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Sean Wang <sean.wang at mediatek.com>
+Signed-off-by: Jacobs Wu <jacobs.wu at mediatek.com>
+---
+ drivers/net/wireless/mediatek/mt76/mt7925/main.c | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/wireless/mediatek/mt76/mt7925/main.c b/drivers/net/wireless/mediatek/mt76/mt7925/main.c
+index 64853fc7f60e..08a5bdcf1094 100644
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/main.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/main.c
+@@ -1489,7 +1489,16 @@ mt7925_mac_sta_remove_links(struct mt792x_dev *dev, struct ieee80211_vif *vif,
+ 		struct mt792x_bss_conf *mconf;
+ 		struct mt792x_link_sta *mlink;
+ 
+-		if (vif->type == NL80211_IFTYPE_AP)
++		/* AP, NAN, and NAN_DATA BSSes host multiple peer STAs; removing
++		 * one peer must not deactivate the shared BSS. For NAN, doing
++		 * so would kill the sync BSS and the firmware would drop all
++		 * subsequent host-originated NAN management frames. For
++		 * NAN_DATA, it would tear down all other NDPs sharing the same
++		 * NDI.
++		 */
++		if (vif->type == NL80211_IFTYPE_AP ||
++		    vif->type == NL80211_IFTYPE_NAN ||
++		    vif->type == NL80211_IFTYPE_NAN_DATA)
+ 			break;
+ 
+ 		if (vif->type == NL80211_IFTYPE_STATION && sta->tdls)
+-- 
+2.43.0
+
+
+
