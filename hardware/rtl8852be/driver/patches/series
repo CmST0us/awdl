@@ -28,3 +28,6 @@
 0028-awdl-rx-blockack.patch
 0029-awdl-retune-guard.patch
 0030-native-rx-bottom-halves.patch
+0031-awdl-rx-accounting.patch
+0032-awdl-short-frame-rates.patch
+0033-awdl-rx-gro.patch

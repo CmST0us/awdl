@@ -1,0 +1,91 @@
+--- a/phl/wa_awdl_netdev.h
++++ b/phl/wa_awdl_netdev.h
+@@ -21,6 +21,7 @@
+ #define WA_AWDL_QUEUE_BYTES (2U*512*1024)
+ #define WA_AWDL_MSDUS 8
+ #include "wa_awdl_rate.h"
++#include <net/gro_cells.h>
+ #include "wa_awdl_pack.h"
+ struct wa_awdl_ready;
+ struct wa_awdl_net {
+@@ -49,6 +50,7 @@
+  u32 pool_count, pool_free, pool_reuses, ba_credit_returns, dma_recycles;
+  u32 phy_updates, ccx_he, ccx_vht, agg_hist[8];
+  struct wa_awdl_rate_control rate_control;
++ struct gro_cells gro_cells;
+  u32 pack_moved, pack_released, tx_fill[8];
+  u64 tx_mpdu_bytes;
+  u64 ba_airtime_returned, unposted_airtime;
+@@ -667,6 +669,13 @@
+  }
+  queue_work(n->prepare_wq,&n->prepare_work);return NETDEV_TX_OK;
+ }
++/* unregister_netdevice waits for RX-held device references before this
++ * destructor disables NAPI and releases the per-CPU GRO queues. */
++static void wa_awdl_net_destruct(struct net_device *dev)
++{
++ struct wa_awdl_net *n=netdev_priv(dev);
++ gro_cells_destroy(&n->gro_cells);
++}
+ static int wa_awdl_net_open(struct net_device *dev){netif_start_queue(dev);return 0;}
+ static int wa_awdl_net_close(struct net_device *dev){netif_stop_queue(dev);return 0;}
+ static const struct net_device_ops wa_awdl_net_ops={.ndo_open=wa_awdl_net_open,.ndo_stop=wa_awdl_net_close,
+@@ -682,6 +691,7 @@
+  if(!try_module_get(THIS_MODULE))return -ENODEV;
+  dev=alloc_etherdev(sizeof(*n));if(!dev){module_put(THIS_MODULE);return -ENOMEM;}
+  strcpy(dev->name,"awdl0");eth_hw_addr_set(dev,local);dev->netdev_ops=&wa_awdl_net_ops;
++ dev->features|=NETIF_F_GRO;dev->hw_features|=NETIF_F_GRO;
+  dev->mtu=1280;dev->min_mtu=1280;dev->max_mtu=1500;dev->tx_queue_len=WA_AWDL_QUEUE_MAX;
+  n=netdev_priv(dev);n->dev=dev;n->phl=phl;n->sta=wa_nan_stageb.peer;
+  n->adapter=dvobj_get_primary_adapter((struct dvobj_priv *)n->phl->phl_com->drv_priv);
+@@ -693,6 +703,8 @@
+  n->prepare_wq=alloc_workqueue("awdl-prepare",WQ_UNBOUND|WQ_HIGHPRI|WQ_MEM_RECLAIM,1);
+  if(!n->prepare_wq){ret=-ENOMEM;goto fail;}
+  ret=wa_awdl_pool_init(n);if(ret)goto fail;
++ ret=gro_cells_init(&n->gro_cells,dev);if(ret)goto fail;
++ dev->priv_destructor=wa_awdl_net_destruct;
+  hrtimer_init(&n->timer,CLOCK_MONOTONIC,HRTIMER_MODE_ABS);n->timer.function=wa_awdl_net_timer;
+  ret=rtw_hal_wa_nan_command_begin(n->phl->hal);if(ret)goto fail;
+  ret=rtw_hal_wa_nan_rate(n->phl->hal,n->sta,&n->config,true);
+@@ -718,7 +730,7 @@
+  rtw_hal_awdl_reports(n->phl->hal,n->sta->rlink->hw_band,false,n->report_saved);
+  rtw_hal_write32(n->phl->hal,0xce24,n->ba_filter_before);
+  rtw_hal_wa_nan_rate(n->phl->hal,n->sta,NULL,false);
+-fail:wa_awdl_pool_destroy(n);if(n->prepare_wq)destroy_workqueue(n->prepare_wq);free_netdev(dev);module_put(THIS_MODULE);return ret;
++fail:gro_cells_destroy(&n->gro_cells);wa_awdl_pool_destroy(n);if(n->prepare_wq)destroy_workqueue(n->prepare_wq);free_netdev(dev);module_put(THIS_MODULE);return ret;
+ }
+ static int wa_awdl_net_delete(void)
+ {
+@@ -837,7 +849,7 @@
+- /* netif_rx may run softirqs and reenter TX/timers; retain only the device. */
++ /* Network delivery may reenter TX/timers; retain only the device. */
+  if(!skb_queue_empty(&received)){dev=n->dev;dev_hold(dev);}
+  spin_unlock_irqrestore(&wa_awdl_net_lock,irq);
+- while((skb=__skb_dequeue(&received)))netif_rx(skb);
++ while((skb=__skb_dequeue(&received)))gro_cells_receive(&n->gro_cells,skb);
+  if(dev)dev_put(dev);
+  return handled;
+ }
+--- a/phl/hci/phl_trx_pcie.c
++++ b/phl/hci/phl_trx_pcie.c
+@@ -4485,6 +4485,11 @@
+ 			rxcnt = idle_rxbuf_cnt;
+ 		}
+ 
++  {
++   bool awdl_batch=rtw_phl_awdl_probe_active(phl_info);
++   /* RXBD processing supports interrupt context. Keep this bounded DMA
++    * batch together so GRO sees adjacent MPDUs before its NAPI poll. */
++   if(awdl_batch)local_bh_disable();
+ 		for (i = 0; i < rxcnt; i++) {
+ 			pstatus = phl_get_single_rx(phl_info, &rx_buf_ring[ch],
+ 							ch, &phl_rx);
+@@ -4499,6 +4504,8 @@
+ 			phl_rx->r.mdata.dma_ch = ch;
+ 			phl_rx_process_pcie(phl_info, phl_rx);
+ 		}
++   if(awdl_batch)local_bh_enable();
++  }
+ 
+ #ifdef PHL_RX_BATCH_IND
+ 		if (ch == 0 && phl_info->rx_new_pending)

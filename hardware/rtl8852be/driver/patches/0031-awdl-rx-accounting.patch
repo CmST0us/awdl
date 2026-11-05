@@ -1,0 +1,173 @@
+--- a/phl/phl_rx.c
++++ b/phl/phl_rx.c
+@@ -574,6 +574,82 @@
+ 	return used ? (int)used : -ENODATA;
+ }
+ 
++
++/* Counters at DMA, reorder entry and stack delivery separate PHY-status
++ * waiting from missing-MPDU waiting. Only unicast AWDL data is counted. */
++struct wa_awdl_rx_accounting {
++ u64 packets[3], bytes[3], wait_us[2][8], max_us[2];
++ u64 retry, crc, no_cam, ampdu, old, duplicate, buffered, timed_out;
++ u64 by_channel[2], channel_bytes[2];
++ u64 seq_gap, seq_late, seq_repeat;
++ u16 last_seq[16], seen;
++ u8 peer[6];
++};
++static struct wa_awdl_rx_accounting wa_awdl_rx_stats;
++static DEFINE_SPINLOCK(wa_awdl_rx_stats_lock);
++
++static bool wa_awdl_rx_countable(struct phl_info_t *phl, struct rtw_phl_rx_pkt *pkt)
++{
++ const u8 *f = pkt->r.pkt_list[0].vir_addr;
++ return rtw_phl_awdl_probe_active(phl) && pkt->r.pkt_cnt && f &&
++        pkt->r.pkt_list[0].length >= 26 && f[0] == 0x88 &&
++        !(f[4] & 1) && pkt->r.mdata.a1_match &&
++        !memcmp(f + 16, "\x00\x25\x00\xff\x94\x73", 6);
++}
++
++void rtw_phl_awdl_rx_account(void *context, struct rtw_phl_rx_pkt *pkt, u8 stage)
++{
++ struct phl_info_t *phl = context;
++ struct wa_awdl_rx_accounting *s = &wa_awdl_rx_stats;
++ const u8 *f = pkt->r.pkt_list[0].vir_addr;
++ unsigned long flags;
++ u64 us;
++ u16 seq, delta;
++ u8 bucket, tid, channel;
++ if (!wa_awdl_rx_countable(phl, pkt)) return;
++ spin_lock_irqsave(&wa_awdl_rx_stats_lock, flags);
++ if (stage < 3) {
++  s->packets[stage]++;s->bytes[stage] += pkt->r.pkt_list[0].length;
++  if (stage) {
++   us = (ktime_get_ns() - pkt->r.wa_rx_monotonic_ns) / 1000;
++   bucket = us < 100 ? 0 : us < 1000 ? 1 : us < 4000 ? 2 :
++            us < 16000 ? 3 : us < 64000 ? 4 : us < 128000 ? 5 :
++            us < 512000 ? 6 : 7;
++   s->wait_us[stage-1][bucket]++;
++   s->max_us[stage-1] = max(s->max_us[stage-1], us);
++  } else {
++   s->retry += !!(f[1]&8);s->crc += !!pkt->r.mdata.crc32;
++   s->no_cam += !pkt->r.mdata.addr_cam_vld;s->ampdu += !!pkt->r.mdata.ampdu;
++   channel = rtw_hal_get_cur_ch(phl->hal,pkt->r.mdata.bb_sel) == 161;
++   s->by_channel[channel]++;s->channel_bytes[channel] += pkt->r.pkt_list[0].length;
++   if (memcmp(s->peer,f+10,6)) {memcpy(s->peer,f+10,6);s->seen=0;}
++   tid=f[24]&15;seq=get_unaligned_le16(f+22)>>4;
++   if (s->seen&BIT(tid)) {
++    delta=(seq-s->last_seq[tid])&4095;
++    if (!delta)s->seq_repeat++;
++    else if (delta<2048) {s->seq_gap+=delta-1;s->last_seq[tid]=seq;}
++    else s->seq_late++;
++   } else {s->seen|=BIT(tid);s->last_seq[tid]=seq;}
++  }
++ } else if(stage==3)s->old++;
++ else if(stage==4)s->duplicate++;
++ else if(stage==5)s->buffered++;
++ else if(stage==6)s->timed_out++;
++ spin_unlock_irqrestore(&wa_awdl_rx_stats_lock, flags);
++}
++
++void rtw_phl_awdl_rx_snapshot(void)
++{
++ struct wa_awdl_rx_accounting s;
++ unsigned long flags;
++ spin_lock_irqsave(&wa_awdl_rx_stats_lock,flags);s=wa_awdl_rx_stats;spin_unlock_irqrestore(&wa_awdl_rx_stats_lock,flags);
++ pr_info("AWDL_RX_TOTAL dma=%llu reorder=%llu delivered=%llu dma_bytes=%llu delivered_bytes=%llu retry=%llu crc=%llu no_cam=%llu ampdu=%llu old=%llu duplicate=%llu buffered=%llu timed_out=%llu gap=%llu late=%llu repeat=%llu rx149=%llu rx161=%llu bytes149=%llu bytes161=%llu\n",
++  s.packets[0],s.packets[1],s.packets[2],s.bytes[0],s.bytes[2],s.retry,s.crc,s.no_cam,s.ampdu,s.old,s.duplicate,s.buffered,s.timed_out,s.seq_gap,s.seq_late,s.seq_repeat,s.by_channel[0],s.by_channel[1],s.channel_bytes[0],s.channel_bytes[1]);
++ for(u8 i=0;i<2;i++)
++  pr_info("AWDL_RX_WAIT stage=%s max_us=%llu us_100_1000_4000_16000_64000_128000_512000_over=%llu/%llu/%llu/%llu/%llu/%llu/%llu/%llu\n",
++   i ? "delivery":"reorder",s.max_us[i],s.wait_us[i][0],s.wait_us[i][1],s.wait_us[i][2],s.wait_us[i][3],s.wait_us[i][4],s.wait_us[i][5],s.wait_us[i][6],s.wait_us[i][7]);
++}
++
+ void
+ phl_handle_rx_frame_list(struct phl_info_t *phl_info,
+                          _os_list *frames)
+@@ -583,6 +659,7 @@
+ 	struct phl_hci_trx_ops *hci_trx_ops = phl_info->hci_trx_ops;
+ 
+ phl_list_for_loop_safe(pos, n, struct rtw_phl_rx_pkt, frames, list) {
++  rtw_phl_awdl_rx_account(phl_info,pos,2);
+ 		if (pos->r.pkt_cnt && pos->r.pkt_list[0].vir_addr &&
+ 		    pos->r.pkt_list[0].length >= WA_NAN_MGMT_RX_FRAME_MIN) {
+ 			unsigned long flags;
+@@ -826,6 +903,7 @@
+ 
+ 			PHL_TRACE(COMP_PHL_RECV, _PHL_INFO_, "release an RX reorder frame due to timeout on earlier frames\n");
+ 
++			if (skipped)rtw_phl_awdl_rx_account(phl_info,r->reorder_buf[j],6);
+ 			phl_release_reorder_frame(phl_info, r, j, frames);
+ 
+ 			/*
+@@ -1077,6 +1155,7 @@
+ 
+ 	/* frame with out of date sequence number */
+ 	if (seq_less(mpdu_seq_num, head_seq_num)) {
++		rtw_phl_awdl_rx_account(phl_info,pkt,3);
+ 		PHL_TRACE(COMP_PHL_RECV, _PHL_DEBUG_, "Rx drop (out of date): old seq 0x%03x, head 0x%03x (tid=%u)\n",
+ 				meta->seq, r->head_seq_num, r->tid);
+ 		hci_trx_ops->recycle_rx_pkt(phl_info, pkt);
+@@ -1103,6 +1182,7 @@
+ 
+ 	/* check if we already stored this frame */
+ 	if (r->reorder_buf[index]) {
++		rtw_phl_awdl_rx_account(phl_info,pkt,4);
+ 		PHL_TRACE(COMP_PHL_RECV, _PHL_DEBUG_, "Rx drop (already stored): old seq 0x%03x, head 0x%03x (tid %d)\n",
+ 				meta->seq, r->head_seq_num, r->tid);
+ 		hci_trx_ops->recycle_rx_pkt(phl_info, pkt);
+@@ -1135,6 +1215,7 @@
+ 		          mpdu_seq_num, r->tid);
+ 	}
+ 
++	rtw_phl_awdl_rx_account(phl_info,pkt,5);
+ 	/* put the frame in the reordering buffer */
+ 	r->reorder_buf[index] = pkt;
+ 	r->reorder_time[index] = _os_get_cur_time_ms();
+@@ -1293,6 +1374,7 @@
+ 	struct rtw_phl_tdls_ops *ops = &phl_info->tdls_info.ops;
+ #endif
+ 
++	rtw_phl_awdl_rx_account(phl_info,phl_rx,1);
+ 	if (phl_info->phl_com->drv_mode == RTW_DRV_MODE_SNIFFER) {
+ 		goto dont_reorder;
+ 	}
+--- a/phl/hci/phl_trx_pcie.c
++++ b/phl/hci/phl_trx_pcie.c
+@@ -4324,6 +4324,8 @@
+ }
+ 
+ 
++void rtw_phl_awdl_rx_account(void *,struct rtw_phl_rx_pkt *,u8);
++
+ static void phl_rx_process_pcie(struct phl_info_t *phl_info,
+ 							struct rtw_phl_rx_pkt *phl_rx)
+ {
+@@ -4346,6 +4348,7 @@
+  }
+ 	switch (phl_rx->type) {
+ 	case RTW_RX_TYPE_WIFI:
++  rtw_phl_awdl_rx_account(phl_info,phl_rx,0);
+ #ifdef DEBUG_PHL_RX
+ 		phl_info->rx_stats.rx_type_wifi++;
+ 		if (phl_rx->r.pkt_list[0].length == phl_info->cnt_rx_pktsz)
+@@ -4691,6 +4694,7 @@
+ #include "../hal_g6/wa_nan_rf_snapshot.h"
+ 
+ void rtw_phl_wa_nan_ba_snapshot(void);
++void rtw_phl_awdl_rx_snapshot(void);
+ 
+ /* Native RMAC counters are selected by byte0; byte1 bit0 resets all counters. */
+ static void wa_nan_rx_mac_snapshot(void *hal)
+@@ -4707,6 +4711,12 @@
+   values[i] = rtw_hal_read16(hal, R_AX_RX_DBG_CNT_SEL + 2);
+  }
+  rtw_hal_write8(hal, R_AX_RX_DBG_CNT_SEL, saved);
++ rtw_phl_awdl_rx_snapshot();
++ pr_info("AWDL_RESPONSE nav_abort=%08x cca_abort=%08x abort=%08x ba_cam=%08x\n",
++  rtw_hal_read32(hal,R_AX_RESP_TX_NAV_ABORT_COUNTER),
++  rtw_hal_read32(hal,R_AX_RESP_TX_CCA_ABORT_COUNTER),
++  rtw_hal_read32(hal,R_AX_TRXPTCL_RESP_TX_ABORT_COUNTER),
++  rtw_hal_read32(hal,R_AX_RESPBA_CAM_CTRL));
+  pr_info("WA_NAN_RX_MAC he_ok=%u he_fail=%u he_ppdu=%u full=%u full_pkt=%u dma=%u filter=%u ofdm_ok=%u ofdm_fail=%u control_filter=%08x error=%08x sec_packets=%08x read_us=%llu\n",
+          values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7], values[8],
+          rtw_hal_read32(hal, R_AX_CTRL_FLTR),
