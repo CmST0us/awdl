@@ -3,11 +3,13 @@ mod catalog;
 pub use catalog::Hardware;
 #[path = "be200/build.rs"]
 mod be200;
+#[path = "mt7925/build.rs"]
+mod mt7925;
 #[path = "rtl8852be/build.rs"]
 mod rtl8852be;
 
 use crate::{settings::Settings, source};
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 use serde::Deserialize;
 use std::{
     path::{Path, PathBuf},
@@ -83,6 +85,7 @@ impl Hardware {
                 &[],
             ),
             Self::Rtl8852be => rtl8852be::prepare(root, output, archive),
+            Self::Mt7925 => mt7925::prepare(root, output, archive),
         }
     }
 
@@ -98,6 +101,7 @@ impl Hardware {
         match self {
             Self::Be200 => be200::build(root, source, headers, kernel, command),
             Self::Rtl8852be => rtl8852be::build(root, cfg, source, headers, command),
+            Self::Mt7925 => mt7925::build(cfg, source, headers, kernel, command),
         }
     }
 
@@ -105,6 +109,7 @@ impl Hardware {
         match self {
             Self::Be200 => be200::MODULES,
             Self::Rtl8852be => rtl8852be::MODULES,
+            Self::Mt7925 => mt7925::MODULES,
         }
     }
 
@@ -117,13 +122,14 @@ impl Hardware {
         match self {
             Self::Be200 => be200::installation(root, cfg),
             Self::Rtl8852be => rtl8852be::installation(root, cfg, modules),
+            Self::Mt7925 => mt7925::installation(root, cfg),
         }
     }
 
     pub fn obsolete(self, cfg: &Settings, updates: &Path) -> Vec<PathBuf> {
         match self {
             Self::Be200 => be200::obsolete(cfg, updates),
-            Self::Rtl8852be => vec![],
+            Self::Rtl8852be | Self::Mt7925 => vec![],
         }
     }
 }
@@ -177,11 +183,13 @@ pub fn awdl_installation(root: &Path, cfg: &Settings) -> Result<Vec<(PathBuf, Pa
     Ok(match cfg.hardware()? {
         Hardware::Be200 => be200::awdl_installation(root, cfg),
         Hardware::Rtl8852be => rtl8852be::awdl_installation(root, cfg),
+        Hardware::Mt7925 => bail!("MT7925 当前仅接入 Wi-Fi Aware，不支持 AWDL"),
     })
 }
 pub fn awdl_service(cfg: &Settings) -> Result<&'static str> {
     Ok(match cfg.hardware()? {
         Hardware::Be200 => "wirelessd.service",
         Hardware::Rtl8852be => "wirelessd-awdl.service",
+        Hardware::Mt7925 => bail!("MT7925 当前仅接入 Wi-Fi Aware，不支持 AWDL"),
     })
 }

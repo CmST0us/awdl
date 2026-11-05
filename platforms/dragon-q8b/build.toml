@@ -1,4 +1,4 @@
-# Dragon Q8B 的目标架构；用于下一次构建，不表示已完成该平台的内核适配。
+# Dragon Q8B 的目标架构；用于下一次构建；无线栈以外部模块集适配运行内核。
 # Rust Linux 目标 triple；省略时使用公共构建选择，必须与目标 ABI 匹配。
 rust_target = "aarch64-unknown-linux-gnu"
 # Kbuild ARCH；无单位，固定为 arm64，省略时由公共构建入口选择。

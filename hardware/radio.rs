@@ -1,5 +1,5 @@
 use crate::configuration::Configuration;
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -8,6 +8,8 @@ mod catalog;
 pub use catalog::Hardware as Backend;
 #[path = "be200/radio.rs"]
 mod be200;
+#[path = "mt7925/radio.rs"]
+mod mt7925;
 #[path = "rtl8852be/radio.rs"]
 mod rtl8852be;
 
@@ -16,6 +18,7 @@ impl Backend {
         match self {
             Self::Rtl8852be => Ok("/usr/local/libexec/wirelessd/rtl-awdl"),
             Self::Be200 => Ok("/usr/local/libexec/wirelessd/be200-awdl"),
+            Self::Mt7925 => bail!("MT7925 当前仅接入 Wi-Fi Aware，不支持 AWDL"),
         }
     }
     pub fn shared_awdl(self) -> bool {
@@ -81,11 +84,12 @@ impl Backend {
                 Ok(((frequency - 5000) / 5) as u8)
             }
             Self::Rtl8852be => Ok(149),
+            Self::Mt7925 => bail!("MT7925 当前仅接入 Wi-Fi Aware，不支持 AWDL"),
         }
     }
     pub fn driver(self) -> &'static str {
         match self {
-            Self::Be200 => "nl80211",
+            Self::Be200 | Self::Mt7925 => "nl80211",
             Self::Rtl8852be => "rtl_nan",
         }
     }
@@ -94,12 +98,13 @@ impl Backend {
         matches!(self, Self::Rtl8852be)
     }
     pub fn removes_bootstrap(self) -> bool {
-        matches!(self, Self::Be200)
+        matches!(self, Self::Be200 | Self::Mt7925)
     }
     pub fn bootstrap(self, entries: &[(String, String)]) -> Result<Option<String>> {
         match self {
             Self::Be200 => be200::bootstrap(entries),
             Self::Rtl8852be => rtl8852be::bootstrap(entries),
+            Self::Mt7925 => mt7925::bootstrap(entries),
         }
     }
     pub fn check(
@@ -112,6 +117,7 @@ impl Backend {
         match self {
             Self::Be200 => be200::check(entries, require_data, owns_awdl),
             Self::Rtl8852be => rtl8852be::check(entries, bootstrap, require_data),
+            Self::Mt7925 => mt7925::check(entries, require_data),
         }
     }
     pub fn profile(self, cfg: &Configuration) -> Result<Profile> {
@@ -129,7 +135,7 @@ impl Backend {
             Self::from_name(&profile.hardware) == Some(self),
             "radio_profile 与实际硬件不匹配"
         );
-        // 当前两个后端使用 2.4 GHz 发现信道，数据频率单独协商。
+        // 当前后端使用 2.4 GHz 发现信道，数据频率单独协商。
         ensure!(
             profile.nan.discovery_frequency_mhz == 2437,
             "后端发现信道必须为 2437 MHz"

@@ -1,0 +1,17 @@
+Subject: wifi: mt76: pass the initial NAN management address to firmware
+
+Use the address field in the enable request. The separate NMI address setter
+is for an already running NAN instance and is rejected before enable.
+
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/nan.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/nan.c
+@@ -525,6 +525,9 @@
+ 	}
+ 
+ 	req->master_pref = conf->master_pref;
++	/* The initial NMI must match mac80211 before firmware sends beacons. */
++	req->config_intf_addr = 1;
++	ether_addr_copy(req->intf_addr_val, vif->addr);
+ 
+ 	mt7925_nan_set_5g_channel(dev, req, conf);
+ 	mt7925_nan_set_scan_params(req, conf);

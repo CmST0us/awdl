@@ -22,6 +22,18 @@ Wi-Fi Aware 基线为 BE200 `f0f35f48df6cf05ea3386efb765cb6260eb1b4fe` 与 RTL88
 
 服务就绪后立即重启的检查覆盖退出信号与内核接口释放。Wi-Fi Aware 合并验收时，无线服务与 fileserver 均 active/enabled；共享目录、已有配对和原 I/O 期限保留。新构建的内核模块完成暂存安装，实机验证使用各设备现有 main 驱动。
 
+## MT7925 / Dragon Q8B
+
+2026-11-06，MT7925（PCI `14c3:7925`）接入公共 `wirelessd`、hostap `nl80211` 与 fileserver。Q8B 保持 `7.0.11+` 板级内核，七个无线模块来自固定 Linux 7.3 无线源码及 Linux 7.0 适配补丁，已完成原生编译、modpost、链接、暂存安装和实机加载。固件及原始授权随硬件包交付。公共 Rust 服务 ARM64 Release、公共 hostap、已签名 AwareClient 和 AwareLab 均构建通过。
+
+固定公开 WM `20261016233029` 与 MCU patch `20261016232915a` 已替换早期无 DW 事件的 April 固件。原始能力为 `0x80`，驱动仅对已验证的固定镜像补全 NAN 位；准备和安装核对来源摘要，固件文件不修改。初始 NMI 通过 ENABLE 请求同步给固件。真实 DW_START / DW_END 推进 hostap 服务发现，完成合簇、日程、NDI / IPv6 及文件服务注册。
+
+iPad Pro 12.9 英寸第六代、iPadOS 27.0.1 的系统选择器发现 `MT7925 Q8B` 并显示“设置”，双端记录确认设备地址与服务名。点击后在进入 PIN 前失败：wifip2pd 错误 12，具体为 DCEA 未启用配对缓存。服务发现帧及 iPad 首次发现结果均含配对／缓存能力，固件信标与发现属性一致性的根因尚未确认；诊断属性命令未解决错误，没有纳入正式交付。新配对、缓存身份认证、安全 NDP 和 IPv6 文件传输均未通过。
+
+正式七模块的运行 build-id 与安装／暂存文件一致；正常停止释放 NAN、NDI、hostap 与运行目录，随后正常服务重启通过。调试覆盖已撤下，wirelessd / fileserver 为 active，配对窗口关闭，开机状态仍为 disabled；正式加载区间无新增内核警告、Oops 或固件异常。
+
+正式构建与实机运行证据、固定来源和限制见 [MT7925](../hardware/mt7925/README.md)。原始备份、身份状态、既有 iPad 配对与共享文件保留，以太网 SSH 可用。
+
 ## wirelessd 更名与部署接管
 
 2026-11-03，`wirelessd`、fileserver、AirDrop 与安装工具完成 ARM64 Linux 构建。新安装、旧默认目录升级、自定义目录保留均通过暂存安装；iOS 配置重新生成后的资源内容一致。

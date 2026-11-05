@@ -8,7 +8,7 @@
 0008-wifi-mt76-mt7925-add-ndc-aware-tx-gtk-table-for-nan-data.patch
 0009-wifi-mt76-mt7925-implement-mt7925-nan-set-key-for-nan-security.patch
 0010-wifi-mt76-mt7925-install-nan-bip-keys-standalone-in-sta-key-tlv.patch
-0011-wifi-mt76-mt7925-do-not-disable-rx-napi-twice-on-unload.patch
+# 0011 is excluded: this baseline still requires explicit RX napi_disable.
 0012-wifi-mt76-mt7925-assign-the-interface-wtbl-to-the-nan-management-txq.patch
 0013-wifi-mt76-mt7925-do-not-deactivate-shared-nan-bss-on-peer-sta-removal.patch
 0014-wifi-mt76-gate-nan-unicast-mgmt-by-peer-availability-via-sta-queues.patch
@@ -22,3 +22,5 @@
 0022-wifi-mt76-mt7925-bound-the-lifetime-of-nan-unicast-management-frames.patch
 0023-wifi-mt76-mt7925-always-deliver-the-joined-cluster-event-through-the-deferred-work.patch
 ../../../be200/driver/patches/0003-mac80211-nan-address.patch
+0024-mt7925-firmware-20261016-nan-capability.patch
+0025-mt7925-initialize-firmware-nmi.patch

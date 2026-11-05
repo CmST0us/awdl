@@ -421,3 +421,9 @@ systemd 单元拥有进程启动、重启策略和外部停止期限；D-Bus 策
 `components/airdrop/airdrop-tcp.conf` 是内核 TCP 接收自动调优的系统配置源，安装到 `/etc/sysctl.d/70-airdrop-tcp.conf`，已有文件保留。`net.ipv4.tcp_rmem` 的三项分别是最小、初始和最大接收内存，单位字节；IPv4 与 IPv6 均使用它。内核按连接需要增长至上限。安装到正在运行的系统时立即加载，暂存安装只复制文件；修改后使用 `sysctl -p /etc/sysctl.d/70-airdrop-tcp.conf` 加载，系统重启也会读取。此设置作用于本机 TCP 连接，由部署者维护，不属于网卡策略。
 
 安装选择决定 AirDrop 的无线依赖：BE200 使用 `wirelessd.service`，RTL 使用 `wirelessd-awdl.service`。单元从组件模板生成到 `.build/config`，生成文件不可作为第二份手工来源。配置文件不保存瞬时会话、对端选择和传输进度。AirDrop 的新会话身份与 Wi-Fi Aware 持久配对身份各自独立。运行操作见 [AirDrop 与 AWDL](airdrop.md)。
+
+## MT7925 / Dragon Q8B
+
+`hardware/mt7925/radio.toml` 是 MT7925 唯一无线策略源，使用公共 NAN / schedule 字段及相同安装路径规则；不含 AWDL 策略。`platforms/dragon-q8b/build.toml` 只选择 ARM64 目标，不保存无线能力。固定驱动、固件和三项 Linux 7.0 适配补丁见 [MT7925](../hardware/mt7925/README.md)。
+
+Q8B 当前世界监管域的 5 GHz 信道为 NO_IR，实机诊断的公共运行配置使用 `frequency = 2437`；这不是新默认值，也不代替实际地区设置。iPad Pro 的设备标识与签名信息保存在本机私有输入中，不进入 Git，公共客户端和 AwareLab 继续使用既有工程与测试入口。配对阻塞及未通过项目见[验收结论](acceptance.md#mt7925--dragon-q8b)。

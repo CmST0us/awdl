@@ -1,29 +1,29 @@
 {
   "repository": "https://gitlab.com/kernel-firmware/linux-firmware.git",
-  "commit": "b981cd3786e8275c6954f880e95ad54cacc5ccb8",
-  "version": "20260414153105",
+  "commit": "5a3f625f2e9d9f70134af2340d82af3f19ae6891",
+  "version": "20261016233029",
   "license": "Redistributable, see LICENCE.mediatek",
-  "required_features": 160,
+  "required_features": 128,
   "files": [
     {
       "file": "WIFI_RAM_CODE_MT7925_1_1.bin",
       "upstream_path": "mediatek/mt7925/WIFI_RAM_CODE_MT7925_1_1.bin",
-      "sha256": "00a1c7c22d9d985141b26a6ee677b5d2b0c1f7a07d76c2b18cd8a4eb0649f26a"
+      "sha256": "329c0e27f780550789e4eba47452731b1723f69f9e67f525d0e50bf3cd2978ac"
     },
     {
       "file": "WIFI_MT7925_PATCH_MCU_1_1_hdr.bin",
       "upstream_path": "mediatek/mt7925/WIFI_MT7925_PATCH_MCU_1_1_hdr.bin",
-      "sha256": "d1d83b7b23e1af7a44bed34ac7e0cd0ca24fe2d9d909c47d782782f4e01b1c09"
+      "sha256": "67ff85f1a39d1a100a51abd8e2a26edd2f198d7052514b6b8981948b231e5016"
     },
     {
       "file": "LICENCE.mediatek",
-      "upstream_path": "LICENCE.mediatek",
+      "upstream_path": "LICENSES/LICENCE.mediatek",
       "sha256": "a90d3f66704d85889945fec5525ea77622549da83aced1aac99828383f8f1805"
     },
     {
       "file": "WHENCE",
       "upstream_path": "WHENCE",
-      "sha256": "3bc2d0ccab6231562fc501c3572b188bffab88247cb678e5d637a3be7a314cab"
+      "sha256": "d807b466d8e66f1f41a8e11e9c7360ad5a56af13d740de3a141330a2ecae2cc9"
     }
   ]
 }

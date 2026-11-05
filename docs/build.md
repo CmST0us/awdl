@@ -1,6 +1,6 @@
 # 构建与安装
 
-MT7925 / Dragon Q8B 的固定固件、无线内核、安全补丁与板级参考输入见 [MT7925 准备说明](../hardware/mt7925/README.md)。目前仅提供依赖准备，不属于下述已支持的驱动构建与安装目标。
+MT7925 / Dragon Q8B 已接入 `build-driver mt7925`、`install-driver mt7925` 与公共用户态安装入口，采用 Linux 7.0 外部无线模块集。其固定公开固件已通过 iPad 发现，安全配对尚未通过，构建、安装方法及准确边界见 [MT7925](../hardware/mt7925/README.md)。
 
 在仓库根目录运行脚本。公共服务使用 Rust 1.93 或更新版本，Cargo.lock 固定依赖；Linux 用户态需要 C 工具链、make、bison、flex、bc、libelf 开发库、pkg-config、libnl 3、libnl-genl 3 和 OpenSSL 开发库。源码准备需要 curl、tar、patch；RTL 驱动还需要 Python 3.12、带 MIPS16 后端的 Clang 21、GNU MIPS little-endian binutils、目标内核 headers 和 Linux 目标工具链。
 
@@ -8,7 +8,7 @@ MT7925 / Dragon Q8B 的固定固件、无线内核、安全补丁与板级参考
 
 `config/build.toml` 提供公共构建默认值，`platforms/rock5b/build.toml` 提供 ARM64 / ROCKCHIP 选择。复制 `config/examples/build.toml` 到 `config/local/build.toml`，按构建机填写路径和工具链。
 
-安装示例按平台和网卡命名：`config/examples/install-rock5b-rtl8852be.toml` 或 `config/examples/install-rock5b-be200.toml`。将对应示例复制到 `config/local/install.toml`，按目标机器填写 PCI 与实际地区。本机文件持久保留，不进入 Git。
+安装示例按平台和网卡命名：`config/examples/install-rock5b-rtl8852be.toml` 、`config/examples/install-rock5b-be200.toml` 或 `config/examples/install-dragon-q8b-mt7925.toml`。将对应示例复制到 `config/local/install.toml`，按目标机器填写 PCI 与实际地区。本机文件持久保留，不进入 Git。
 
 优先级为显式参数、对应环境变量、本机文件、平台和公共默认值。`CARGO_BUILD_TARGET`、`KERNEL_RELEASE`、`KLIB_BUILD` / `KSRC`、`CC`、`U2_CC`、`CROSS_COMPILE`、`ARCH`、`JOBS`、`DESTDIR` 分别映射到构建目标；`CARGO` / `RUSTC` 选择执行工具。使用 `scripts/aware-build help` 查看参数。
 
@@ -20,7 +20,7 @@ scripts/build-wirelessd.sh
 scripts/build-fileserver.sh
 ```
 
-交叉构建时设置 `--target aarch64-unknown-linux-gnu` 或 `--target x86_64-unknown-linux-gnu`。Rust 需要对应标准库与 linker；hostap 需要 `--cc` 和目标架构的 pkg-config 库搜索路径。`--archive /path/to/wpa_supplicant-2.12.tar.gz` 可复用固定版本的本地归档。两种无线后端编入同一份 hostap 与 wirelessd。
+交叉构建时设置 `--target aarch64-unknown-linux-gnu` 或 `--target x86_64-unknown-linux-gnu`。Rust 需要对应标准库与 linker；hostap 需要 `--cc` 和目标架构的 pkg-config 库搜索路径。`--archive /path/to/wpa_supplicant-2.12.tar.gz` 可复用固定版本的本地归档。`nl80211` 与 `rtl_nan` 编入同一份 hostap，三种硬件适配编入同一份 wirelessd。
 
 驱动显式选择硬件、目标内核和平台：
 

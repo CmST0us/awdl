@@ -1,6 +1,6 @@
 # Wireless Service 架构
 
-采用单仓库、公共用户态组件、独立硬件适配的结构。`wirelessd`、hostap、文件服务和 iOS 客户端各维护一份源码；BE200 与 RTL8852BE 的驱动、固件、无线接口差异分别放入硬件目录。新增网卡扩展硬件适配，业务应用继续使用相同的服务接口。
+采用单仓库、公共用户态组件、独立硬件适配的结构。`wirelessd`、hostap、文件服务和 iOS 客户端各维护一份源码；BE200、RTL8852BE 与 MT7925 的驱动、固件、无线接口差异分别放入硬件目录。新增网卡扩展硬件适配，业务应用继续使用相同的服务接口。
 
 公共实现以 2026-11-01 核对的两个远端 `main` 为来源：
 
@@ -28,6 +28,7 @@ flowchart TB
     RTL["rtl_nan 后端"]
     IKernel["Intel backport / iwlmld / c108"]
     RKernel["RTL 驱动 / vendor UAPI / U2"]
+    MKernel["MT7925 / 同源 mac80211、cfg80211 / NAN 固件"]
     NDI["NDI / IPv6 / 内核 TCP、UDP"]
 
     App <-->|"HTTP 数据"| Files
@@ -37,14 +38,16 @@ flowchart TB
     Hostap --> Intel
     Hostap --> RTL
     Intel --> IKernel
+    Intel --> MKernel
     RTL --> RKernel
     IKernel --- NDI
+    MKernel --- NDI
     RKernel --- NDI
     NDI --- Files
     NDI --- Business
 ```
 
-图中的两个无线分支表示可选择的后端。一个守护进程管理一块网卡、一套 `nan0` / `ndi0`，支持多个上层服务。文件内容直接经过 NDI 和内核网络栈，D-Bus 与 `wirelessd` 只承载控制信息。
+图中的无线分支表示可选择的硬件；MT7925 复用 nl80211，固件互通限制见其硬件说明。一个守护进程管理一块网卡、一套 `nan0` / `ndi0`，支持多个上层服务。文件内容直接经过 NDI 和内核网络栈，D-Bus 与 `wirelessd` 只承载控制信息。
 
 交付分成三个部分：公共 Linux 用户态、指定网卡的硬件包、使用公共接口的应用。文件服务可以独立安装和停用；其他应用直接注册 TCP / UDP 服务，无须引入文件协议。
 
@@ -96,6 +99,13 @@ wifi-aware/
 │   ├── catalog.rs                 # 硬件名称及 PCI 匹配，运行与安装共用
 │   ├── radio.rs                   # 后端接入、无线策略与能力约束
 │   ├── build.rs                   # 硬件构建和安装入口
+│   ├── mt7925/
+│   │   ├── build.rs               # Linux 7.0 外部模块集与固件交付
+│   │   ├── radio.rs
+│   │   ├── radio.toml
+│   │   ├── prepare.py             # 固定输入及模块源码准备
+│   │   ├── driver/                # 来源、有序补丁及 backport 适配
+│   │   └── firmware/              # 固定固件来源及能力检查
 │   ├── be200/
 │   │   ├── build.rs               # 驱动构建、固件与安装清单
 │   │   ├── radio.rs               # 接口接管与能力约束
@@ -115,6 +125,7 @@ wifi-aware/
 │       └── README.md
 ├── platforms/
 │   ├── install.rs                 # 板级系统安装入口
+│   ├── dragon-q8b/                # ARM64、板级参考及工具链来源
 │   └── rock5b/                    # build.toml、usbmoded 关机配置
 ├── ios/
 │   ├── AwareClient/               # 一份通用应用源码
@@ -142,15 +153,15 @@ Rust `Publisher` 通过公共 `Radio` 操作无线设备；文件服务与 App �
 
 公共 Rust `Radio` 负责设备枚举、进程管理、控制套接字、日志、事件等待、NAN 启动流程、NDI 地址配置和资源所有权。
 
-后端使用 `hardware/catalog.rs` 的 Rust 枚举选择，PCI 匹配由守护进程与安装器共用。两种实现静态编入同一个 `wirelessd`。接口为仓库内部接口，与公共代码一起构建。后端提供设备匹配、启动接口准备、引导接口退出方式、运行接口判定及硬件能力约束。NAN 启动值和本地时隙策略从对应 `radio.toml` 读取。
+后端使用 `hardware/catalog.rs` 的 Rust 枚举选择，PCI 匹配由守护进程与安装器共用。三种实现静态编入同一个 `wirelessd`。接口为仓库内部接口，与公共代码一起构建。后端提供设备匹配、启动接口准备、引导接口退出方式、运行接口判定及硬件能力约束。NAN 启动值和本地时隙策略从对应 `radio.toml` 读取。
 
-| 项目 | BE200 | RTL8852BE |
-| --- | --- | --- |
-| hostap driver | `nl80211` | `rtl_nan` |
-| 接管接口 | 空闲 managed 接口；进入 NAN 后删除引导接口 | 保留物理控制接口及原厂未关联的 `p2p0` |
-| 运行接口判定 | 所选 PHY 只允许 NAN / NAN_DATA | 物理控制接口与原生持久 NDI；逻辑 `nan0` 由后端承载 |
-| 无线运行策略 | `hardware/be200/radio.toml` | `hardware/rtl8852be/radio.toml` |
-| 资源释放 | hostap 接口与 nl80211 生命周期 | 原生 STOP、在途排空、站点和密钥释放 |
+| 项目 | BE200 | RTL8852BE | MT7925 |
+| --- | --- | --- | --- |
+| hostap driver | `nl80211` | `rtl_nan` | `nl80211` |
+| 接管接口 | 空闲 managed；进入 NAN 后删除引导接口 | 保留物理控制接口及未关联的 `p2p0` | 空闲 managed；进入 NAN 后删除引导接口 |
+| 运行接口判定 | NAN / NAN_DATA | 控制接口、原生 NDI；逻辑 `nan0` 由后端承载 | NAN / NAN_DATA |
+| 无线策略 | `hardware/be200/radio.toml` | `hardware/rtl8852be/radio.toml` | `hardware/mt7925/radio.toml` |
+| 资源释放 | hostap / nl80211 | 原生 STOP、在途排空、站点和密钥释放 | hostap / nl80211 |
 
 无线运行策略影响真实行为。RTL 后端会拒绝不符合其实现要求的启动参数；配置仅能选择后端已实现的能力。
 
@@ -225,13 +236,13 @@ hostap 2.12 的来源清单、配置、授权和补丁统一放入 `components/h
 scripts/build-hostap.sh
 scripts/build-wirelessd.sh
 scripts/build-fileserver.sh
-scripts/build-driver.sh be200|rtl8852be
+scripts/build-driver.sh be200|rtl8852be|mt7925
 scripts/install-wirelessd.sh
 scripts/install-fileserver.sh
-scripts/install-driver.sh be200|rtl8852be
+scripts/install-driver.sh be200|rtl8852be|mt7925
 ```
 
-公共用户态构建不选择芯片，同一架构的产物包含两个后端。驱动构建和安装显式选择硬件，继续接受目标内核、工具链和 `DESTDIR`。公共工具处理参数优先级、模块版本及签名检查、文件安装和系统重载；`hardware/*/build.rs` 拥有具体编译命令、模块与固件清单、地区选项及旧文件清理。板级系统安装规则位于 `platforms/install.rs`。
+公共用户态构建不选择芯片，同一架构的产物包含三种硬件适配。驱动构建和安装显式选择硬件，继续接受目标内核、工具链和 `DESTDIR`。公共工具处理参数优先级、模块版本及签名检查、文件安装和系统重载；`hardware/*/build.rs` 拥有具体编译命令、模块与固件清单、地区选项及旧文件清理。板级系统安装规则位于 `platforms/install.rs`。
 
 板级构建选项由 `platforms/<name>/build.toml` 拥有，本机工具链和 headers 路径由 `config/local/build.toml` 拥有；aware-build 统一解析目标后交给硬件配方。地区相关模块参数来自 `config/local/install.toml`。本机配置长期保留，构建清理只处理可重建产物。
 

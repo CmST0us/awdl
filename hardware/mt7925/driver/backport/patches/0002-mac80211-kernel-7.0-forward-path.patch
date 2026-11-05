@@ -1,0 +1,21 @@
+Subject: [PATCH] mac80211: use kernel 7.0 forward path contract
+
+Kernel 7.0 has no IEEE80211 forward-path query. Keep the existing
+net_fill_forward_path driver path; do not change core net_device layout.
+
+--- a/mac80211/iface.c
++++ b/mac80211/iface.c
+@@ -1022,13 +1022,6 @@
+ 	struct sta_info *sta;
+ 	int ret = -ENOENT;
+ 
+-	if (ctx->ieee80211) {
+-		path->type = DEV_PATH_IEEE80211;
+-		path->dev = ctx->dev;
+-		ctx->dev = NULL;
+-		return 0;
+-	}
+-
+ 	sdata = IEEE80211_DEV_TO_SUB_IF(ctx->dev);
+ 	local = sdata->local;
+ 

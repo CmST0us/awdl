@@ -1,0 +1,26 @@
+Subject: wifi: mt76: recognize host NAN in the pinned MT7925 20261016 WM
+
+The public image lacks bit 5 but produces real DW_START/DW_END and iPad
+service discovery with the host NAN ABI. Match its path, size, feature byte
+and build date. Firmware installation independently checks its pinned SHA-256.
+
+--- a/drivers/net/wireless/mediatek/mt76/mt792x_core.c
++++ b/drivers/net/wireless/mediatek/mt76/mt792x_core.c
+@@ -934,6 +934,17 @@
+ 		data += le16_to_cpu(rel_info->len) + rel_info->pad_len;
+ 	}
+ 
++	/* This pinned public WM implements host NAN (including DW events), but
++	 * its release-info feature byte omits NAN. Limit the correction to the
++	 * verified MT7925 image; other firmware keeps its advertised features.
++	 */
++	if (!strcmp(fw_wm, MT7925_FIRMWARE_WM) &&
++	    fw->size == 1390712 && offload_caps == MT792x_FW_CAP_CNM &&
++	    !memcmp(hdr->build_date, "20261016233029", 14)) {
++		offload_caps |= MT792x_FW_CAP_NAN;
++		dev_info(dev, "NAN capability correction for WM 20261016233029\n");
++	}
++
+ out:
+ 	release_firmware(fw);
+ 

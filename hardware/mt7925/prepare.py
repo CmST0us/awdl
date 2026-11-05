@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Prepare pinned MT7925 firmware and kernel inputs under .build; never install."""
 import hashlib
+import argparse
 import importlib.util
 import json
 from pathlib import Path
@@ -62,7 +63,47 @@ def unpack(source, destination, patches=()):
     marker.write_text(json.dumps(inputs, indent=2) + '\n')
 
 
+def prepare_modules(destination):
+    source = OUTPUT / 'source/wireless-next'
+    series = HERE / 'driver/backport/patches/series'
+    patches = [series.parent / line for line in series.read_text().splitlines()
+               if line and not line.startswith('#')]
+    inputs = {'source': json.loads((source / '.prepared.json').read_text()),
+              'backport': [digest(p) for p in patches],
+              'recipe': digest(Path(__file__))}
+    marker = destination / '.prepared.json'
+    if marker.exists() and json.loads(marker.read_text()) == inputs:
+        return
+    if destination.exists():
+        raise RuntimeError(f'Changed or incomplete module inputs at {destination}; preserve and move this generated directory first')
+    destination.mkdir(parents=True)
+    for original, target in [('net/wireless', 'wireless'),
+                             ('net/mac80211', 'mac80211'),
+                             ('drivers/net/wireless/mediatek/mt76', 'mt76')]:
+        shutil.copytree(source / original, destination / target)
+    (destination / 'include/linux').mkdir(parents=True)
+    for header in (source / 'include/linux').glob('ieee80211*.h'):
+        shutil.copy2(header, destination / 'include/linux' / header.name)
+    for name in ['include/linux/ieee80211.h', 'include/net/cfg80211.h',
+                 'include/net/mac80211.h', 'include/net/cfg80211-wext.h',
+                 'include/net/ieee80211_radiotap.h', 'include/uapi/linux/nl80211.h']:
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / name, target)
+    (destination / 'Makefile').write_text('obj-m += wireless/ mac80211/ mt76/\n')
+    for patch in patches:
+        subprocess.run(['patch', '--batch', '--forward', '--fuzz=0', '-p1',
+                        '-i', str(patch)], cwd=destination, check=True)
+    marker.write_text(json.dumps(inputs, indent=2) + '\n')
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--modules-to', type=Path, help='generated external-module source directory under .build')
+    args = parser.parse_args()
+    if args.modules_to:
+        args.modules_to = args.modules_to.resolve()
+        args.modules_to.relative_to(ROOT / '.build')
     OUTPUT.mkdir(parents=True, exist_ok=True)
     firmware = json.loads((HERE / 'firmware/source.json').read_text())
     fw_dir = OUTPUT / 'firmware'
@@ -77,7 +118,7 @@ def main():
     capabilities = module.inspect(fw_dir / 'WIFI_RAM_CODE_MT7925_1_1.bin')
     required = firmware['required_features']
     if capabilities['features'] & required != required:
-        raise RuntimeError('Pinned firmware does not advertise both NAN and CNM')
+        raise RuntimeError('Pinned firmware is missing required capability bits')
     if capabilities['build'] != firmware['version']:
         raise RuntimeError('Pinned firmware build does not match manifest')
     print(json.dumps(capabilities), flush=True)
@@ -90,6 +131,8 @@ def main():
     platform = json.loads((ROOT / 'platforms/dragon-q8b/source.json').read_text())
     unpack(platform['kernel'], OUTPUT / 'source/radxa-kernel')
     unpack(platform['packaging'], OUTPUT / 'source/linux-qcom')
+    if args.modules_to:
+        prepare_modules(args.modules_to)
     print('Prepared firmware, patched wireless kernel and Q8B platform reference; '
           'these are source inputs, not a built or boot-verified Q8B kernel.')
 
