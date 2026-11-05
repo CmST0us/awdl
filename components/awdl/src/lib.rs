@@ -144,6 +144,7 @@ impl Control {
                                     self.channels,
                                     &self.absences,
                                     self.switch_us,
+                                    self.tx_drain_us,
                                     &mut self.advertised_sequence,
                                     now,
                                 );
@@ -279,7 +280,7 @@ impl Control {
                         channel if self.channels.contains(&channel) => channel,
                         _ => 0,
                     });
-                reserve_switches(&mut channels, self.switch_us);
+                reserve_switches(&mut channels, self.switch_us, self.tx_drain_us);
                 let base = boundary as i64 - 65536;
                 let changed = plan_changed(self.plan.as_ref(), base, &channels);
                 if changed {
@@ -563,10 +564,11 @@ fn plan_changed(old: Option<&(i64, [u8; 16])>, base: i64, channels: &[u8; 16]) -
             || (0..16).any(|i| channels[i] != previous[(i + slots as usize) % 16])
     })
 }
-fn reserve_switches(channels: &mut [u8; 16], delay_us: u64) {
-    // Complete the measured retune before advertising the next channel.
-    // Radios that fit in the regular 3 TU guard need no extra closed slot.
-    let count = delay_us.saturating_sub(3072).div_ceil(65536).min(16) as usize;
+fn reserve_switches(channels: &mut [u8; 16], delay_us: u64, tx_drain_us: u64) {
+    // Both backends start retuning in the preceding closing guard. The
+    // following opening guard contributes another 3 TU before data opens.
+    let guards = tx_drain_us + 3072;
+    let count = delay_us.saturating_sub(guards).div_ceil(65536).min(16) as usize;
     let original = *channels;
     for i in 0..16 {
         if original[i] != 0
@@ -589,6 +591,7 @@ fn advertise_follow(
     channels: [u8; 2],
     absences: &[(u8, i64, i64, i64)],
     switch_us: u64,
+    tx_drain_us: u64,
     advertised: &mut Option<[u8; 16]>,
     now: Time,
 ) {
@@ -614,7 +617,7 @@ fn advertise_follow(
             .map(|c| [if channels.contains(&c) { c } else { 0 }, 0x80]),
     };
     let mut advertised_channels = sequence.channels();
-    reserve_switches(&mut advertised_channels, switch_us);
+    reserve_switches(&mut advertised_channels, switch_us, tx_drain_us);
     let slot = clock.slot(now);
     let base = now.0 as i64 + clock.next_slot_us(now) as i64 - 65536;
     for offset in 0..16 {
