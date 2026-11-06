@@ -1,0 +1,30 @@
+Subject: wifi: mt76: mt7925: suppress conflicting firmware R4 beacon IEs
+
+The pinned WM 20261016233029 emits DCEA capability zero in autonomous
+beacons even while host SDFs advertise pairing/caching and NIRA. iPad
+rejects the overwritten capability before PIN entry. Apply the firmware's
+NanEnableR4Ie setting before NAN enable, limited to this firmware version.
+Air capture confirms beacons retain Master/Cluster attributes without DCEA;
+host SDFs retain their security attributes. No firmware binary is modified.
+
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/nan.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/nan.c
+@@ -340,6 +340,18 @@
+ 
+ 	if (!vif || !dev || !conf)
+ 		return -EINVAL;
++
++	/* This WM emits a zero DCEA in its autonomous beacons, overriding
++	 * host-generated pairing/caching capabilities at the peer. Suppress
++	 * firmware R4 IEs; host-generated SDFs retain DCEA and NIRA. The
++	 * fixed firmware is hash-checked by the hardware installation recipe.
++	 */
++	if (!strcmp(dev->mt76.hw->wiphy->fw_version,
++		    "____000000-20261016233029")) {
++		ret = mt7925_mcu_chip_config(dev, "NanEnableR4Ie 0");
++		if (ret)
++			return ret;
++	}
+ 
+ 	skb = mt76_mcu_msg_alloc(mdev, NULL, MT7925_NAN_ENABLE_MAX_SIZE);
+ 	if (!skb)

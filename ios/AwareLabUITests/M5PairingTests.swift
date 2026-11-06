@@ -638,6 +638,10 @@ final class M5PairingTests: XCTestCase {
                 field.typeText(String(pin.prefix(3)))
                 field.typeText(String(pin.suffix(3)))
                 _ = submitPIN(field, app: client)
+                let done = tray.buttons.matching(NSPredicate(format: "label IN %@",
+                    ["完成", "Done"])).firstMatch
+                XCTAssertTrue(done.waitForExistence(timeout: 5))
+                done.tap()
             }
             let authorized = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
                 MainActor.assumeIsolated { client.buttons["配对新设备"].isHittable }

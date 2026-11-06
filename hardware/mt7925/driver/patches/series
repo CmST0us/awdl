@@ -25,3 +25,4 @@
 0024-mt7925-firmware-20261016-nan-capability.patch
 0025-mt7925-initialize-firmware-nmi.patch
 0026-mt7925-nan-interface-wtbl-before-peer-schedule.patch
+0027-mt7925-suppress-conflicting-firmware-r4-beacon-ies.patch
