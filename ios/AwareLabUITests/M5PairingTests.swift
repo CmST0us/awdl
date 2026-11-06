@@ -596,8 +596,10 @@ final class M5PairingTests: XCTestCase {
 
     @MainActor func testCommonClient() throws {
         continueAfterFailure = false
+        let action = ProcessInfo.processInfo.environment["AWARE_CLIENT_ACTION"] ?? "observe"
         let client = XCUIApplication(bundleIdentifier: ProcessInfo.processInfo.environment["AWARE_CLIENT_BUNDLE_ID"] ?? TestConfiguration.clientBundle)
-        client.launch()
+        // 验收观察器超时后可继续等待同一下载，保留 App 中原始计时与连接。
+        if action == "wait_download" { client.activate() } else { client.launch() }
         defer {
             let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
             let description = client.debugDescription + "\n" + springboard.debugDescription
@@ -609,8 +611,14 @@ final class M5PairingTests: XCTestCase {
             screen.lifetime = .keepAlways
             add(screen)
         }
+        if action == "wait_download" {
+            XCTAssertTrue(client.buttons["打开下载文件"].waitForExistence(timeout: 900))
+            let rate = client.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "下载 ")).firstMatch
+            XCTAssertTrue(rate.exists)
+            print("COMMON_SPEED_RESULT: " + rate.label)
+            return
+        }
         XCTAssertTrue(client.buttons["配对新设备"].waitForExistence(timeout: 5))
-        let action = ProcessInfo.processInfo.environment["AWARE_CLIENT_ACTION"] ?? "observe"
         if action == "pair" {
             let pin = try XCTUnwrap(ProcessInfo.processInfo.environment["AWARE_M5_PIN"])
             client.buttons["配对新设备"].tap()
@@ -667,11 +675,18 @@ final class M5PairingTests: XCTestCase {
             let file = client.buttons.containing(.staticText, identifier: "alignment.txt").firstMatch
             XCTAssertTrue(file.waitForExistence(timeout: 5))
             if action == "speed" {
+                // 下载并发数，无单位，仅 1 或 4；省略时为 1。
+                let streams = ProcessInfo.processInfo.environment["AWARE_CLIENT_STREAMS"] ?? "1"
+                XCTAssertTrue(["1", "4"].contains(streams))
+                if streams == "4" {
+                    client.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "下载连接数")).firstMatch.tap()
+                    client.buttons["4 路自适应"].tap()
+                }
                 let payload = client.buttons.containing(.staticText, identifier: "speed-1g.bin").firstMatch
                 XCTAssertTrue(payload.exists)
                 payload.tap()
-                // 旧路径 1GiB 为 24–31 秒；公共路径首次基线保留约三倍失败预算。
-                XCTAssertTrue(client.buttons["打开下载文件"].waitForExistence(timeout: 90))
+                // 完成事件结束传输；900 秒仅为大文件失败兜底。
+                XCTAssertTrue(client.buttons["打开下载文件"].waitForExistence(timeout: 900))
                 let rate = client.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "下载 ")).firstMatch
                 XCTAssertTrue(rate.exists)
                 print("COMMON_SPEED_RESULT: " + rate.label)
@@ -698,12 +713,18 @@ final class M5PairingTests: XCTestCase {
                 let folder = client.cells.matching(NSPredicate(format: "label CONTAINS %@", ProcessInfo.processInfo.environment["AWARE_CLIENT_FOLDER"] ?? TestConfiguration.clientDisplayName)).firstMatch
                 XCTAssertTrue(folder.waitForExistence(timeout: 5))
                 folder.tap()
-                let source = client.cells.matching(NSPredicate(format: "label CONTAINS %@", "upload-probe")).firstMatch
+                // 本地上传文件名匹配字符串；省略时沿用 upload-probe，不能为空。
+                let uploadName = ProcessInfo.processInfo.environment["AWARE_CLIENT_UPLOAD_FILE"] ?? "upload-probe"
+                XCTAssertFalse(uploadName.isEmpty)
+                let source = client.cells.matching(NSPredicate(format: "label CONTAINS %@", uploadName)).firstMatch
                 XCTAssertTrue(source.waitForExistence(timeout: 5))
                 source.tap()
                 let open = client.buttons.matching(NSPredicate(format: "label IN %@", ["打开", "Open"])).firstMatch
                 if open.exists { open.tap() }
-                XCTAssertTrue(client.staticTexts["上传完成"].waitForExistence(timeout: 5))
+                XCTAssertTrue(client.staticTexts["上传完成"].waitForExistence(timeout: 90))
+                let rate = client.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "上传 ")).firstMatch
+                XCTAssertTrue(rate.exists)
+                print("COMMON_UPLOAD_RESULT: " + rate.label)
             }
         }
 

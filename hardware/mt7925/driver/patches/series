@@ -26,3 +26,4 @@
 0025-mt7925-initialize-firmware-nmi.patch
 0026-mt7925-nan-interface-wtbl-before-peer-schedule.patch
 0027-mt7925-suppress-conflicting-firmware-r4-beacon-ies.patch
+0028-mt7925-enable-nan-data-hardware-amsdu.patch

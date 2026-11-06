@@ -1,0 +1,12 @@
+[Unit]
+Description=Dragon Q8B Wi-Fi Aware performance policy
+After=systemd-sysctl.service
+Before=wirelessd.service
+
+[Service]
+Type=oneshot
+# Q8B 两个 CPU 策略保持最高允许频率；热限制仍由内核执行，增加空闲功耗。
+# 这是板级持久策略，停止无线服务不会更改 CPU 策略。
+ExecStart=/bin/sh -ec 'for p in /sys/devices/system/cpu/cpufreq/policy*/scaling_governor; do echo performance > "$$p"; done'
+ExecStart=/usr/sbin/sysctl -p /etc/sysctl.d/90-wifi-aware-q8b.conf
+RemainAfterExit=yes

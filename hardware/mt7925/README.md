@@ -24,6 +24,8 @@ MT7925 PCIe（`14c3:7925`）接入公共 Rust `wirelessd`、hostap 的 `nl80211`
 
 这是对固定固件的规避：没有实现信标中 DCEA / NIRA 的动态写入，也没有禁止信标。原有主机发现窗口、认证、加密及 NDP 日程仍由实际事件推进。
 
+补丁 `0028` 将 NAN_DATA 接入既有硬件 A-MSDU 配置入口。PCIe 声明硬件聚合后禁用了软件 A-MSDU，但原入口只接受 STA / AP，导致 NAN 数据缺少该聚合。修复沿用 mac80211 从 NMI 对端复制的聚合长度限制，并保留 ADDBA 拒绝 A-MSDU 时的关闭逻辑；不放大对端能力，不修改管理帧。当前 NAN PHY 使用 HT / VHT，不能将网卡的 HE / EHT 常规联网能力直接视为 NAN 已支持。
+
 ## 构建与安装
 
 需要 Python 3.12+、curl、patch、Linux 内核构建依赖及与运行内核一致的 headers / 配置；检查压缩固件另需 zstd。展开前至少保留 8 GiB 可用空间。板端构建选择见 [Dragon Q8B](../../platforms/dragon-q8b/README.md)。
@@ -34,7 +36,7 @@ scripts/aware-build build-driver mt7925 --platform dragon-q8b \
   --kernel-release 7.0.11+ --headers /usr/src/linux-headers-7.0.11+
 scripts/aware-build build-wirelessd
 scripts/aware-build build-fileserver
-scripts/aware-build install-driver mt7925 --destdir "$PWD/.build/stage-mt7925"
+scripts/aware-build install-driver mt7925 --country CN --destdir "$PWD/.build/stage-mt7925"
 scripts/aware-build install-wirelessd --hardware mt7925 --pci 0006:01:00.0 \
   --destdir "$PWD/.build/stage-mt7925"
 scripts/aware-build install-fileserver --destdir "$PWD/.build/stage-mt7925"
@@ -46,7 +48,9 @@ scripts/aware-build install-fileserver --destdir "$PWD/.build/stage-mt7925"
 
 固件装到 `/lib/firmware/updates/mediatek/mt7925/`，保留发行版原文件；原始固件授权、WHENCE 及内核授权装到 `/usr/local/share/licenses/wifi-aware/mt7925/`。实际安装省略 `--destdir`，操作前须取得设备租约、备份程序和配置。安装本身不代表固件互通通过。
 
-`radio.rs` 只接管空闲 managed 接口，进入 NAN 后删除引导接口，运行时仅允许所选 PHY 的 NAN / NAN_DATA。`radio.toml` 选择 2437 MHz 单频发现，数据频率由公共运行配置决定。Q8B 当前世界监管域的 5 GHz 信道有 NO_IR，诊断使用 `/etc/wirelessd/config.toml` 中的 `frequency = 2437`，没有推定实际国家码。MT7925 未实现 AWDL / AirDrop，相关申请返回明确错误。
+安装时必须按实际地区提供 `[mt7925].country` 或 `--country`，上述 CN 仅适用于中国。Q8B 的 CPU 与 TCP 性能策略使用 `install-platform --platform dragon-q8b` 独立安装。
+
+`radio.rs` 只接管空闲 managed 接口，进入 NAN 后删除引导接口，运行时仅允许所选 PHY 的 NAN / NAN_DATA。`radio.toml` 选择 2437 MHz 单频发现，数据频率由公共运行配置决定。实际地区确认为中国后，安装输入使用 CN，通过服务启动前的 `iw reg set CN` 提交监管请求；`/etc/wirelessd/config.toml` 使用 `frequency = 5745`，在允许的 149 信道选择 80 MHz。MT7925 未实现 AWDL / AirDrop，相关申请返回明确错误。
 
 ## 真机验证与限制
 
@@ -72,7 +76,29 @@ scripts/aware-build install-fileserver --destdir "$PWD/.build/stage-mt7925"
 
 连续操作期间有一次缓存认证收到 Auth1 后未完成，服务报告认证期限失败。后续不重启服务的复测成功，Auth2 获 ACK、Auth3 验证完成；现有证据不能确定该单次超时的原因，不能报告长时间重复连接可靠性已通过。成功配对与正式传输样本没有再出现 DCEA 缓存位缺失或 iPad 对端缓存满错误。正式加载及验收区间没有内核崩溃或固件复位。驱动仍对缺少 NDC ID 的 TX GTK 安装返回 `EOPNOTSUPP` 并记录警告；本轮验证的是安全单播 TCP，未验收组播及其组密钥路径。
 
-实测范围为上述固定固件、Q8B 与 iPad Pro 的 2437 MHz 小文件传输。5 GHz、高吞吐、长时间连续传输与多对端并发未验收。原有 iPad 配对、板端身份和共享文件保留，以太网 SSH 可用；诊断源码、密钥和原始证据不进入 Git。
+配对及小文件验收使用 2437 MHz；同一固定固件的 5 GHz 性能验收见下节。长时间可靠性与多对端并发尚未验收。原有 iPad 配对、板端身份和共享文件保留，以太网 SSH 可用；诊断源码、密钥和原始证据不进入 Git。
+
+## 5 GHz 性能验收
+
+2026-11-06，固定补丁链加入 `0028` 后，七模块完整重建、暂存与实机加载通过。运行和安装的 `mt7925_common` build-id 为 `5d1d1c3b1438b246a625edb94f739332b222b5d6`，其余六模块与前述版本一致。固定固件摘要不变。ARM64 安装工具和签名 AwareLab 验收程序构建通过；公共 fileserver、hostap 和 AwareClient 传输实现保持一致。
+
+设备位于中国，global 与 MT7925 自管理监管域均为 CN，使用 5745 MHz 主信道 149、80 MHz、VHT 双流。板端提供完整 32 数据槽，iPad 日志确认 149 / 80 MHz 日程及 Infra 0（未关联普通 AP）。双方建立 TX / RX BA，硬件计数器确认 2–8 MSDU 的 A-MSDU 聚合。CPU 两个 policy 实测为 2.4384 / 2.9952 GHz，TCP 自动发送／接收上限均为 32 MiB。
+
+下表三项验收使用同一优化包与相同运行配置，不包含 2.4 GHz 性能对照。速率取 App 原始端到端计时，十进制 MB/s；计入 TCP 建立、HTTP 与文件写入，上传包含完成回执，排除初始配对、发现、目录读取和完成后的内容比较。客户端使用 Bulk、256 KiB 读取及既有自适应 Range 分块。
+
+| 方向 | 字节数 | TCP 连接数 | 秒 | MT7925 MB/s | BE200 已有 MB/s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Q8B → iPad | 1,073,741,824 | 1 | 542.56 | 1.98 | 43.43 |
+| Q8B → iPad | 1,073,741,824 | 4 | 335.73 | 3.20 | 49.37 |
+| iPad → Q8B | 67,108,864 | 1 | 2.22 | 30.22 | 31.85 |
+
+BE200 对照来自其已验收的 Rust Wi-Fi Aware 记录（原仓库 `docs/acceptance.md` 的“Rust 真机吞吐”），同一 iPad Pro、149 / 80 MHz、Bulk、相同文件大小与计时口径；不是 AWDL / AirDrop 成绩，也不是本轮重新测量。板卡与底层 PHY 不同，不能据此单独归因硬件性能差异。
+
+两轮下载均从 iPad App 容器读回完整文件，与源文件逐字节相同，SHA-256 均为 `49bc20df15e412a64472421e13fe86ff1c5165e18b2afccf160d4dc19fe68a14`。上传在板端逐字节比较相同，SHA-256 为 `3b6a07d0d404fab4e23b6d34bc6696a6a312dd92821332385e5af7c01c421351`。单连接的首次 UI 观察器超过原有 90 秒期限；同一 App 传输和 TCP 连接保持运行，完成观察使用其原始计时，没有重启下载。四连接及上传的 UI 验收均通过。
+
+上传达到 BE200 参考值约 95%，下载性能仍未达标。站点最高采样速率为 866.7 Mbit/s；单连接下载的拥塞窗口中位数为 8 MSS、末段采样累计 TCP 重传约 17.57 MB，四连接的窗口中位数为 3 MSS、末段采样合计重传约 73.62 MB。硬件聚合已工作，高 PHY 速率未转化为下载吞吐；重传的驱动／固件／对端根因尚未确定，不能将本轮报告为最优性能或达到 BE200 水平。验收期间没有新增固件复位、断言、Oops 或内核 WARNING。
+
+客户端退出后 NDP 数据站点释放；wirelessd / fileserver 保持 active、开机状态仍为 disabled，配对窗口关闭，原有配对及共享文件保留。长期可靠性、AP 并发及多对端传输不在本轮验收范围。
 
 ## 来源清单字段
 

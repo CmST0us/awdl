@@ -1,0 +1,22 @@
+From: Wi-Fi Aware project
+Subject: [PATCH] wifi: mt76: mt7925: enable hardware A-MSDU for NAN data
+
+PCIe disables software A-MSDU because it advertises hardware offload.
+Admit NAN_DATA to the existing station TLV path, honoring the peer limit
+copied from the NMI station and the existing ADDBA A-MSDU veto.
+No change to management frames, aggregation size, or peer capabilities.
+
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/mcu.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/mcu.c
+@@ -1880,8 +1880,10 @@
+ 	struct sta_rec_amsdu *amsdu;
+ 	struct tlv *tlv;
+ 
++	/* NAN_DATA inherits negotiated aggregation limits from its NMI peer. */
+ 	if (vif->type != NL80211_IFTYPE_STATION &&
+-	    vif->type != NL80211_IFTYPE_AP)
++	    vif->type != NL80211_IFTYPE_AP &&
++	    vif->type != NL80211_IFTYPE_NAN_DATA)
+ 		return;
+ 
+ 	if (!link_sta->agg.max_amsdu_len)

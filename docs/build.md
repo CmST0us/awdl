@@ -1,6 +1,6 @@
 # 构建与安装
 
-MT7925 / Dragon Q8B 已接入 `build-driver mt7925`、`install-driver mt7925` 与公共用户态安装入口，采用 Linux 7.0 外部无线模块集。其固定公开固件已通过 iPad 发现，安全配对尚未通过，构建、安装方法及准确边界见 [MT7925](../hardware/mt7925/README.md)。
+MT7925 / Dragon Q8B 已接入 `build-driver mt7925`、`install-driver mt7925` 与公共用户态安装入口，采用 Linux 7.0 外部无线模块集。其固定公开固件已通过 iPad Pro 配对、安全 NDP 与双向文件，构建、安装方法及准确边界见 [MT7925](../hardware/mt7925/README.md)。
 
 在仓库根目录运行脚本。公共服务使用 Rust 1.93 或更新版本，Cargo.lock 固定依赖；Linux 用户态需要 C 工具链、make、bison、flex、bc、libelf 开发库、pkg-config、libnl 3、libnl-genl 3 和 OpenSSL 开发库。源码准备需要 curl、tar、patch；RTL 驱动还需要 Python 3.12、带 MIPS16 后端的 Clang 21、GNU MIPS little-endian binutils、目标内核 headers 和 Linux 目标工具链。
 
@@ -49,7 +49,7 @@ sudo scripts/aware-build install-platform --platform rock5b
 sudo systemctl enable --now wirelessd fileserver
 ```
 
-`CN` 只代表示例部署地区。RTL 必须明确国家码；BE200 的 `--cn` / `[be200].platform_cn` 是独立的平台提示。ROCK 5B 的 usbmoded 关机配置由 `install-platform` 单独安装。
+`CN` 只代表示例部署地区。RTL 与 MT7925 必须明确国家码；BE200 的 `--cn` / `[be200].platform_cn` 是独立的平台提示。ROCK 5B 的 usbmoded 关机配置由 `install-platform` 单独安装；Dragon Q8B 的同一入口安装板级 CPU / TCP 性能策略，见[平台说明](../platforms/dragon-q8b/README.md)。
 
 公共用户态升级时，先停止 `fileserver`、AirDrop 及对应的 wirelessd 单元，安装同一版本的 wirelessd、fileserver 和已安装的 AirDrop 程序、systemd 单元及 D-Bus 策略，再启动服务。公共总线名称、接口和错误命名空间为 `org.wirelessd1`，本机 D-Bus 调用方须使用同一契约。
 

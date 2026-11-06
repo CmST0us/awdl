@@ -426,4 +426,8 @@ systemd 单元拥有进程启动、重启策略和外部停止期限；D-Bus 策
 
 `hardware/mt7925/radio.toml` 是 MT7925 唯一无线策略源，使用公共 NAN / schedule 字段及相同安装路径规则；不含 AWDL 策略。`platforms/dragon-q8b/build.toml` 只选择 ARM64 目标，不保存无线能力。固定驱动、固件和三项 Linux 7.0 适配补丁见 [MT7925](../hardware/mt7925/README.md)。
 
-Q8B 当前世界监管域的 5 GHz 信道为 NO_IR，实机诊断的公共运行配置使用 `frequency = 2437`；这不是新默认值，也不代替实际地区设置。iPad Pro 的设备标识与签名信息保存在本机私有输入中，不进入 Git，公共客户端和 AwareLab 继续使用既有工程与测试入口。配对阻塞及未通过项目见[验收结论](acceptance.md#mt7925--dragon-q8b)。
+MT7925 驱动安装要求 `config/local/install.toml` 的 `[mt7925].country`，或显式 `--country` 覆盖；值为实际部署国家的两个大写 ISO 3166-1 字母，无单位，省略则拒绝安装。安装器生成 `wirelessd.service.d/mt7925-regulatory.conf`，在已选 PCI 设备就绪、无线服务启动前执行 `iw reg set`。该请求交给监管数据库和 MT7925 自管理监管逻辑，不手工清除 NO_IR 或绕过功率限制。生成文件不能成为第二份手工配置来源。本次设备实际位于中国，输入为 CN；公共运行配置使用 `frequency = 5745`，选择 149 主信道及允许的 80 MHz 带宽，发现仍用 2437 MHz。全 32 数据槽不额外预留发现槽，协议 DW 仍由固件调度。
+
+Q8B 执行 `install-platform --platform dragon-q8b` 后，wirelessd 依赖板级性能单元。该单元将 CPU governor 设为 `performance`，并加载 `platforms/dragon-q8b/tcp.conf` 的 TCP 自动发送／接收内存上限 32 MiB；初始内存保持原值。这是整机策略，作用于本机 TCP 和 CPU，增加空闲功耗，热限制仍由内核执行；停止无线服务不恢复这些设置。更改需修改对应源文件并重新安装、重启性能单元。安装保留 wirelessd / fileserver 原启用状态。
+
+iPad Pro 的设备标识与签名信息保存在本机私有输入中，不进入 Git，公共客户端和 AwareLab 使用既有入口。`testCommonClient` 的 `AWARE_CLIENT_STREAMS` 仅接受 1 或 4，省略为 1；`AWARE_CLIENT_UPLOAD_FILE` 为非空本地文件名匹配字符串，省略为 `upload-probe`。`speed` 下载既有 `speed-1g.bin`，`wait_download` 仅等待正在进行的下载，保留 App 计时及连接；下载完成事件终止等待，900 秒只是失败兜底。数据计时与协议实现不因观察器改变。实测结果见[验收结论](acceptance.md#mt7925--dragon-q8b)。

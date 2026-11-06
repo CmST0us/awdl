@@ -92,9 +92,9 @@ pub fn installation(
     let directory = root.join("hardware/rtl8852be");
     let country = cfg
         .install
-        .rtl8852be
         .country
         .as_deref()
+        .or(cfg.install.rtl8852be.country.as_deref())
         .context("RTL 安装需要明确 country 或 --country")?;
     ensure!(
         country.len() == 2 && country.bytes().all(|b| b.is_ascii_uppercase()),

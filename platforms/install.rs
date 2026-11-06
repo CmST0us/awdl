@@ -9,13 +9,31 @@ pub fn install(root: &Path, cfg: &Settings) -> Result<()> {
         .as_deref()
         .or(cfg.install.platform.as_deref())
         .context("请明确 --platform")?;
-    ensure!(name == "rock5b", "未知平台 {name}");
-    copy(
-        &root.join("platforms/rock5b/usbmoded-shutdown.conf"),
-        &cfg.dest
-            .join("etc/systemd/system/usbmoded.service.d/shutdown.conf"),
-        0o644,
-    )?;
+    ensure!(["rock5b", "dragon-q8b"].contains(&name), "未知平台 {name}");
+    let entries: &[(&str, &str)] = match name {
+        "dragon-q8b" => &[
+            (
+                "wifi-aware-performance.service",
+                "etc/systemd/system/wifi-aware-performance.service",
+            ),
+            (
+                "performance.conf",
+                "etc/systemd/system/wirelessd.service.d/q8b-performance.conf",
+            ),
+            ("tcp.conf", "etc/sysctl.d/90-wifi-aware-q8b.conf"),
+        ],
+        _ => &[(
+            "usbmoded-shutdown.conf",
+            "etc/systemd/system/usbmoded.service.d/shutdown.conf",
+        )],
+    };
+    for (source, target) in entries {
+        copy(
+            &root.join("platforms").join(name).join(source),
+            &cfg.dest.join(target),
+            0o644,
+        )?;
+    }
     if cfg.dest == Path::new("/") {
         run(Command::new("systemctl").arg("daemon-reload"))?;
     }

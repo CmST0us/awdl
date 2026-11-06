@@ -52,6 +52,9 @@ pub struct Install {
     pub pci: String,
     pub rtl8852be: rtl8852be::Options,
     pub be200: be200::Options,
+    pub mt7925: mt7925::Options,
+    #[serde(skip)]
+    pub country: Option<String>,
 }
 
 impl Install {
@@ -66,7 +69,7 @@ impl Install {
 
     pub fn option(&mut self, key: &str, value: &str) -> bool {
         if key == "--country" {
-            self.rtl8852be.country = Some(value.into());
+            self.country = Some(value.into());
             true
         } else {
             false

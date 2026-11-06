@@ -1,5 +1,6 @@
 use crate::{run, settings::Settings};
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
+use serde::Deserialize;
 use serde_json::Value;
 use std::{
     fs,
@@ -16,6 +17,12 @@ pub const MODULES: &[&str] = &[
     "mt7925-common",
     "mt7925e",
 ];
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Options {
+    pub country: Option<String>,
+}
 
 pub fn prepare(root: &Path, output: &Path, archive: Option<&Path>) -> Result<PathBuf> {
     ensure!(
@@ -54,11 +61,35 @@ pub fn build(
 }
 
 pub fn installation(root: &Path, cfg: &Settings) -> Result<Vec<(PathBuf, PathBuf)>> {
+    let country = cfg
+        .install
+        .country
+        .as_deref()
+        .or(cfg.install.mt7925.country.as_deref())
+        .context("MT7925 安装需要明确 [mt7925].country 或 --country")?;
+    ensure!(
+        country.len() == 2 && country.bytes().all(|b| b.is_ascii_uppercase()),
+        "country 必须为两个大写字母"
+    );
     let directory = root.join(".build/dependencies/mt7925/firmware");
     let manifest: Value = serde_json::from_str(&fs::read_to_string(
         root.join("hardware/mt7925/firmware/source.json"),
     )?)?;
-    let mut result = vec![];
+    let generated = root
+        .join(".build/config")
+        .join(&cfg.target)
+        .join("mt7925-regulatory.conf");
+    fs::create_dir_all(generated.parent().unwrap())?;
+    fs::write(
+        &generated,
+        fs::read_to_string(root.join("hardware/mt7925/regulatory.conf"))?
+            .replace("@COUNTRY@", country),
+    )?;
+    let mut result = vec![(
+        generated,
+        cfg.dest
+            .join("etc/systemd/system/wirelessd.service.d/mt7925-regulatory.conf"),
+    )];
     for entry in manifest["files"].as_array().unwrap() {
         let name = entry["file"].as_str().unwrap();
         let file = directory.join(name);
