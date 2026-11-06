@@ -1,0 +1,98 @@
+Subject: wifi: mt76: mt7925: retain negotiated NAN data peer capabilities
+
+mac80211 copies HT/VHT capabilities and aggregation limits from the NMI
+peer before adding the NDI station. The NAN seed helper overwrites those
+with the local radio's capabilities, advertising unsupported receive
+modes to firmware and reducing the peer's minimum MPDU start spacing.
+
+On iPad Pro this changes AMPDU density from 6 (8 us) to 3 (2 us),
+adds RX STBC and 160 MHz, and changes the peer HT A-MSDU ceiling.
+Keep the negotiated capabilities. Derive NSS and bandwidth from them,
+bounded by the radio and the existing firmware VHT80 ceiling, while
+retaining the BSS phymode/RLM setup before the station update.
+
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/nan.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/nan.c
+@@ -269,18 +269,42 @@
+ mt7925_nan_seed_link_sta(struct mt792x_dev *dev,
+ 			 struct ieee80211_link_sta *link_sta)
+ {
+-	struct ieee80211_supported_band *sband_2g, *sband_5g;
+ 	struct ieee80211_chanctx_conf *nan_ctx = NULL;
+ 	struct ieee80211_vif *nan_vif = dev->nan_vif;
+-
+-	/* Fill HT cap from 2G sband */
+-	sband_2g = dev->mphy.hw->wiphy->bands[NL80211_BAND_2GHZ];
+-	sband_5g = dev->mphy.hw->wiphy->bands[NL80211_BAND_5GHZ];
+-	if (sband_2g)
+-		link_sta->ht_cap = sband_2g->ht_cap;
+-
++	int i;
++
++	/* mac80211 has copied the negotiated NMI peer capabilities to this
++	 * NDI station. Never replace them with our own sband capabilities:
++	 * doing so loses the peer's MPDU density, STBC and MCS restrictions.
++	 * NAN skips mac80211's association-based NSS/BW initialization, so
++	 * derive only those fields here, within this radio's capability.
++	 */
+ 	link_sta->sta->wme = true;
+-	link_sta->rx_nss = hweight8(dev->mphy.antenna_mask);
++	link_sta->rx_nss = 1;
++	if (link_sta->vht_cap.vht_supported) {
++		u16 map = le16_to_cpu(link_sta->vht_cap.vht_mcs.rx_mcs_map);
++
++		for (i = 7; i >= 0; i--) {
++			if (((map >> (2 * i)) & 3) != IEEE80211_VHT_MCS_NOT_SUPPORTED) {
++				link_sta->rx_nss = i + 1;
++				break;
++			}
++		}
++		/* The firmware NAN PHY supports at most VHT80. */
++		link_sta->bandwidth = IEEE80211_STA_RX_BW_80;
++	} else {
++		for (i = 3; i >= 0; i--) {
++			if (link_sta->ht_cap.mcs.rx_mask[i]) {
++				link_sta->rx_nss = i + 1;
++				break;
++			}
++		}
++		link_sta->bandwidth =
++			link_sta->ht_cap.cap & IEEE80211_HT_CAP_SUP_WIDTH_20_40 ?
++			IEEE80211_STA_RX_BW_40 : IEEE80211_STA_RX_BW_20;
++	}
++	link_sta->rx_nss = min_t(u8, link_sta->rx_nss,
++				hweight8(dev->mphy.antenna_mask));
+ 
+ 	/* Get chanctx from NAN schedule.
+ 	 * Prefer 5G committed slot for wider BW (VHT), fallback
+@@ -289,7 +313,6 @@
+ 	if (nan_vif) {
+ 		struct ieee80211_nan_channel **slots =
+ 			nan_vif->cfg.nan_sched.schedule;
+-		int i;
+ 
+ 		for (i = 0; i < CFG80211_NAN_SCHED_NUM_TIME_SLOTS; i++) {
+ 			struct ieee80211_chanctx_conf *ctx;
+@@ -307,22 +330,6 @@
+ 			}
+ 		}
+ 	}
+-
+-	/* Capability describes what the device can do and must not be
+-	 * filtered by the current schedule - firmware gates the VHT rate
+-	 * mode per the data schedule and re-derives it on schedule
+-	 * change, which only works if the caps are present up front.
+-	 */
+-	if (sband_5g)
+-		link_sta->vht_cap = sband_5g->vht_cap;
+-
+-	/* Bandwidth here is the capability ceiling, not the operating
+-	 * width - the per-slot operating bandwidth follows the current
+-	 * slot channel via the firmware RLM sync, so deriving it from
+-	 * the schedule at STA-add time would cap a later 5 GHz schedule
+-	 * at the bring-up width.
+-	 */
+-	link_sta->bandwidth = IEEE80211_STA_RX_BW_80;
+ 
+ 	return nan_ctx;
+ }

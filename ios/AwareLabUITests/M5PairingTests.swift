@@ -682,7 +682,10 @@ final class M5PairingTests: XCTestCase {
                     client.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "下载连接数")).firstMatch.tap()
                     client.buttons["4 路自适应"].tap()
                 }
-                let payload = client.buttons.containing(.staticText, identifier: "speed-1g.bin").firstMatch
+                // 远端下载文件名，非空字符串；省略时使用 speed-1g.bin。
+                let downloadName = ProcessInfo.processInfo.environment["AWARE_CLIENT_DOWNLOAD_FILE"] ?? "speed-1g.bin"
+                XCTAssertFalse(downloadName.isEmpty)
+                let payload = client.buttons.containing(.staticText, identifier: downloadName).firstMatch
                 XCTAssertTrue(payload.exists)
                 payload.tap()
                 // 完成事件结束传输；900 秒仅为大文件失败兜底。

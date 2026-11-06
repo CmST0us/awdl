@@ -430,4 +430,4 @@ MT7925 驱动安装要求 `config/local/install.toml` 的 `[mt7925].country`，�
 
 Q8B 执行 `install-platform --platform dragon-q8b` 后，wirelessd 依赖板级性能单元。该单元将 CPU governor 设为 `performance`，并加载 `platforms/dragon-q8b/tcp.conf` 的 TCP 自动发送／接收内存上限 32 MiB；初始内存保持原值。这是整机策略，作用于本机 TCP 和 CPU，增加空闲功耗，热限制仍由内核执行；停止无线服务不恢复这些设置。更改需修改对应源文件并重新安装、重启性能单元。安装保留 wirelessd / fileserver 原启用状态。
 
-iPad Pro 的设备标识与签名信息保存在本机私有输入中，不进入 Git，公共客户端和 AwareLab 使用既有入口。`testCommonClient` 的 `AWARE_CLIENT_STREAMS` 仅接受 1 或 4，省略为 1；`AWARE_CLIENT_UPLOAD_FILE` 为非空本地文件名匹配字符串，省略为 `upload-probe`。`speed` 下载既有 `speed-1g.bin`，`wait_download` 仅等待正在进行的下载，保留 App 计时及连接；下载完成事件终止等待，900 秒只是失败兜底。数据计时与协议实现不因观察器改变。实测结果见[验收结论](acceptance.md#mt7925--dragon-q8b)。
+iPad Pro 的设备标识与签名信息保存在本机私有输入中，不进入 Git，公共客户端和 AwareLab 使用既有入口。`testCommonClient` 的 `AWARE_CLIENT_STREAMS` 仅接受 1 或 4，省略为 1；`AWARE_CLIENT_UPLOAD_FILE` 为非空本地文件名匹配字符串，省略为 `upload-probe`。`speed` 的 `AWARE_CLIENT_DOWNLOAD_FILE` 为既有远端文件名，非空字符串，省略为 `speed-1g.bin`；不创建或修改板端文件。`wait_download` 仅等待正在进行的下载，保留 App 计时及连接；下载完成事件终止等待，900 秒只是失败兜底。数据计时与协议实现不因观察器改变。实测结果见[验收结论](acceptance.md#mt7925--dragon-q8b)。
