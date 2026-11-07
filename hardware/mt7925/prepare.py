@@ -85,7 +85,7 @@ def prepare_modules(destination):
     for header in (source / 'include/linux').glob('ieee80211*.h'):
         shutil.copy2(header, destination / 'include/linux' / header.name)
     for name in ['include/linux/ieee80211.h', 'include/net/cfg80211.h',
-                 'include/net/mac80211.h', 'include/net/cfg80211-wext.h',
+                 'include/net/mac80211.h', 'include/net/awdl.h', 'include/net/cfg80211-wext.h',
                  'include/net/ieee80211_radiotap.h', 'include/uapi/linux/nl80211.h']:
         target = destination / name
         target.parent.mkdir(parents=True, exist_ok=True)

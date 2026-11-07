@@ -1,6 +1,6 @@
-# MT7925 原生 NAN 接入
+# MT7925 原生 NAN / AWDL 接入
 
-MT7925 PCIe（`14c3:7925`）接入公共 Rust `wirelessd`、hostap 的 `nl80211` 后端和公共文件服务，不复制用户态协议栈。已完成 Q8B 的模块构建、安装、加载及 iPad Pro PIN 配对；正式模块与正常公共 hostap 已通过缓存身份认证、安全 NDP、IPv6 双向文件和服务重启后重连。
+MT7925 PCIe（`14c3:7925`）接入公共 Rust `wirelessd`、hostap 的 `nl80211` 后端和公共文件服务，不复制用户态协议栈。已完成 Q8B 的模块构建、安装、加载及 iPad Pro PIN 配对；正式模块与正常公共 hostap 已通过缓存身份认证、安全 NDP、IPv6 双向文件和服务重启后重连。原生 AWDL 复用公共控制栈与 AirDrop 应用，已通过同一 iPad Pro 的系统 AirDrop 双向 1 GiB 随机文件验收。
 
 ## 固定来源
 
@@ -28,6 +28,8 @@ NAN_DATA 使用原生 802.11 数据帧和 A-MPDU 聚合。曾将 NAN_DATA 放入
 
 补丁 `0029` 保留 mac80211 从 NMI 复制给 NDI 的对端 HT / VHT 能力，仅推导 NAN 缺少的 NSS 与带宽上限。原实现用本机能力覆盖 iPad 的最小 MPDU 间距、STBC 和带宽限制；实机修正后 NMI / NDI 能力一致。当前 NAN PHY 使用 HT / VHT，不能将网卡的 HE / EHT 常规联网能力直接视为 NAN 已支持。
 
+补丁 `0030` 实现 mac80211 的 AWDL 原生封装、接收解封装、快路径与窗口队列；`0031` 接入 MT7925 BSS / STA、CNM 信道确认、固件原始帧上报、真实 absence 事件和 TX 完成排空。公共控制实现位于 `hardware/nl80211-awdl`，不会复制 Rust 协议或 AirDrop 服务。AWDL 数据关闭不理解私有封装的校验和／GSO 卸载，保留 A-MPDU；正常退出失败保留实际资源所有权。
+
 ## 构建与安装
 
 需要 Python 3.12+、curl、patch、Linux 内核构建依赖及与运行内核一致的 headers / 配置；检查压缩固件另需 zstd。展开前至少保留 8 GiB 可用空间。板端构建选择见 [Dragon Q8B](../../platforms/dragon-q8b/README.md)。
@@ -52,7 +54,7 @@ scripts/aware-build install-fileserver --destdir "$PWD/.build/stage-mt7925"
 
 安装时必须按实际地区提供 `[mt7925].country` 或 `--country`，上述 CN 仅适用于中国。Q8B 的 CPU 与 TCP 性能策略使用 `install-platform --platform dragon-q8b` 独立安装。
 
-`radio.rs` 只接管空闲 managed 接口，进入 NAN 后删除引导接口，运行时仅允许所选 PHY 的 NAN / NAN_DATA。`radio.toml` 选择 2437 MHz 单频发现，数据频率由公共运行配置决定。实际地区确认为中国后，安装输入使用 CN，通过服务启动前的 `iw reg set CN` 提交监管请求；`/etc/wirelessd/config.toml` 使用 `frequency = 5745`，在允许的 149 信道选择 80 MHz。MT7925 未实现 AWDL / AirDrop，相关申请返回明确错误。
+`radio.rs` 只接管空闲 managed 接口，进入 NAN 后删除引导接口，运行时仅允许所选 PHY 的 NAN / NAN_DATA。`radio.toml` 选择 2437 MHz 单频发现，数据频率由公共运行配置决定。实际地区确认为中国后，安装输入使用 CN，通过服务启动前的 `iw reg set CN` 提交监管请求；`/etc/wirelessd/config.toml` 使用 `frequency = 5745`，在允许的 149 信道选择 80 MHz。AWDL 复用相同所有者和公共 AirDrop 服务，数据主信道仅接受 149 / 161；其他频率明确拒绝 AWDL 申请，NAN 保持运行。
 
 ## 真机验证与限制
 
@@ -107,6 +109,18 @@ BE200 参考值来自其已验收的 Rust Wi-Fi Aware 记录（原仓库 `docs/a
 正式单连接下载的拥塞窗口中位数为 1,925 MSS，末段采样累计重传 2,856 字节；四连接末段采样合计重传 4,108 字节。最高采样 PHY 速率为 866.7 Mbit/s。验收期间没有新增固件复位、断言、Oops 或内核 WARNING；原有缺少 NDC ID 的 TX GTK 不支持提示仍存在，组播不在本轮范围内。
 
 既有配对、身份与原共享文件保留。正常 hostap 和正式模块继续提供服务，wirelessd / fileserver 保持 active，开机状态仍为 disabled。长期可靠性、AP 并发及多对端传输尚未验收。
+
+## 原生 AirDrop 验收
+
+2026-11-07，完整固定补丁链包含 `0030` / `0031`，七模块重建、暂存安装及实机加载通过。运行与安装的 `mt7925_common` build-id 为 `06f9bb9d49aba6deb9a4764bcdf86c641afe057a`；公共 ARM64 wirelessd、AirDrop、AWDL 库及三个硬件控制后端构建通过，安装程序与暂存产物一致。固件保持上述固定版本和原始摘要。
+
+Q8B / iPad Pro 使用 CN、149 / VHT80 双流，采样最高 866.7 Mbit/s。1 GiB 随机文件发送均速 37.72 MB/s，接收 35.87 MB/s；接收取消后完整重传为 39.33 MB/s。iPad 系统确认接收和发送，板端对回传文件逐字节比较并刷盘，往返内容一致。接收 72,351,744 字节后取消，0.231 秒完成释放，未完成文件与 `awdl0` 均已清理。详细口径见 [MT7925 原生 AirDrop](../../docs/acceptance.md#mt7925-原生-airdrop)。
+
+AirDrop 退出后不重启服务或驱动，既有 Wi-Fi Aware ID 2 完成缓存认证、安全 NDP 和 1 MiB 下载，App 容器内容摘要一致。服务保持运行，原有配对及共享文件保留。
+
+AWDL 使用独立原生 NAN_DATA，固件 BSS 仅提供信道、站点、ACK 与聚合资源，不生成普通 AP 信标。会话启用固件原始收帧上报以接收 Apple Action 帧，退出后恢复；无需 monitor / TAP。数据使用 VHT 和 A-MPDU，不启用私有封装不支持的硬件 A-MSDU、校验和与 GSO 卸载。BLE 使用专用关闭适配器的 `HCI_CHANNEL_USER`，部署须明确配置 BlueZ 自动上电策略，见 [配置](../../docs/configuration.md#awdl-与-airdrop-配置)。
+
+当前只支持一个 AWDL 数据对端。161 同块跟随、HE / EHT、AP 并发、活动 NDP 与 AWDL 并发传输、强制故障恢复和长期可靠性尚未验收。本轮没有对 BE200 / RTL 重新进行真机回归；共享代码仅完成对应构建。
 
 ## 来源清单字段
 

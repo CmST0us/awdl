@@ -9,7 +9,7 @@ mod mt7925;
 mod rtl8852be;
 
 use crate::{settings::Settings, source};
-use anyhow::{Result, bail, ensure};
+use anyhow::{Result, ensure};
 use serde::Deserialize;
 use std::{
     path::{Path, PathBuf},
@@ -179,6 +179,7 @@ pub const OBSOLETE_USERSPACE_FILES: &[&str] = &[
 
 pub fn build_awdl(root: &Path, cfg: &Settings) -> Result<()> {
     be200::build_awdl(root, cfg)?;
+    build_native_awdl(root, cfg, "mt7925")?;
     rtl8852be::build_awdl(root, cfg)
 }
 
@@ -186,13 +187,31 @@ pub fn awdl_installation(root: &Path, cfg: &Settings) -> Result<Vec<(PathBuf, Pa
     Ok(match cfg.hardware()? {
         Hardware::Be200 => be200::awdl_installation(root, cfg),
         Hardware::Rtl8852be => rtl8852be::awdl_installation(root, cfg),
-        Hardware::Mt7925 => bail!("MT7925 当前仅接入 Wi-Fi Aware，不支持 AWDL"),
+        Hardware::Mt7925 => vec![(
+            cfg.user_dir(root).join("aware-awdl/mt7925-awdl"),
+            cfg.dest.join("usr/local/libexec/wirelessd/mt7925-awdl"),
+        )],
     })
 }
 pub fn awdl_service(cfg: &Settings) -> Result<&'static str> {
     Ok(match cfg.hardware()? {
-        Hardware::Be200 => "wirelessd.service",
+        Hardware::Be200 | Hardware::Mt7925 => "wirelessd.service",
         Hardware::Rtl8852be => "wirelessd-awdl.service",
-        Hardware::Mt7925 => bail!("MT7925 当前仅接入 Wi-Fi Aware，不支持 AWDL"),
     })
+}
+
+fn build_native_awdl(root: &Path, cfg: &Settings, hardware: &str) -> Result<()> {
+    let headers = cfg.user_dir(root).join("hostap/src/drivers");
+    ensure!(
+        headers.join("nl80211_copy.h").is_file(),
+        "请先 prepare-source hostap"
+    );
+    crate::run(Command::new(&cfg.build.c_compiler)
+        .current_dir(root)
+        .args(["-O2", "-Wall", "-Wextra", "-Werror", "-I"])
+        .arg(headers)
+        .arg(root.join(format!("hardware/{hardware}/awdl/main.c")))
+        .arg(cfg.user_dir(root).join("aware-awdl/libaware_awdl.a"))
+        .args(["-lpthread", "-ldl", "-lm", "-o"])
+        .arg(cfg.user_dir(root).join(format!("aware-awdl/{hardware}-awdl"))))
 }

@@ -21,7 +21,17 @@ final class AirDropTests: XCTestCase {
         try tap(settings, labels: ["Wi-Fi", "无线局域网"], timeout: stepTimeout)
         capture(settings, name: "send-wifi")
         files.launch()
+        // A received file can leave Quick Look and its share popover open.
+        // Dismiss those surfaces before querying the underlying browser.
+        let popover = files.otherElements["PopoverDismissRegion"]
+        if popover.exists { popover.tap() }
+        let previewClose = files.buttons["QLOverlayDoneButtonAccessibilityIdentifier"]
+        if previewClose.exists {
+            previewClose.tap()
+            XCTAssertTrue(previewClose.waitForNonExistence(timeout: stepTimeout))
+        }
         if files.buttons["完成"].exists { files.buttons["完成"].tap() }
+        capture(files, name: "send-files-browser")
         let search = files.searchFields.firstMatch
         if !search.exists {
             try tap(files, labels: ["Search", "搜索"], timeout: stepTimeout)
@@ -31,14 +41,15 @@ final class AirDropTests: XCTestCase {
         if let value = search.value as? String, !value.isEmpty, value != search.placeholderValue {
             search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count))
         }
-        search.typeText(filename)
+        search.typeText(filename + "\n")
         let matches = files.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", filename + ","))
         XCTAssertTrue(matches.firstMatch.waitForExistence(timeout: timeout), "没有找到待发送文件：\(filename)")
         // Files keeps the underlying directory in its accessibility tree;
         // the search result is the last matching cell above that directory.
         let file = try XCTUnwrap(matches.allElementsBoundByIndex.last)
         capture(files, name: "send-file-selected")
-        files.buttons["OverflowBarButtonItem"].tap()
+        let select = files.buttons.matching(NSPredicate(format: "label IN %@", ["Select", "选择"])).firstMatch
+        if !select.exists { files.buttons["OverflowBarButtonItem"].tap() }
         try tap(files, labels: ["Select", "选择"], timeout: stepTimeout)
         file.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.5)).tap()
         let share = files.buttons.matching(NSPredicate(format: "label IN %@", ["Share", "共享"]))

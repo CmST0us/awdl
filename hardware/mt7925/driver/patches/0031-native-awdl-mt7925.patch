@@ -1,0 +1,687 @@
+Subject: [PATCH] MT7925 原生 AWDL 信道确认、真实可用窗口与在途预算
+
+--- a/drivers/net/wireless/mediatek/mt76/mt76.h
++++ b/drivers/net/wireless/mediatek/mt76/mt76.h
+@@ -443,6 +443,7 @@
+ };
+ 
+ struct mt76_txwi_cache {
++	u32 awdl_bytes;
+ 	struct list_head list;
+ 	dma_addr_t dma_addr;
+ 
+@@ -988,6 +989,9 @@
+ 
+ 	u64 vif_mask;
+ 
++	atomic_t awdl_pending_bytes;
++	bool awdl_absent;
++	wait_queue_head_t awdl_drain;
+ 	struct mt76_wcid global_wcid;
+ 	struct mt76_wcid __rcu *wcid[MT76_N_WCIDS];
+ 	struct list_head wcid_list;
+--- a/drivers/net/wireless/mediatek/mt76/mt76_connac_mcu.c
++++ b/drivers/net/wireless/mediatek/mt76/mt76_connac_mcu.c
+@@ -467,7 +467,8 @@
+ 		break;
+ 	case NL80211_IFTYPE_NAN:
+ 	case NL80211_IFTYPE_NAN_DATA:
+-		basic->conn_type = cpu_to_le32(CONNECTION_NAN);
++		basic->conn_type = cpu_to_le32(vif->nan_data_awdl ?
++			CONNECTION_INFRA_STA : CONNECTION_NAN);
+ 		break;
+ 	default:
+ 		WARN_ON(1);
+@@ -1266,8 +1267,9 @@
+ 		break;
+ 	case NL80211_IFTYPE_NAN:
+ 	case NL80211_IFTYPE_NAN_DATA:
+-		basic_req.basic.conn_type = cpu_to_le32(CONNECTION_NAN);
+-		basic_req.basic.conn_state = !enable;
++		basic_req.basic.conn_type = cpu_to_le32(bss_conf->vif->nan_data_awdl ?
++			CONNECTION_INFRA_AP : CONNECTION_NAN);
++		basic_req.basic.conn_state = bss_conf->vif->nan_data_awdl ? 1 : !enable;
+ 		break;
+ 	default:
+ 		WARN_ON(1);
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/Makefile
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/Makefile
+@@ -4,7 +4,7 @@
+ obj-$(CONFIG_MT7925E) += mt7925e.o
+ obj-$(CONFIG_MT7925U) += mt7925u.o
+ 
+-mt7925-common-y := mac.o mcu.o regd.o main.o init.o debugfs.o nan.o
++mt7925-common-y := mac.o mcu.o regd.o main.o init.o debugfs.o nan.o awdl.o
+ mt7925-common-$(CONFIG_NL80211_TESTMODE) += testmode.o
+ mt7925e-y := pci.o pci_mac.o pci_mcu.o
+ mt7925u-y := usb.o
+--- /dev/null
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/awdl.c
+@@ -0,0 +1,351 @@
++// SPDX-License-Identifier: BSD-3-Clause-Clear
++/* Native AWDL on an owned NAN_DATA netdev; IP remains in mac80211. */
++#include <linux/unaligned.h>
++#include <net/awdl.h>
++#include "mt7925.h"
++#include "mcu.h"
++
++#define MT7925_AWDL_OUI 0x000ce7
++#define MT7925_AWDL_CMD 0x4157444c
++
++static void mt7925_awdl_ndp_iter(void *data, struct ieee80211_sta *sta)
++{
++	struct mt792x_sta *msta = (void *)sta->drv_priv;
++	struct ieee80211_vif *vif = container_of((void *)msta->vif, struct ieee80211_vif, drv_priv);
++	if (vif->type == NL80211_IFTYPE_NAN_DATA && !vif->nan_data_awdl)
++		*(bool *)data = true;
++}
++
++static u8 mt7925_awdl_home(struct mt792x_dev *dev)
++{
++	struct ieee80211_nan_channel **slots;
++	int i;
++
++	if (!dev->nan_vif)
++		return 0;
++	slots = dev->nan_vif->cfg.nan_sched.schedule;
++	for (i = 0; i < CFG80211_NAN_SCHED_NUM_TIME_SLOTS; i++) {
++		if (slots[i] && !IS_ERR(slots[i]) && slots[i]->chanctx_conf &&
++		    slots[i]->chanctx_conf->def.chan->band == NL80211_BAND_5GHZ)
++			return slots[i]->chanctx_conf->def.chan->hw_value;
++	}
++	return 0;
++}
++
++/* CNM reports committed BSS channel state. A running firmware AP BSS is
++ * permanent until BSS deactivation; it does not need a temporary ROC lease.
++ * Confirm the BSS bitmap, bandwidth and primary channel in the query reply. */
++static int mt7925_awdl_confirm_channel(struct mt792x_dev *dev, u8 channel)
++{
++	struct mt792x_vif *mvif = (void *)dev->awdl_vif->drv_priv;
++	const u8 request[] = {0, 0, 0, 0, 2, 0, 4, 0};
++	struct sk_buff *skb;
++	const u8 *p;
++	size_t left;
++	bool found = false;
++	int ret;
++
++	ret = mt76_mcu_send_and_get_msg(&dev->mt76, MCU_WM_UNI_CMD_QUERY(ROC),
++		request, sizeof(request), true, &skb);
++	if (ret)
++		return ret;
++	if (skb->len < 4) {
++		ret = -EPROTO;
++		goto out;
++	}
++	p = skb->data + 4;
++	left = skb->len - 4;
++	ret = -ENOLINK;
++	while (left >= 4) {
++		u16 tag = get_unaligned_le16(p);
++		u16 len = get_unaligned_le16(p + 2);
++		unsigned int i;
++
++		if (len < 4 || len > left) {
++			ret = -EPROTO;
++			goto out;
++		}
++		if (tag == 1 && len >= 8 && len >= 8 + p[6] * 8) {
++			for (i = 0; i < p[6]; i++) {
++				const u8 *ch = p + 8 + i * 8;
++				if (ch[0] == channel && ch[1] == CMD_CBW_80MHZ &&
++				    ch[3] == 155 &&
++				    (get_unaligned_le16(ch + 6) & BIT(mvif->bss_conf.mt76.idx))) {
++					mvif->bss_conf.mt76.band_idx = p[4];
++					found = true;
++				}
++			}
++		}
++		p += len;
++		left -= len;
++	}
++	if (!left && found)
++		ret = 0;
++out:
++	dev_kfree_skb(skb);
++	return ret;
++}
++
++static int mt7925_awdl_channel(struct mt792x_dev *dev, u8 channel)
++{
++	struct mt792x_vif *mvif = (void *)dev->awdl_vif->drv_priv;
++	struct ieee80211_channel *chan;
++	int ret;
++	bool ndp = false;
++
++	ieee80211_iterate_stations_atomic(dev->mt76.hw, mt7925_awdl_ndp_iter, &ndp);
++	if (ndp && channel != mt7925_awdl_home(dev))
++		return -EBUSY;
++	if (channel != 149 && channel != 161)
++		return -EINVAL;
++	chan = ieee80211_get_channel(dev->mt76.hw->wiphy, 5000 + 5 * channel);
++	if (!chan || chan->flags & (IEEE80211_CHAN_DISABLED | IEEE80211_CHAN_NO_IR))
++		return -EPERM;
++	if (dev->awdl_channel == channel)
++		return 0;
++	if (!wait_event_timeout(dev->mt76.awdl_drain,
++		!atomic_read(&dev->mt76.awdl_pending_bytes), HZ / 5))
++		return -ETIMEDOUT;
++	dev->awdl_ctx->def.chan = chan;
++	ret = mt7925_mcu_set_chctx(&dev->mphy, &mvif->bss_conf.mt76,
++		&dev->awdl_vif->bss_conf, dev->awdl_ctx);
++	if (!ret)
++		ret = mt7925_awdl_confirm_channel(dev, channel);
++	if (!ret)
++		dev->awdl_channel = channel;
++	return ret;
++}
++
++static int mt7925_awdl_release(struct mt792x_dev *dev)
++{
++	struct ieee80211_vif *vif = dev->awdl_vif;
++	int ret;
++
++	WRITE_ONCE(vif->awdl_closes_ns, 0);
++	if (!wait_event_timeout(dev->mt76.awdl_drain,
++		!atomic_read(&dev->mt76.awdl_pending_bytes), HZ))
++		return -ETIMEDOUT;
++	if (dev->awdl_bss_held) {
++		ret = mt7925_mcu_set_bss_pm(dev, &vif->bss_conf, false);
++		if (ret)
++			return ret;
++		ret = mt7925_mcu_add_bss_info(&dev->phy, dev->awdl_ctx,
++			&vif->bss_conf, NULL, false);
++		if (ret)
++			return ret;
++		dev->awdl_bss_held = false;
++		dev->awdl_channel = 0;
++	}
++	ret = mt7925_mcu_set_sniffer(dev, vif, false);
++	if (ret)
++		return ret;
++	return mt7925_mcu_set_rxfilter(dev, dev->phy.rxfilter, 0, 0);
++}
++
++int mt7925_awdl_start(struct mt792x_dev *dev, struct ieee80211_vif *vif)
++{
++	struct mt792x_vif *mvif = (void *)vif->drv_priv;
++	u8 home = mt7925_awdl_home(dev);
++	int ret;
++
++	if (home != 149 && home != 161)
++		return -EINVAL;
++	if (dev->awdl_vif)
++		return -EBUSY;
++	dev->awdl_ctx = kzalloc(sizeof(*dev->awdl_ctx), GFP_KERNEL);
++	if (!dev->awdl_ctx)
++		return -ENOMEM;
++	WRITE_ONCE(dev->mt76.awdl_absent, false);
++	WRITE_ONCE(dev->awdl_absent_since_ns, 0);
++	WRITE_ONCE(dev->awdl_vif, vif);
++	mvif->bss_conf.mt76.ctx = dev->awdl_ctx;
++	dev->awdl_ctx->def.chan = ieee80211_get_channel(dev->mt76.hw->wiphy, 5000 + 5 * home);
++	dev->awdl_ctx->def.width = NL80211_CHAN_WIDTH_80;
++	dev->awdl_ctx->def.center_freq1 = 5775;
++	mvif->bss_conf.mt76.basic_rates_idx = MT792x_BASIC_RATES_TBL + 4;
++	vif->bss_conf.qos = true;
++	vif->bss_conf.beacon_int = 100;
++	vif->bss_conf.dtim_period = 1;
++	dev->awdl_bss_held = true;
++	ret = mt7925_mcu_add_bss_info(&dev->phy, dev->awdl_ctx,
++					    &vif->bss_conf, NULL, true);
++	if (!ret)
++		ret = mt7925_mcu_set_bss_pm(dev, &vif->bss_conf, true);
++	if (!ret)
++		ret = mt7925_mcu_sta_update(dev, NULL, vif, &mvif->sta.deflink,
++				true, MT76_STA_INFO_STATE_NONE, NULL);
++	if (!ret)
++		ret = mt7925_awdl_channel(dev, home);
++	/* The firmware otherwise consumes vendor Action frames even when
++	 * OTHER_BSS is accepted. Enable raw RX delivery while retaining the
++	 * native BSS, station ACK/aggregation and mac80211 data path. */
++	if (!ret)
++		ret = mt7925_mcu_set_sniffer(dev, vif, true);
++	if (!ret)
++		ret = mt7925_mcu_set_rxfilter(dev, dev->phy.rxfilter |
++					    MT7925_FILTER_OTHER_BSS, 0, 0);
++	if (ret) {
++		int cleanup = mt7925_awdl_release(dev);
++		if (cleanup) {
++			dev_err(dev->mt76.dev, "AWDL startup rollback failed: %d; resetting hardware\n", cleanup);
++			mt792x_reset(&dev->mt76);
++		}
++		WRITE_ONCE(dev->awdl_vif, NULL);
++		mvif->bss_conf.mt76.ctx = NULL;
++		kfree(dev->awdl_ctx);
++		dev->awdl_ctx = NULL;
++	}
++	return ret;
++}
++
++void mt7925_awdl_stop(struct mt792x_dev *dev, struct ieee80211_vif *vif)
++{
++	struct mt792x_vif *mvif = (void *)vif->drv_priv;
++	int ret;
++
++	if (dev->awdl_vif != vif)
++		return;
++	ret = mt7925_awdl_release(dev);
++	if (ret) {
++		dev_err(dev->mt76.dev, "AWDL forced interface removal, release=%d; resetting hardware\n", ret);
++		mt792x_reset(&dev->mt76);
++	}
++	WRITE_ONCE(dev->awdl_vif, NULL);
++	synchronize_net();
++	mvif->bss_conf.mt76.ctx = NULL;
++	kfree(dev->awdl_ctx);
++	dev->awdl_ctx = NULL;
++}
++
++static int mt7925_awdl_command(struct wiphy *wiphy, struct wireless_dev *wdev,
++			      const void *data, int len)
++{
++	struct ieee80211_hw *hw = wiphy_to_ieee80211_hw(wiphy);
++	struct mt792x_dev *dev = mt792x_hw_dev(hw);
++	struct ieee80211_vif *vif = wdev_to_ieee80211_vif(wdev);
++	const u8 *cmd = data;
++	int ret;
++
++	if (!len)
++		return -EINVAL;
++	if (len == 1 && cmd[0] == 1)
++		return ieee80211_nan_data_set_awdl(wdev);
++	if (!vif || !vif->nan_data_awdl || dev->awdl_vif != vif)
++		return -ENOLINK;
++	if (len == 7 && cmd[0] == 2)
++		return ieee80211_awdl_add_peer(wdev, cmd + 1);
++	if (len == 17 && cmd[0] == 3)
++		return ieee80211_awdl_set_window(wdev, get_unaligned_le64(cmd + 1),
++						get_unaligned_le64(cmd + 9));
++	mt792x_mutex_acquire(dev);
++	if (len == 18 && cmd[0] == 4) {
++		WRITE_ONCE(vif->awdl_closes_ns, 0);
++		ret = mt7925_awdl_channel(dev, cmd[1]);
++		if (!ret)
++			ret = ieee80211_awdl_set_window(wdev, get_unaligned_le64(cmd + 2),
++						get_unaligned_le64(cmd + 10));
++	} else if (len == 1 && cmd[0] == 5) {
++		ret = mt7925_awdl_release(dev);
++	} else {
++		ret = -EINVAL;
++	}
++	mt792x_mutex_release(dev);
++	return ret;
++}
++
++static const struct wiphy_vendor_command mt7925_awdl_commands[] = {{
++	.info = { .vendor_id = MT7925_AWDL_OUI, .subcmd = MT7925_AWDL_CMD },
++	.flags = WIPHY_VENDOR_CMD_NEED_NETDEV,
++	.doit = mt7925_awdl_command,
++	.policy = VENDOR_CMD_RAW_DATA,
++}};
++
++static const struct nl80211_vendor_cmd_info mt7925_awdl_events[] = {{
++	.vendor_id = MT7925_AWDL_OUI, .subcmd = MT7925_AWDL_CMD,
++}};
++
++void mt7925_awdl_event(struct mt792x_dev *dev, u8 kind, const struct sk_buff *frame)
++{
++	struct sk_buff *msg;
++	u8 *data;
++	u64 received = ktime_get_ns();
++	size_t len = frame ? frame->len : 0;
++
++	if (!READ_ONCE(dev->awdl_vif))
++		return;
++	msg = cfg80211_vendor_event_alloc(dev->mt76.hw->wiphy, NULL, 9 + len, 0, GFP_ATOMIC);
++	if (!msg)
++		return;
++	data = skb_put(msg, 9 + len);
++	data[0] = kind;
++	put_unaligned_le64(received, data + 1);
++	if (frame && skb_copy_bits(frame, 0, data + 9, len)) {
++		kfree_skb(msg);
++		return;
++	}
++	cfg80211_vendor_event(msg, GFP_ATOMIC);
++}
++
++void mt7925_awdl_absence(struct mt792x_dev *dev, struct sk_buff *skb)
++{
++	struct ieee80211_vif *vif = READ_ONCE(dev->awdl_vif);
++	struct mt792x_vif *mvif;
++	const u8 *p;
++	u64 now = ktime_get_ns(), begin;
++	size_t left;
++
++	if (!vif || skb->len < sizeof(struct mt7925_mcu_rxd) + 4)
++		return;
++	mvif = (void *)vif->drv_priv;
++	p = skb->data + sizeof(struct mt7925_mcu_rxd);
++	if (p[0] != mvif->bss_conf.mt76.idx)
++		return;
++	p += 4;
++	left = skb->len - sizeof(struct mt7925_mcu_rxd) - 4;
++	while (left >= 4) {
++		u16 tag = get_unaligned_le16(p), len = get_unaligned_le16(p + 2);
++		if (len < 4 || len > left)
++			return;
++		if (tag == 0 && len >= 8) {
++			if (p[4]) {
++				if (!READ_ONCE(dev->mt76.awdl_absent))
++					WRITE_ONCE(dev->awdl_absent_since_ns, now);
++				WRITE_ONCE(dev->mt76.awdl_absent, true);
++			} else {
++				struct sk_buff *msg;
++				u8 *data;
++
++				begin = READ_ONCE(dev->awdl_absent_since_ns);
++				WRITE_ONCE(dev->awdl_absent_since_ns, 0);
++				WRITE_ONCE(dev->mt76.awdl_absent, false);
++				mt76_worker_schedule(&dev->mt76.tx_worker);
++				/* Short channel switches are already covered by the
++				 * scheduler's measured switch margin. Publish DW gaps. */
++				if (!begin || now <= begin + 8 * 1024 * 1000)
++					return;
++				msg = cfg80211_vendor_event_alloc(dev->mt76.hw->wiphy, NULL, 17, 0, GFP_ATOMIC);
++				if (!msg)
++					return;
++				data = skb_put(msg, 17);
++				data[0] = 3;
++				put_unaligned_le64(now, data + 1);
++				put_unaligned_le64(begin, data + 9);
++				cfg80211_vendor_event(msg, GFP_ATOMIC);
++			}
++		}
++		p += len;
++		left -= len;
++	}
++}
++
++void mt7925_awdl_register(struct mt792x_dev *dev)
++{
++	struct wiphy *wiphy = dev->mt76.hw->wiphy;
++
++	init_waitqueue_head(&dev->mt76.awdl_drain);
++	atomic_set(&dev->mt76.awdl_pending_bytes, 0);
++	wiphy->vendor_commands = mt7925_awdl_commands;
++	wiphy->n_vendor_commands = ARRAY_SIZE(mt7925_awdl_commands);
++	wiphy->vendor_events = mt7925_awdl_events;
++	wiphy->n_vendor_events = ARRAY_SIZE(mt7925_awdl_events);
++}
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/init.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/init.c
+@@ -207,6 +207,7 @@
+ 		return;
+ 	}
+ 
++	mt7925_awdl_register(dev);
+ 	dev->mt76.init_wiphy = mt7925_init_nan_cap;
+ 
+ 	ret = mt76_register_device(&dev->mt76, true, mt76_rates,
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/mac.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/mac.c
+@@ -4,6 +4,7 @@
+ #include <linux/devcoredump.h>
+ #include <linux/etherdevice.h>
+ #include <linux/timekeeping.h>
++#include <net/awdl.h>
+ #include "mt7925.h"
+ #include "../dma.h"
+ #include "regd.h"
+@@ -612,6 +613,26 @@
+ 		status->flag |= RX_FLAG_8023;
+ 	}
+ 
++	if (!hdr_trans && !(status->flag & RX_FLAG_FAILED_FCS_CRC) &&
++	    ieee80211_is_awdl_action(skb->data, skb->len))
++		mt7925_awdl_event(dev, 2, skb);
++
++	/* The NMI and its AWDL NDI deliberately share a local/peer MAC.
++	 * Foreign-BSSID AWDL frames belong to the NDI, even when hardware
++	 * selected the NMI's duplicate address WTBL. */
++	if (!hdr_trans && dev->awdl_vif && skb->len >= 24) {
++		struct ieee80211_hdr *hdr = (void *)skb->data;
++		if (ether_addr_equal(hdr->addr3, awdl_bssid) &&
++		    (ieee80211_is_data(hdr->frame_control) ||
++		     ieee80211_is_action(hdr->frame_control))) {
++			struct ieee80211_sta *sta;
++			rcu_read_lock();
++			sta = ieee80211_find_sta(dev->awdl_vif, hdr->addr2);
++			status->wcid = sta ? &((struct mt792x_sta *)sta->drv_priv)->deflink.wcid : NULL;
++			rcu_read_unlock();
++		}
++	}
++
+ 	mt792x_mac_assoc_rssi(dev, skb);
+ 
+ 	if (rxv && !(status->flag & RX_FLAG_8023)) {
+@@ -1315,6 +1336,11 @@
+ 		wcid_idx = le32_get_bits(txwi[1], MT_TXD1_WLAN_IDX);
+ 	}
+ 
++	if (t->awdl_bytes) {
++		atomic_sub(t->awdl_bytes, &mdev->awdl_pending_bytes);
++		t->awdl_bytes = 0;
++		wake_up(&mdev->awdl_drain);
++	}
+ 	__mt76_tx_complete_skb(mdev, wcid_idx, t->skb, free_list);
+ out:
+ 	t->skb = NULL;
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/main.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/main.c
+@@ -489,6 +489,13 @@
+ 	INIT_WORK(&mvif->csa_work, mt7925_csa_work);
+ 	timer_setup(&mvif->csa_timer, mt792x_csa_timer, 0);
+ 
++	if (vif->nan_data_awdl) {
++		ret = mt7925_awdl_start(dev, vif);
++		if (ret) {
++			mt792x_mac_link_bss_remove(dev, &mvif->bss_conf, &mvif->sta.deflink);
++			goto out;
++		}
++	}
+ 	if (vif->type == NL80211_IFTYPE_NAN)
+ 		dev->nan_vif = vif;
+ 
+@@ -530,6 +537,9 @@
+ 		mt7925_nan_stop_mac_randomization(vif);
+ 
+ 	mt792x_mutex_acquire(dev);
++
++	if (vif->nan_data_awdl)
++		mt7925_awdl_stop(dev, vif);
+ 
+ 	if (dev->nan_vif == vif)
+ 		dev->nan_vif = NULL;
+@@ -938,7 +948,7 @@
+ 	phy->rxfilter = flags;
+ 
+ 	mt792x_mutex_acquire(dev);
+-	mt7925_mcu_set_rxfilter(dev, flags, 0, 0);
++	mt7925_mcu_set_rxfilter(dev, flags | (dev->awdl_vif ? MT7925_FILTER_OTHER_BSS : 0), 0, 0);
+ 	mt792x_mutex_release(dev);
+ 
+ 	*total_flags &= (FIF_OTHER_BSS | FIF_FCSFAIL | FIF_CONTROL);
+@@ -1038,6 +1048,8 @@
+ 		struct ieee80211_chanctx_conf *nan_ctx;
+ 
+ 		nan_ctx = mt7925_nan_seed_link_sta(dev, link_sta);
++		if (vif->nan_data_awdl)
++			nan_ctx = dev->awdl_ctx;
+ 		mconf->mt76.ctx = nan_ctx;
+ 
+ 		ret = mt7925_mcu_add_bss_info(&dev->phy, nan_ctx,
+@@ -1350,7 +1362,7 @@
+ 		mt7925_mac_link_sta_assoc(mdev, vif, link_sta);
+ 		break;
+ 	case MT76_STA_EVENT_AUTHORIZE:
+-		if (vif->type == NL80211_IFTYPE_NAN_DATA) {
++		if (vif->type == NL80211_IFTYPE_NAN_DATA && !vif->nan_data_awdl) {
+ 			int ret;
+ 
+ 			mt792x_mutex_acquire(dev);
+@@ -1565,8 +1577,8 @@
+ 	struct mt792x_vif *mvif = (struct mt792x_vif *)vif->drv_priv;
+ 
+ 	/* Release NAN peer record before tearing down the STA. */
+-	if (vif->type == NL80211_IFTYPE_NAN ||
+-	    vif->type == NL80211_IFTYPE_NAN_DATA) {
++	if (!vif->nan_data_awdl && (vif->type == NL80211_IFTYPE_NAN ||
++	    vif->type == NL80211_IFTYPE_NAN_DATA)) {
+ 		int ret = mt792x_nan_set_peer_rec(mdev, sta);
+ 
+ 		if (ret)
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/mcu.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/mcu.c
+@@ -3,6 +3,7 @@
+ 
+ #include <linux/fs.h>
+ #include <linux/firmware.h>
++#include <net/awdl.h>
+ #include "mt7925.h"
+ #include "regd.h"
+ #include "mcu.h"
+@@ -15,8 +16,8 @@
+ 
+ static bool mt7925_vif_is_nan(struct ieee80211_vif *vif)
+ {
+-	return vif->type == NL80211_IFTYPE_NAN ||
+-	       vif->type == NL80211_IFTYPE_NAN_DATA;
++	return !vif->nan_data_awdl &&
++	       (vif->type == NL80211_IFTYPE_NAN || vif->type == NL80211_IFTYPE_NAN_DATA);
+ }
+ 
+ int mt7925_mcu_parse_response(struct mt76_dev *mdev, int cmd,
+@@ -57,7 +58,9 @@
+ 		   cmd == MCU_UNI_CMD(STA_REC_UPDATE) ||
+ 		   cmd == MCU_UNI_CMD(OFFLOAD) ||
+ 		   cmd == MCU_UNI_CMD(SUSPEND) ||
+-		   cmd == MCU_UNI_CMD(NAN)) {
++		   cmd == MCU_UNI_CMD(NAN) ||
++		   cmd == MCU_UNI_CMD(BAND_CONFIG) ||
++		   cmd == MCU_UNI_CMD(SNIFFER)) {
+ 		struct mt7925_mcu_uni_event *event;
+ 
+ 		skb_pull(skb, sizeof(*rxd));
+@@ -690,6 +693,9 @@
+ 		break;
+ 	case MCU_UNI_EVENT_FW_LOG_2_HOST:
+ 		mt7925_mcu_uni_debug_msg_event(dev, skb);
++		break;
++	case 0x29: /* UNI_EVENT_BSS_IS_ABSENCE */
++		mt7925_awdl_absence(dev, skb);
+ 		break;
+ 	case MCU_UNI_EVENT_ROC:
+ 		mt7925_mcu_uni_roc_event(dev, skb);
+@@ -1246,7 +1252,10 @@
+ 		hdr_trans->from_ds = true;
+ 	}
+ 
+-	if (test_bit(MT_WCID_FLAG_TDLS_PEER, &wcid->flags)) {
++	if (vif->nan_data_awdl)
++		hdr_trans->dis_rx_hdr_tran = true;
++	if (vif->nan_data_awdl ||
++	    test_bit(MT_WCID_FLAG_TDLS_PEER, &wcid->flags)) {
+ 		hdr_trans->to_ds = false;
+ 		hdr_trans->from_ds = false;
+ 	}
+@@ -2778,7 +2787,8 @@
+ 			basic_req->nonht_basic_phy =
+ 				cpu_to_le16(PHY_TYPE_OFDM_INDEX);
+ 
+-		memcpy(basic_req->bssid, link_conf->bssid, ETH_ALEN);
++		memcpy(basic_req->bssid, vif->nan_data_awdl ? awdl_bssid :
++		       link_conf->bssid, ETH_ALEN);
+ 		basic_req->phymode = mt76_connac_get_phy_mode(phy, vif, band,
+ 							      link_sta);
+ 	}
+@@ -2817,7 +2827,10 @@
+ 		break;
+ 	case NL80211_IFTYPE_NAN:
+ 	case NL80211_IFTYPE_NAN_DATA:
+-		basic_req->conn_type = cpu_to_le32(CONNECTION_NAN);
++		/* AWDL is a no-DS peer link. Do not bind its BSS to the
++		 * firmware NAN timeline or its NDP availability gates. */
++		basic_req->conn_type = cpu_to_le32(vif->nan_data_awdl ?
++			CONNECTION_INFRA_AP : CONNECTION_NAN);
+ 		basic_req->active = enable;
+ 		break;
+ 	default:
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/mt7925.h
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/mt7925.h
+@@ -341,6 +341,12 @@
+ 			 struct ieee80211_vif *vif, bool enable);
+ void mt7925_mlo_pm_work(struct work_struct *work);
+ void mt7925_scan_work(struct work_struct *work);
++void mt7925_awdl_register(struct mt792x_dev *dev);
++int mt7925_awdl_start(struct mt792x_dev *dev, struct ieee80211_vif *vif);
++void mt7925_awdl_stop(struct mt792x_dev *dev, struct ieee80211_vif *vif);
++void mt7925_awdl_absence(struct mt792x_dev *dev, struct sk_buff *skb);
++void mt7925_awdl_event(struct mt792x_dev *dev, u8 kind, const struct sk_buff *frame);
++
+ void mt7925_roc_work(struct work_struct *work);
+ void mt7925_csa_work(struct work_struct *work);
+ int mt7925_mcu_uni_bss_ps(struct mt792x_dev *dev,
+--- a/drivers/net/wireless/mediatek/mt76/mt7925/pci_mac.c
++++ b/drivers/net/wireless/mediatek/mt76/mt7925/pci_mac.c
+@@ -45,6 +45,7 @@
+ 
+ 	t = (struct mt76_txwi_cache *)(txwi + mdev->drv->txwi_size);
+ 	t->skb = tx_info->skb;
++	t->awdl_bytes = 0;
+ 
+ 	id = mt76_token_consume(mdev, &t);
+ 	if (id < 0)
+@@ -59,6 +60,10 @@
+ 		}
+ 	}
+ 
++	if (vif && vif->nan_data_awdl && ieee80211_is_data_present(hdr->frame_control)) {
++		t->awdl_bytes = tx_info->skb->len + 40;
++		atomic_add(t->awdl_bytes, &mdev->awdl_pending_bytes);
++	}
+ 	pid = mt76_tx_status_skb_add(mdev, wcid, tx_info->skb);
+ 	mt7925_mac_write_txwi(mdev, txwi_ptr, tx_info->skb, wcid, key,
+ 			      pid, qid, 0);
+--- a/drivers/net/wireless/mediatek/mt76/mt792x.h
++++ b/drivers/net/wireless/mediatek/mt76/mt792x.h
+@@ -433,6 +433,13 @@
+ 	struct ieee80211_chanctx_conf *new_ctx;
+ 
+ 	struct ieee80211_vif *nan_vif;
++	/* Native AWDL BSS ownership and actual firmware channel absences. */
++	struct ieee80211_vif *awdl_vif;
++	struct ieee80211_chanctx_conf *awdl_ctx;
++	u64 awdl_absent_since_ns;
++	u8 awdl_channel;
++	bool awdl_bss_held;
++
+ 	const struct ieee80211_iface_combination *iface_combinations;
+ 	int n_iface_combinations;
+ 	/* deferred NAN MCU events run out of the atomic RX path on one shared
+--- a/drivers/net/wireless/mediatek/mt76/tx.c
++++ b/drivers/net/wireless/mediatek/mt76/tx.c
+@@ -408,6 +408,22 @@
+ 	struct ieee80211_tx_info *info;
+ 	struct sk_buff *skb;
+ 
++	if (txq->vif->nan_data_awdl && txq->tid < IEEE80211_NUM_TIDS) {
++		struct mt76_wcid *wcid = __mt76_wcid_ptr(phy->dev, mtxq->wcid);
++		u64 now = ktime_get_ns(), end = READ_ONCE(txq->vif->awdl_closes_ns);
++		u32 rate = wcid ? cfg80211_calculate_bitrate(&wcid->rate) : 0;
++		u64 budget;
++
++		if (READ_ONCE(phy->dev->awdl_absent) ||
++		    now < READ_ONCE(txq->vif->awdl_opens_ns) || end <= now + 1000000)
++			return NULL;
++		/* Bound firmware backlog by airtime, including small TCP ACKs.
++		 * The rate is firmware TX feedback, in 100 kbit/s units. */
++		budget = div_u64((u64)max(rate, 60U) *
++				min_t(u64, end - now - 1000000, 8000000), 80000);
++		if (atomic_read(&phy->dev->awdl_pending_bytes) >= max_t(u64, budget, 1600))
++			return NULL;
++	}
+ 	skb = ieee80211_tx_dequeue(phy->hw, txq);
+ 	if (!skb)
+ 		return NULL;

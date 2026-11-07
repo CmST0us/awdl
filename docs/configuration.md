@@ -408,11 +408,13 @@ systemd 单元拥有进程启动、重启策略和外部停止期限；D-Bus 策
 
 ## AWDL 与 AirDrop 配置
 
-`config/awdl.toml` 提供公共 AWDL 节点名与启动、停止失败期限，安装到 `/etc/wirelessd/awdl.toml`；设备选择沿用 `/etc/wirelessd/config.toml`。BE200 沿用 NAN 数据频率配置，5745 / 5805 MHz 分别选择 149 / 161 作为主信道，并协商 HE80 / VHT80；其他频率的 AWDL 申请返回明确错误，NAN 服务继续运行。BE200 与 RTL 均支持 149 / 161 同块跟随。BE200 存在活动 NDP 数据站点时，本次 AWDL 会话自动使用所配置主信道的公共时隙；接口释放恢复该主信道。瞬时跟随日程由协议和实际资源占用决定，不保存到配置文件。
+`config/awdl.toml` 提供公共 AWDL 节点名与启动、停止失败期限，安装到 `/etc/wirelessd/awdl.toml`；设备选择沿用 `/etc/wirelessd/config.toml`。BE200 与 MT7925 沿用 NAN 数据频率配置，5745 / 5805 MHz 分别选择 149 / 161 作为主信道；BE200 协商 HE80 / VHT80，MT7925 当前使用 VHT80。其他频率的 AWDL 申请返回明确错误，NAN 服务继续运行。三个后端均实现 149 / 161 同块跟随，MT7925 的真机传输验收使用 149。BE200 与 MT7925 存在活动 NDP 数据站点时，AWDL 限制在所配置主信道的公共时隙；活动 NDP 与 AWDL 并发传输尚未验收。瞬时跟随日程由协议和实际资源占用决定，不保存到配置文件。
 
-`hardware/be200/radio.toml` 的 `[awdl]` 提供会话 TCP 拥塞控制、初始窗口、乱序阈值、接口队列长度和发送排空余量；每项必填，重启 wirelessd 生效。默认算法 Scalable 要求目标内核提供 tcp_scalable，fq pacing 要求 sch_fq。显式 `radio_profile` 替代文件也须包含这些字段。BE200 模块电源策略与聚合上限保存在 `hardware/be200/driver/be200.conf`，安装后重新加载驱动生效。
+`hardware/be200/radio.toml` 和 `hardware/mt7925/radio.toml` 的 `[awdl]` 提供会话 TCP 拥塞控制、初始窗口、乱序阈值、接口队列长度和发送排空余量；每项必填，重启 wirelessd 生效。默认算法 Scalable 要求目标内核提供 tcp_scalable，fq pacing 要求 sch_fq。显式 `radio_profile` 替代文件也须包含这些字段。BE200 模块电源策略与聚合上限保存在 `hardware/be200/driver/be200.conf`，安装后重新加载驱动生效。
 
 `config/airdrop.toml` 提供 AirDrop 的产品显示名、mDNS 主机标签、接收目录和端口、文件写入缓冲、手工或自动接受策略、专用 HCI 选择、发现、TLS 控制、接收空闲、接受与传输期限及公告周期，安装到 `/etc/airdrop/config.toml`。每项配置就地注明单位、约束与作用；已有文件不被安装器覆盖。
+
+BLE 辅助程序用 Linux `HCI_CHANNEL_USER` 独占配置中指定的关闭适配器，完成后关闭控制器并归还管理权，避免 BlueZ 与广播命令交错。专用于 AirDrop 的适配器须保持空闲；若 BlueZ 配置为自动上电，应在部署的 `/etc/bluetooth/main.conf` 中明确设置 `[Policy] AutoEnable=false`（布尔值，禁止新控制器自动上电，影响本机全部适配器；省略沿用 BlueZ 默认值）。安装器不自动改动蓝牙策略，也不删除配对记录。
 
 `receive_write_buffer_bytes` 控制每个上传连接的文件写入批次；协议小块按顺序合并，文件结束时写出不足一批的余量。它只控制应用写入，不替代 TCP 接收窗口或文件系统刷盘。
 
@@ -420,11 +422,11 @@ systemd 单元拥有进程启动、重启策略和外部停止期限；D-Bus 策
 
 `components/airdrop/airdrop-tcp.conf` 是内核 TCP 接收自动调优的系统配置源，安装到 `/etc/sysctl.d/70-airdrop-tcp.conf`，已有文件保留。`net.ipv4.tcp_rmem` 的三项分别是最小、初始和最大接收内存，单位字节；IPv4 与 IPv6 均使用它。内核按连接需要增长至上限。安装到正在运行的系统时立即加载，暂存安装只复制文件；修改后使用 `sysctl -p /etc/sysctl.d/70-airdrop-tcp.conf` 加载，系统重启也会读取。此设置作用于本机 TCP 连接，由部署者维护，不属于网卡策略。
 
-安装选择决定 AirDrop 的无线依赖：BE200 使用 `wirelessd.service`，RTL 使用 `wirelessd-awdl.service`。单元从组件模板生成到 `.build/config`，生成文件不可作为第二份手工来源。配置文件不保存瞬时会话、对端选择和传输进度。AirDrop 的新会话身份与 Wi-Fi Aware 持久配对身份各自独立。运行操作见 [AirDrop 与 AWDL](airdrop.md)。
+安装选择决定 AirDrop 的无线依赖：BE200 与 MT7925 使用 `wirelessd.service`，RTL 使用 `wirelessd-awdl.service`。单元从组件模板生成到 `.build/config`，生成文件不可作为第二份手工来源。配置文件不保存瞬时会话、对端选择和传输进度。AirDrop 的新会话身份与 Wi-Fi Aware 持久配对身份各自独立。运行操作见 [AirDrop 与 AWDL](airdrop.md)。
 
 ## MT7925 / Dragon Q8B
 
-`hardware/mt7925/radio.toml` 是 MT7925 唯一无线策略源，使用公共 NAN / schedule 字段及相同安装路径规则；不含 AWDL 策略。`platforms/dragon-q8b/build.toml` 只选择 ARM64 目标，不保存无线能力。固定驱动、固件和三项 Linux 7.0 适配补丁见 [MT7925](../hardware/mt7925/README.md)。
+`hardware/mt7925/radio.toml` 是 MT7925 唯一无线策略源，使用公共 NAN / schedule / AWDL 字段及相同安装路径规则。`platforms/dragon-q8b/build.toml` 只选择 ARM64 目标，不保存无线能力。固定驱动、固件和三项 Linux 7.0 适配补丁见 [MT7925](../hardware/mt7925/README.md)。
 
 MT7925 驱动安装要求 `config/local/install.toml` 的 `[mt7925].country`，或显式 `--country` 覆盖；值为实际部署国家的两个大写 ISO 3166-1 字母，无单位，省略则拒绝安装。安装器生成 `wirelessd.service.d/mt7925-regulatory.conf`，在已选 PCI 设备就绪、无线服务启动前执行 `iw reg set`。该请求交给监管数据库和 MT7925 自管理监管逻辑，不手工清除 NO_IR 或绕过功率限制。生成文件不能成为第二份手工配置来源。本次设备实际位于中国，输入为 CN；公共运行配置使用 `frequency = 5745`，选择 149 主信道及允许的 80 MHz 带宽，发现仍用 2437 MHz。全 32 数据槽不额外预留发现槽，协议 DW 仍由固件调度。
 

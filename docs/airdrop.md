@@ -1,6 +1,6 @@
 # AirDrop 与 AWDL
 
-BE200 与 RTL8852BE 通过原生 `awdl0` 接入公共 AWDL 控制栈。`wirelessd` 管理硬件所有权和 AWDL 会话；`airdrop` 管理 BLE 唤醒、发现、用户接受与传输。数据直接经过内核 IPv6。
+BE200、MT7925 与 RTL8852BE 通过原生 `awdl0` 接入公共 AWDL 控制栈。`wirelessd` 管理硬件所有权和 AWDL 会话；`airdrop` 管理 BLE 唤醒、发现、用户接受与传输。数据直接经过内核 IPv6。
 
 ## 构建与安装
 
@@ -17,7 +17,7 @@ sudo scripts/install-airdrop.sh --hardware rtl8852be
 sudo scripts/install-driver.sh rtl8852be --country CN
 ```
 
-BE200 使用相同公共用户态产物，驱动构建、驱动安装与两项应用安装的硬件参数改为 `be200`，模块地区参数按部署选择。AWDL 构建同时生成两个硬件后端，安装器仅安装所选后端。
+BE200 使用相同公共用户态产物，驱动构建、驱动安装与两项应用安装的硬件参数改为 `be200`，模块地区参数按部署选择。MT7925 在 Dragon Q8B 上选择 `--platform dragon-q8b` 与 `--hardware mt7925`。AWDL 构建同时生成三个硬件后端，安装器仅安装所选后端。
 
 交叉构建仍使用公共构建配置的编译器、目标内核及 headers。安装接受 `--destdir`；已有运行配置保留。模块替换需要先停止所有无线服务，保存当前模块、参数和运行状态，再通过正常卸载加载完成。生产服务不自行替换驱动。
 
@@ -26,9 +26,10 @@ BE200 使用相同公共用户态产物，驱动构建、驱动安装与两项�
 | 硬件 | 无线提供者 | AirDrop 依赖 | 与 NAN 的关系 |
 | --- | --- | --- | --- |
 | BE200 | `wirelessd.service` | 安装器生成对该服务的依赖 | 共用 NAN 管理接口，另建 NAN_DATA `awdl0`，NAN/fileserver 可保持运行 |
+| MT7925 | `wirelessd.service` | 安装器生成对该服务的依赖 | 共用 NAN 所有者，另建原生 NAN_DATA `awdl0` |
 | RTL8852BE | `wirelessd-awdl.service` | 安装器生成对该服务的依赖 | 当前驱动需先释放 NAN 占用 |
 
-BE200 启动：
+BE200 / MT7925 启动：
 
 ```sh
 sudo systemctl start wirelessd fileserver airdrop
@@ -70,13 +71,13 @@ iPad 使用系统 AirDrop 的“所有人（10 分钟）”模式，发送前开
 
 发送端按 TLS Discover 返回的系统设备名选择接收者。发现过程中优先尝试尚未查询的 AWDL 对端；链路、mDNS 或 Discover 的短暂失败保留重试资格，已确认系统名称不匹配的设备在本次请求中排除。重试仍受同一个总发现期限约束，`candidate.attempt` 记录该对端的尝试次数。
 
-BE200 与 RTL8852BE 接收模式先建立发现公告所需的数据站点，再依据内核报告的其他发送者单播请求选择实际对端。`sender-selecting` 记录切换目标；切换前关闭旧连接并等待原生 STOP 完成，服务实例与 TLS 身份保持不变。普通 Discover 不锁定接收资格；Ask、用户答复及上传期间保留当前数据站点，待连接结束后处理其他发送者的请求。接收连接的空闲期限、等待答复期限和整次上传期限分别配置。
+三个硬件后端的接收模式先建立发现公告所需的数据站点，再依据内核报告的其他发送者单播请求选择实际对端。`sender-selecting` 记录切换目标；切换前关闭旧连接并等待原生 STOP 完成，服务实例与 TLS 身份保持不变。普通 Discover 不锁定接收资格；Ask、用户答复及上传期间保留当前数据站点，待连接结束后处理其他发送者的请求。接收连接的空闲期限、等待答复期限和整次上传期限分别配置。
 
 发送端使用接收者 mDNS TXT 中的 `flags` 协商正文格式：支持 DVZip 的接收者使用 DVZip，其余使用 gzip。`discovered.flags` 记录对端公告的能力；正文大小和速度按实际选定格式统计。
 
 接收端使用 gzip 正文。解包后的文件数据按 `receive_write_buffer_bytes` 合并写入，文件结束时写出余量，再提交暂存文件并答复。TCP 接收内存由随 AirDrop 安装的系统 sysctl 文件提供自动调优上限，配置所有权与生效方式见[配置说明](configuration.md#awdl-与-airdrop-配置)。
 
-BE200 在现有守护进程中注册两个协议接口，AWDL 释放不关闭 NAN。RTL 的两个运行单元共用 PCI 设备锁及 `org.wirelessd1`，同一网卡已被占用时启动报告忙。服务启动不自动停止其他无线服务。配置、配对和共享文件保留，默认开机启用设置保持原部署选择。
+BE200 与 MT7925 在现有守护进程中注册两个协议接口，AWDL 释放不关闭 NAN。RTL 的两个运行单元共用 PCI 设备锁及 `org.wirelessd1`，同一网卡已被占用时启动报告忙。服务启动不自动停止其他无线服务。配置、配对和共享文件保留，默认开机启用设置保持原部署选择。
 
 ## 接口与进度
 
@@ -96,7 +97,8 @@ AirDrop 进度包括操作 ID、已发送压缩正文与总正文大小；`deliv
 - BE200 与 RTL8852BE 均已通过 iPad mini 保持 AP 连接时的小文件与连续 500 MB 反向接收，包含落盘、逐字节一致性和刷盘验收；速度见[验收记录](acceptance.md)。
 - 当前 RTL 驱动的 NAN 与 AWDL 使用同一组运行资源，活动 NAN 会使 AWDL 启动返回忙；RTL 的驱动资源共享尚未实现。
 - BE200 AWDL 仅支持一个数据对端；NAN 数据频率 5745 / 5805 MHz 分别选择主信道 149 / 161，协商 HE80 / VHT80，在同一频块内跟随两者。活动 NDP 占用共享 PHY 时，AWDL 使用配置主信道的公共时隙；活动 NDP 与 AWDL 并发传输尚未完成验收。
+- MT7925 同样仅支持一个数据对端，当前使用 VHT80；已通过 Q8B / iPad Pro 的 149 信道双向 1 GiB 随机文件、往返内容校验及取消后重传。161 跟随、HE / EHT、AP 并发与活动 NDP 并发传输尚未验收，见 [MT7925 验收](acceptance.md#mt7925-原生-airdrop)。
 - RTL AWDL 仅支持一个数据对端，在主信道 149 启动并跟随同一 80 MHz 块内的 149/161；不支持跨块切换或多对端并发。
-- AWDL 状态机在主机运行，内核 hrtimer 执行窗口门控；现有 c108 与 U2 固件不承担自主 AWDL/TSF 调度。
+- AWDL 状态机在主机运行，内核 hrtimer 执行窗口门控；三种后端均未将 AWDL/TSF 调度交给固件自主执行。
 - 发送按 TLS 返回的系统设备名匹配；名称不是密码学设备身份。支持系统 Everyone 模式，未实现 Contacts Only。
 - Upload 成功响应证明协议交付完成，接收端逐字节回传和长期稳定性需要独立验收。当前验证结果见 [验收记录](acceptance.md)。

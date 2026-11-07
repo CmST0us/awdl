@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """AirDrop sender advertisement on an idle Linux HCI adapter (normal LE commands)."""
 import fcntl
+import ctypes
 import os
 import signal
 import socket
@@ -11,7 +12,7 @@ class Advertisement:
     def __init__(self, index=0):
         self.index = index
         self.sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_RAW, socket.BTPROTO_HCI)
-        self.up = False
+        self.advertising = False
 
     def command(self, opcode, data):
         self.sock.send(struct.pack('<BHB', 1, opcode, len(data))+data)
@@ -32,10 +33,18 @@ class Advertisement:
             self.sock.close()
             raise RuntimeError('HCI adapter is already in use; use a dedicated idle adapter')
         try:
-            fcntl.ioctl(self.sock, 0x400448c9, self.index)  # HCIDEVUP
-            self.up = True
-            self.sock.bind((self.index,))
-            self.sock.setsockopt(0, 2, struct.pack('<IIIH2x', 1 << 4, (1 << 14) | (1 << 15), 0, 0))
+            # HCI_CHANNEL_USER atomically claims the idle controller. The
+            # kernel removes it from management while this socket owns it,
+            # so BlueZ and kernel initialization cannot interleave commands.
+            # CPython's HCI address tuple omits hci_channel; pass Linux's
+            # sockaddr_hci directly instead of silently binding RAW.
+            address = struct.pack('HHH', socket.AF_BLUETOOTH, self.index, 1)
+            libc = ctypes.CDLL(None, use_errno=True)
+            libc.bind.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint]
+            libc.bind.restype = ctypes.c_int
+            if libc.bind(self.sock.fileno(), address, len(address)):
+                error = ctypes.get_errno()
+                raise OSError(error, os.strerror(error))
             self.sock.settimeout(3)
             # Reset the idle controller before selecting legacy LE advertising.
             self.command(0x0c03, b'')
@@ -44,6 +53,7 @@ class Advertisement:
             manufacturer = bytes.fromhex('4c00051240') + os.urandom(3) + bytes(4) + bytes([3]) + bytes(9)
             data = bytes([2, 1, 6, len(manufacturer)+1, 0xff]) + manufacturer
             self.command(0x2008, bytes([len(data)]) + data.ljust(31, b'\0'))
+            self.advertising = True
             self.command(0x200a, bytes([1]))
             print('AIRDROP_BLE_READY', flush=True)
             return self
@@ -52,9 +62,12 @@ class Advertisement:
             raise
 
     def __exit__(self, *args):
+        # Closing a user channel powers down the controller and returns it
+        # to management, including when setup or advertising fails.
         try:
-            if self.up:
-                fcntl.ioctl(self.sock, 0x400448ca, self.index)  # HCIDEVDOWN restores idle state
+            if self.advertising:
+                self.command(0x200a, bytes([0]))
+                self.advertising = False
         finally:
             self.sock.close()
 

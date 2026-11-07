@@ -9,7 +9,7 @@ pub fn bootstrap(entries: &[(String, String)]) -> Result<Option<String>> {
     Ok(entries.first().map(|entry| entry.0.clone()))
 }
 
-pub fn check(entries: &[(String, String)], require_data: bool) -> Result<()> {
+pub fn check(entries: &[(String, String)], require_data: bool, owns_awdl: bool) -> Result<()> {
     let (mut nan, mut data) = (0, 0);
     for (name, kind) in entries {
         if (name.is_empty() || name == "nan0") && kind == "NAN" {
@@ -18,6 +18,11 @@ pub fn check(entries: &[(String, String)], require_data: bool) -> Result<()> {
             && ["NAN data", "NAN-data", "NAN_DATA", "Unknown mode (13)"].contains(&kind.as_str())
         {
             data += 1;
+        } else if owns_awdl
+            && name == "awdl0"
+            && ["NAN data", "NAN-data", "NAN_DATA", "Unknown mode (13)"].contains(&kind.as_str())
+        {
+            // Ownership remains until the native backend confirms release.
         } else {
             bail!("MT7925 NAN 服务独占所选 PHY，发现 {name} ({kind})");
         }

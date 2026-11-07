@@ -57,6 +57,30 @@ iPad Pro 12.9 英寸第六代、iPadOS 27.0.1 使用 R4 IE 关闭诊断版完成
 
 验收期间没有新增固件复位、断言、Oops 或内核 WARNING；原有 TX GTK 不支持提示仍存在。正常 hostap 和正式模块保持运行，wirelessd / fileserver active、配对窗口关闭，保留原有 disabled 开机状态。原共享文件摘要不变，既有配对和身份保留，临时探针已卸载。完整来源、摘要及边界见 [MT7925 性能验收](../hardware/mt7925/README.md#5-ghz-性能验收)。长期可靠性、AP 并发与多对端尚未验收。
 
+## MT7925 原生 AirDrop
+
+2026-11-07，Dragon Q8B / MT7925 使用 `0030`、`0031` 接入公共 AWDL / AirDrop。固定来源完整重放、七模块构建与暂存安装通过；运行及安装的 `mt7925_common` build-id 为 `06f9bb9d49aba6deb9a4764bcdf86c641afe057a`。公共 ARM64 wirelessd、AirDrop、AWDL 库及 BE200 / MT7925 / RTL 三个控制后端构建通过，三个 C 后端启用 `-Wall -Wextra -Werror`。七模块与用户态安装文件均匹配暂存产物，固定 WM / MCU patch 摘要不变。签名 AwareLab 真机 UI 构建通过。
+
+MT7925 使用独立原生 NAN_DATA `awdl0`，同一 wirelessd 继续管理 NAN。固件原始收帧上报解决 Apple Action 帧被固件消费的问题；CNM 查询确认 BSS 信道后才开放窗口，实际 absence / presence 事件与 TX 完成驱动门控和排空。数据保留 A-MPDU，关闭不支持 AWDL 私有封装的硬件 A-MSDU、校验和与 GSO 卸载。会话使用 Scalable、初始窗口 2048 MSS、乱序阈值 4096 MSS、最小 RTO 1100 ms、fq 和 3 TU 排空余量；Q8B 使用 CPU performance 与 TCP 32 MiB 上限。
+
+iPad Pro 12.9 英寸第六代、iPadOS 27.0.1 使用系统 AirDrop 与“文件”App。设备位于中国，主信道 149 / VHT80 双流，最高采样 PHY 为 866.7 Mbit/s；验收前 Wi-Fi 页面显示未连接 AP。以下均使用同一正式驱动、程序和配置，期间未调参。
+
+| 验收 | 文件字节数 | 秒 | 原文件 MB/s | 结果 |
+| --- | ---: | ---: | ---: | --- |
+| Q8B → iPad | 1,073,741,824 | 28.465 | 37.721 | 系统接受并保存，Upload 成功响应 |
+| iPad → Q8B | 1,073,741,824 | 29.931 | 35.874 | 系统显示已发送，完整落盘、逐字节一致并刷盘 |
+| 取消后 iPad → Q8B 重传 | 1,073,741,824 | 27.301 | 39.330 | 系统显示已发送，完整落盘、逐字节一致并刷盘 |
+
+文件为不可压缩随机数据；Q8B 发送的归档正文为 1,074,868,594 字节，正文均速 37.761 MB/s。发送按接受至 Upload 成功响应计时，接收按接受至响应完成计时；均速为十进制 MB/s，排除发现、归档准备、完成后的内容比较和单独刷盘。发送端正文进度插值所得 5 秒峰值为 41.378 MB/s，不代表 PHY 或落盘速度。早期高度可压缩文件的等效速度不作为本次吞吐结果。
+
+回传的是 iPad 实际收到的同一文件，两次回传均与 Q8B 原文件逐字节一致，SHA-256 为 `36ad170afb6a92bff8d1f3392a343df8d1b110c286ee930f681883556ea1d3de`。文件走原生 `awdl0` 的 IPv6 link-local 和系统 AirDrop TLS 通道，未借用以太网文件通道。
+
+接收进度达到 72,351,744 字节时取消，停止请求在 0.231 秒内完成；后端 `cleanup=0`、`rc=0`，`awdl0` 和未完成接收文件已释放，既有完成文件保留。随后无需服务重启即可完整重传。附近其他 AWDL 候选的切换也以 `cleanup=0` 完成。接收中的独立 Discover 连接出现对端 reset，但未中断实际文件上传或成功响应。
+
+AirDrop 完成后不重启服务或驱动，原 Wi-Fi Aware ID 2 完成缓存认证、安全 NDP 和 1 MiB `alignment.txt` 下载；App 容器文件的 SHA-256 与板端一致，NDP 随后实际释放。原配对、身份及四个既有共享文件保留。wirelessd / fileserver / AirDrop 为 active，保持原有 disabled 开机状态；AirDrop / AWDL 回到 idle，所选 PHY 仅余 NAN / NAN_DATA，BLE 恢复关闭，BlueZ 保持 active。正式验收区间没有新增固件复位、断言、Oops 或内核 WARNING；原有缺少 NDC ID 的 TX GTK 不支持提示仍存在。
+
+本轮验证限于单对端、149 / VHT80。161 跟随、HE / EHT、AP 并发、活动 NDP 与 AWDL 并发传输、强制故障恢复和长期可靠性尚未验收。BE200 / RTL 的共享代码通过构建，本轮未重新进行其真机验收。BE200 已有高速 AirDrop 样本使用不同 iPad、PHY 和可压缩文件，不与本次随机文件均速作等价比较；本次结果也不证明硬件性能上限。
+
 ## wirelessd 更名与部署接管
 
 2026-11-03，`wirelessd`、fileserver、AirDrop 与安装工具完成 ARM64 Linux 构建。新安装、旧默认目录升级、自定义目录保留均通过暂存安装；iOS 配置重新生成后的资源内容一致。

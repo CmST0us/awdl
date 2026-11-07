@@ -89,19 +89,7 @@ pub fn obsolete(cfg: &Settings, updates: &Path) -> Vec<PathBuf> {
 }
 
 pub fn build_awdl(root: &Path, cfg: &Settings) -> Result<()> {
-    let headers = cfg.user_dir(root).join("hostap/src/drivers");
-    ensure!(
-        headers.join("nl80211_copy.h").is_file(),
-        "请先 prepare-source hostap"
-    );
-    run(Command::new(&cfg.build.c_compiler)
-        .current_dir(root)
-        .args(["-O2", "-Wall", "-Wextra", "-Werror", "-I"])
-        .arg(headers)
-        .arg(root.join("hardware/be200/awdl/main.c"))
-        .arg(cfg.user_dir(root).join("aware-awdl/libaware_awdl.a"))
-        .args(["-lpthread", "-ldl", "-lm", "-o"])
-        .arg(cfg.user_dir(root).join("aware-awdl/be200-awdl")))
+    super::build_native_awdl(root, cfg, "be200")
 }
 pub fn awdl_installation(root: &Path, cfg: &Settings) -> Vec<(PathBuf, PathBuf)> {
     vec![(

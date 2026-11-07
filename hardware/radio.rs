@@ -1,5 +1,5 @@
 use crate::configuration::Configuration;
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -18,20 +18,20 @@ impl Backend {
         match self {
             Self::Rtl8852be => Ok("/usr/local/libexec/wirelessd/rtl-awdl"),
             Self::Be200 => Ok("/usr/local/libexec/wirelessd/be200-awdl"),
-            Self::Mt7925 => bail!("MT7925 当前仅接入 Wi-Fi Aware，不支持 AWDL"),
+            Self::Mt7925 => Ok("/usr/local/libexec/wirelessd/mt7925-awdl"),
         }
     }
     pub fn shared_awdl(self) -> bool {
-        matches!(self, Self::Be200)
+        matches!(self, Self::Be200 | Self::Mt7925)
     }
     pub fn awdl_environment(self, cfg: &Configuration) -> Result<Vec<(String, String)>> {
-        if self != Self::Be200 {
+        if !self.shared_awdl() {
             return Ok(Vec::new());
         }
         let policy = self
             .profile(cfg)?
             .awdl
-            .context("BE200 无线策略缺少 awdl 配置")?;
+            .context("无线策略缺少 awdl 配置")?;
         ensure!(
             !policy.tcp_congestion_control.is_empty()
                 && policy.tcp_congestion_control.len() < 16
@@ -76,15 +76,14 @@ impl Backend {
     }
     pub fn awdl_channel(self, frequency: u32) -> Result<u8> {
         match self {
-            Self::Be200 => {
+            Self::Be200 | Self::Mt7925 => {
                 ensure!(
                     matches!(frequency, 5745 | 5805),
-                    "BE200 AWDL 需要 NAN 数据频率为 5745 或 5805 MHz"
+                    "原生 AWDL 需要 NAN 数据频率为 5745 或 5805 MHz"
                 );
                 Ok(((frequency - 5000) / 5) as u8)
             }
             Self::Rtl8852be => Ok(149),
-            Self::Mt7925 => bail!("MT7925 当前仅接入 Wi-Fi Aware，不支持 AWDL"),
         }
     }
     pub fn driver(self) -> &'static str {
@@ -117,7 +116,7 @@ impl Backend {
         match self {
             Self::Be200 => be200::check(entries, require_data, owns_awdl),
             Self::Rtl8852be => rtl8852be::check(entries, bootstrap, require_data),
-            Self::Mt7925 => mt7925::check(entries, require_data),
+            Self::Mt7925 => mt7925::check(entries, require_data, owns_awdl),
         }
     }
     pub fn profile(self, cfg: &Configuration) -> Result<Profile> {

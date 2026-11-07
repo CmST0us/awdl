@@ -1,0 +1,601 @@
+Subject: [PATCH] 原生 AWDL 数据封装、快路径与可用窗口队列
+
+--- /dev/null
++++ b/include/net/awdl.h
+@@ -0,0 +1,24 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef __NET_AWDL_H
++#define __NET_AWDL_H
++
++#include <linux/ieee80211.h>
++#include <linux/etherdevice.h>
++
++static const u8 awdl_bssid[ETH_ALEN] = { 0x00, 0x25, 0x00, 0xff, 0x94, 0x73 };
++static const u8 awdl_snap[10] = { 0xaa, 0xaa, 0x03, 0x00, 0x17, 0xf2, 0x08, 0x00, 0x03, 0x04 };
++
++static inline bool ieee80211_is_awdl_action(const void *frame, size_t len)
++{
++	const struct ieee80211_mgmt *mgmt = frame;
++	static const u8 bssid[ETH_ALEN] = { 0x00, 0x25, 0x00, 0xff, 0x94, 0x73 };
++	static const u8 action[] = { 0x7f, 0x00, 0x17, 0xf2, 0x08 };
++
++	return len >= 24 + sizeof(action) &&
++	       ieee80211_is_action(mgmt->frame_control) &&
++	       !ieee80211_has_order(mgmt->frame_control) &&
++	       ether_addr_equal(mgmt->bssid, bssid) &&
++	       !memcmp(&mgmt->u.action, action, sizeof(action));
++}
++
++#endif
+--- a/include/net/mac80211.h
++++ b/include/net/mac80211.h
+@@ -2225,11 +2225,16 @@
+  * @drv_priv: data area for driver use, will always be aligned to
+  *	sizeof(void \*).
+  * @txq: the multicast data TX queue
++ * @awdl_opens_ns: AWDL peer window start, CLOCK_MONOTONIC nanoseconds.
++ * @awdl_closes_ns: AWDL peer window end; zero holds data in mac80211.
++ * @nan_data_awdl: NAN_DATA interface carries native AWDL data frames
+  * @txq_mgmt: the mgmt frame TX queue, currently only exists for NAN devices
+  * @offload_flags: 802.3 -> 802.11 enapsulation offload flags, see
+  *	&enum ieee80211_offload_flags.
+  */
+ struct ieee80211_vif {
++	bool nan_data_awdl;
++	u64 awdl_opens_ns, awdl_closes_ns;
+ 	enum nl80211_iftype type;
+ 	struct ieee80211_vif_cfg cfg;
+ 	struct ieee80211_bss_conf bss_conf;
+@@ -2323,6 +2328,11 @@
+  * or AP_VLAN interfaces.)
+  */
+ struct ieee80211_vif *wdev_to_ieee80211_vif(struct wireless_dev *wdev);
++
++/* Select AWDL encapsulation before bringing a native NAN_DATA interface up. */
++int ieee80211_nan_data_set_awdl(struct wireless_dev *wdev);
++int ieee80211_awdl_add_peer(struct wireless_dev *wdev, const u8 *addr);
++int ieee80211_awdl_set_window(struct wireless_dev *wdev, u64 opens, u64 closes);
+ 
+ /**
+  * ieee80211_vif_to_wdev - return a wdev struct from a vif
+--- a/net/mac80211/cfg.c
++++ b/net/mac80211/cfg.c
+@@ -2769,6 +2769,35 @@
+ 		ieee80211_nan_update_ndi_carrier(sta->sdata);
+ 	return err;
+ }
++
++int ieee80211_awdl_add_peer(struct wireless_dev *wdev, const u8 *addr)
++{
++	struct ieee80211_sub_if_data *sdata = IEEE80211_WDEV_TO_SUB_IF(wdev);
++	struct ieee80211_sub_if_data *nmi;
++	struct station_parameters params = {
++		.listen_interval = -1,
++		.support_p2p_ps = -1,
++		.link_sta_params.link_id = -1,
++		.sta_flags_mask = BIT(NL80211_STA_FLAG_AUTHENTICATED) |
++			BIT(NL80211_STA_FLAG_ASSOCIATED) | BIT(NL80211_STA_FLAG_AUTHORIZED),
++	};
++	int ret;
++
++	lockdep_assert_wiphy(wdev->wiphy);
++	if (!sdata->vif.nan_data_awdl || !ieee80211_sdata_running(sdata))
++		return -EINVAL;
++	if (!is_zero_ether_addr(sdata->u.nan_data.awdl_peer))
++		return -EBUSY;
++	nmi = wiphy_dereference(wdev->wiphy, sdata->u.nan_data.nmi);
++	if (!nmi)
++		return -ENOLINK;
++	params.sta_flags_set = params.sta_flags_mask;
++	ret = ieee80211_add_station(wdev->wiphy, &nmi->wdev, addr, &params);
++	if (!ret)
++		ether_addr_copy(sdata->u.nan_data.awdl_peer, addr);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(ieee80211_awdl_add_peer);
+ 
+ static int ieee80211_del_station(struct wiphy *wiphy, struct wireless_dev *wdev,
+ 				 struct station_del_parameters *params)
+--- a/net/mac80211/ieee80211_i.h
++++ b/net/mac80211/ieee80211_i.h
+@@ -30,6 +30,7 @@
+ #include <net/ieee80211_radiotap.h>
+ #include <net/cfg80211.h>
+ #include <net/mac80211.h>
++#include <net/awdl.h>
+ #include <net/fq.h>
+ #include "key.h"
+ #include "sta_info.h"
+@@ -1035,6 +1036,9 @@
+  *	hence RCU.
+  */
+ struct ieee80211_if_nan_data {
++	atomic_t awdl_seq;
++	struct hrtimer awdl_timer;
++	u8 awdl_peer[ETH_ALEN];
+ 	struct ieee80211_sub_if_data __rcu *nmi;
+ };
+ 
+@@ -2333,6 +2337,8 @@
+ 		ether_addr_copy(mgmt->bssid, sdata->vif.cfg.ap_addr);
+ 	else if (sdata->vif.type == NL80211_IFTYPE_ADHOC)
+ 		ether_addr_copy(mgmt->bssid, sdata->u.ibss.bssid);
++	else if (sdata->vif.nan_data_awdl)
++		ether_addr_copy(mgmt->bssid, awdl_bssid);
+ 
+ 	mgmt->frame_control = cpu_to_le16(IEEE80211_FTYPE_MGMT |
+ 					  IEEE80211_STYPE_ACTION);
+--- a/net/mac80211/iface.c
++++ b/net/mac80211/iface.c
+@@ -405,7 +405,10 @@
+ 			/*
+ 			 * check whether it may have the same address
+ 			 */
+-			if (!identical_mac_addr_allowed(iftype,
++			if (!(iftype == NL80211_IFTYPE_NAN_DATA &&
++			      sdata->vif.nan_data_awdl &&
++			      nsdata->vif.type == NL80211_IFTYPE_NAN) &&
++			    !identical_mac_addr_allowed(iftype,
+ 							nsdata->vif.type))
+ 				return -ENOTUNIQ;
+ 
+@@ -473,6 +476,8 @@
+ 	if (err)
+ 		return err;
+ 
++	if (sdata->vif.nan_data_awdl)
++		netdev_update_features(dev);
+ 	return ieee80211_do_open(&sdata->wdev, true);
+ }
+ 
+@@ -492,6 +497,8 @@
+ 
+ 	lockdep_assert_wiphy(local->hw.wiphy);
+ 
++	if (sdata->vif.nan_data_awdl)
++		hrtimer_cancel(&sdata->u.nan_data.awdl_timer);
+ 	clear_bit(SDATA_STATE_RUNNING, &sdata->state);
+ 	synchronize_rcu(); /* flush _ieee80211_wake_txqs() */
+ 
+@@ -533,6 +540,15 @@
+ 	 * shouldn't be any stations.
+ 	 */
+ 	flushed = sta_info_flush(sdata, -1);
++	if (sdata->vif.nan_data_awdl &&
++	    !is_zero_ether_addr(sdata->u.nan_data.awdl_peer)) {
++		struct ieee80211_sub_if_data *nmi =
++			wiphy_dereference(local->hw.wiphy, sdata->u.nan_data.nmi);
++
++		if (nmi)
++			sta_info_destroy_addr(nmi, sdata->u.nan_data.awdl_peer);
++		eth_zero_addr(sdata->u.nan_data.awdl_peer);
++	}
+ 	WARN_ON_ONCE(sdata->vif.type != NL80211_IFTYPE_AP_VLAN &&
+ 		     sdata->vif.type != NL80211_IFTYPE_NAN &&
+ 		     sdata->vif.type != NL80211_IFTYPE_NAN_DATA && flushed > 0);
+@@ -966,7 +982,17 @@
+ 	return drv_net_setup_tc(local, sdata, dev, type, type_data);
+ }
+ 
++static netdev_features_t ieee80211_awdl_fix_features(struct net_device *dev,
++						 netdev_features_t features)
++{
++	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev);
++	if (sdata->vif.nan_data_awdl)
++		features &= ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK);
++	return features;
++}
++
+ static const struct net_device_ops ieee80211_dataif_ops = {
++	.ndo_fix_features = ieee80211_awdl_fix_features,
+ 	.ndo_open		= ieee80211_open,
+ 	.ndo_stop		= ieee80211_stop,
+ 	.ndo_uninit		= ieee80211_uninit,
+--- a/net/mac80211/offchannel.c
++++ b/net/mac80211/offchannel.c
+@@ -12,6 +12,7 @@
+  */
+ #include <linux/export.h>
+ #include <net/mac80211.h>
++#include <net/awdl.h>
+ #include "ieee80211_i.h"
+ #include "driver-ops.h"
+ 
+@@ -907,6 +908,9 @@
+ 	case NL80211_IFTYPE_NAN:
+ 		break;
+ 	case NL80211_IFTYPE_NAN_DATA:
++		if (sdata->vif.nan_data_awdl &&
++		    ieee80211_is_awdl_action(mgmt, params->len))
++			break;
+ 		if (is_multicast_ether_addr(mgmt->da))
+ 			return -EOPNOTSUPP;
+ 		break;
+--- a/net/mac80211/rx.c
++++ b/net/mac80211/rx.c
+@@ -21,6 +21,7 @@
+ #include <linux/bitops.h>
+ #include <kunit/visibility.h>
+ #include <net/mac80211.h>
++#include <net/awdl.h>
+ #include <net/ieee80211_radiotap.h>
+ #include <linux/unaligned.h>
+ 
+@@ -2628,6 +2629,21 @@
+ }
+ EXPORT_SYMBOL_IF_MAC80211_KUNIT(ieee80211_drop_unencrypted_mgmt);
+ 
++static bool ieee80211_awdl_decap(struct sk_buff *skb)
++{
++	struct ethhdr header;
++
++	if (!pskb_may_pull(skb, ETH_HLEN + 16) ||
++	    memcmp(skb->data + ETH_HLEN, awdl_snap, sizeof(awdl_snap)))
++		return false;
++	memcpy(&header, skb->data, 2 * ETH_ALEN);
++	memcpy(&header.h_proto, skb->data + ETH_HLEN + 14, 2);
++	skb_pull(skb, 16);
++	memcpy(skb->data, &header, ETH_HLEN);
++	skb->ip_summed = CHECKSUM_NONE;
++	return true;
++}
++
+ static ieee80211_rx_result
+ __ieee80211_data_to_8023(struct ieee80211_rx_data *rx, bool *port_control)
+ {
+@@ -2656,6 +2672,9 @@
+ 
+ 	ret = ieee80211_data_to_8023(rx->skb, sdata->vif.addr, sdata->vif.type);
+ 	if (ret < 0)
++		return RX_DROP_U_INVALID_8023;
++
++	if (sdata->vif.nan_data_awdl && !ieee80211_awdl_decap(rx->skb))
+ 		return RX_DROP_U_INVALID_8023;
+ 
+ 	ehdr = (struct ethhdr *) rx->skb->data;
+@@ -3190,6 +3209,11 @@
+ 
+ 	while (!skb_queue_empty(&frame_list)) {
+ 		rx->skb = __skb_dequeue(&frame_list);
++		if (rx->sdata->vif.nan_data_awdl &&
++		    !ieee80211_awdl_decap(rx->skb)) {
++			dev_kfree_skb(rx->skb);
++			continue;
++		}
+ 
+ 		switch (ieee80211_rx_mesh_data(rx->sdata, rx->sta, rx->skb)) {
+ 		case RX_QUEUED:
+@@ -3615,6 +3639,11 @@
+ 	int len = rx->skb->len;
+ 
+ 	if (!ieee80211_is_action(mgmt->frame_control))
++		return RX_CONTINUE;
++
++	/* AWDL discovery precedes station creation. */
++	if (sdata->vif.type == NL80211_IFTYPE_NAN &&
++	    ieee80211_is_awdl_action(mgmt, len))
+ 		return RX_CONTINUE;
+ 
+ 	if (!rx->sta && mgmt->u.action.category != WLAN_CATEGORY_PUBLIC &&
+@@ -4082,6 +4111,11 @@
+ 
+ 	if (is_multicast_ether_addr(mgmt->da))
+ 		return RX_DROP_U_UNKNOWN_MCAST_ACTION;
++
++	/* AWDL vendor actions belong to the registered control socket. */
++	if (sdata->vif.type == NL80211_IFTYPE_NAN &&
++	    ieee80211_is_awdl_action(mgmt, rx->skb->len))
++		return RX_DROP_U_REJECTED_ACTION_RESPONSE;
+ 
+ 	/* do not return rejected action frames */
+ 	if (mgmt->u.action.category & 0x80)
+@@ -4686,6 +4720,10 @@
+ 		    ieee80211_has_fromds(hdr->frame_control))
+ 			return false;
+ 
++		if (ieee80211_is_awdl_action(hdr, skb->len))
++			return multicast ||
++			       ether_addr_equal(sdata->vif.addr, hdr->addr1);
++
+ 		/*
+ 		 * Accept only frames that are addressed to the NAN cluster
+ 		 * (based on the Cluster ID). From these frames, accept only
+@@ -4725,8 +4763,8 @@
+ 			if (!nmi)
+ 				return false;
+ 
+-			if (!ether_addr_equal(nmi->u.nan.conf.cluster_id,
+-					      hdr->addr3))
++			if (!ether_addr_equal(sdata->vif.nan_data_awdl ? awdl_bssid :
++					      nmi->u.nan.conf.cluster_id, hdr->addr3))
+ 				return false;
+ 
+ 			return multicast ||
+@@ -4782,6 +4820,9 @@
+ 	ether_addr_copy(fastrx.vif_addr, sdata->vif.addr);
+ 
+ 	fastrx.uses_rss = ieee80211_hw_check(&local->hw, USES_RSS);
++
++	if (sdata->vif.nan_data_awdl)
++		goto clear;
+ 
+ 	/* fast-rx doesn't do reordering */
+ 	if (ieee80211_hw_check(&local->hw, AMPDU_AGGREGATION) &&
+--- a/net/mac80211/tx.c
++++ b/net/mac80211/tx.c
+@@ -30,6 +30,7 @@
+ #include <net/gso.h>
+ 
+ #include "ieee80211_i.h"
++#include <net/awdl.h>
+ #include "driver-ops.h"
+ #include "led.h"
+ #include "mesh.h"
+@@ -1467,6 +1468,13 @@
+ 
+ 	local = container_of(fq, struct ieee80211_local, fq);
+ 	txqi = container_of(tin, struct txq_info, tin);
++	/* AWDL intentionally waits through unavailable channel slots. This is
++	 * not congestion: retain FQ flow and memory bounds, but do not drop
++	 * packets because their scheduled wait exceeds CoDel's target.
++	 */
++	if (txqi->txq.vif->nan_data_awdl)
++		return fq_flow_dequeue(fq, flow);
++
+ 	cparams = &local->cparams;
+ 	cstats = &txqi->cstats;
+ 
+@@ -2953,7 +2961,8 @@
+ 			ret = -ENOTCONN;
+ 			goto free;
+ 		}
+-		memcpy(hdr.addr3, nmi->u.nan.conf.cluster_id, ETH_ALEN);
++		memcpy(hdr.addr3, sdata->vif.nan_data_awdl ? awdl_bssid :
++		       nmi->u.nan.conf.cluster_id, ETH_ALEN);
+ 		hdrlen = 24;
+ 		break;
+ 	}
+@@ -3033,6 +3042,8 @@
+ 	}
+ 
+ 	skb_pull(skb, skip_header_bytes);
++	if (sdata->vif.nan_data_awdl)
++		encaps_len = 14;
+ 	head_need = hdrlen + encaps_len + meshhdrlen - skb_headroom(skb);
+ 
+ 	/*
+@@ -3057,7 +3068,14 @@
+ 		}
+ 	}
+ 
+-	if (encaps_data)
++	if (sdata->vif.nan_data_awdl) {
++		u8 *awdl = skb_push(skb, 14);
++
++		memcpy(awdl, awdl_snap, sizeof(awdl_snap));
++		unsigned int count = max_t(unsigned int, 1, skb_shinfo(skb)->gso_segs);
++		put_unaligned_le16(atomic_add_return(count, &sdata->u.nan_data.awdl_seq) - count + 1, awdl + 10);
++		put_unaligned_le16(0, awdl + 12);
++	} else if (encaps_data)
+ 		memcpy(skb_push(skb, encaps_len), encaps_data, encaps_len);
+ 
+ #ifdef CONFIG_MAC80211_MESH
+@@ -3112,6 +3130,24 @@
+  * maintained if any of the TX path checks change.
+  */
+ 
++static unsigned int ieee80211_awdl_encap_len(struct ieee80211_sub_if_data *sdata)
++{
++	return sdata->vif.nan_data_awdl ? 14 : sizeof(rfc1042_header);
++}
++
++static void ieee80211_awdl_encap(struct ieee80211_sub_if_data *sdata, void *data, unsigned int count)
++{
++	u8 *bytes = data;
++
++	if (!sdata->vif.nan_data_awdl) {
++		memcpy(bytes, rfc1042_header, sizeof(rfc1042_header));
++		return;
++	}
++	memcpy(bytes, awdl_snap, sizeof(awdl_snap));
++	put_unaligned_le16(atomic_add_return(count, &sdata->u.nan_data.awdl_seq) - count + 1, bytes + 10);
++	put_unaligned_le16(0, bytes + 12);
++}
++
+ void ieee80211_check_fast_xmit(struct sta_info *sta)
+ {
+ 	struct ieee80211_fast_tx build = {}, *fast_tx = NULL, *old;
+@@ -3162,7 +3198,9 @@
+ 	    !ieee80211_hw_check(&local->hw, SUPPORTS_TX_FRAG))
+ 		goto out;
+ 
+-	if (!ieee80211_vif_is_mld(&sdata->vif)) {
++	if (sdata->vif.nan_data_awdl) {
++		build.band = NUM_NL80211_BANDS;
++	} else if (!ieee80211_vif_is_mld(&sdata->vif)) {
+ 		rcu_read_lock();
+ 		chanctx_conf =
+ 			rcu_dereference(sdata->vif.bss_conf.chanctx_conf);
+@@ -3180,6 +3218,14 @@
+ 	fc = cpu_to_le16(IEEE80211_FTYPE_DATA | IEEE80211_STYPE_DATA);
+ 
+ 	switch (sdata->vif.type) {
++	case NL80211_IFTYPE_NAN_DATA:
++		if (!sdata->vif.nan_data_awdl)
++			goto out;
++		build.da_offs = offsetof(struct ieee80211_hdr, addr1);
++		build.sa_offs = offsetof(struct ieee80211_hdr, addr2);
++		memcpy(hdr->addr3, awdl_bssid, ETH_ALEN);
++		build.hdr_len = 24;
++		break;
+ 	case NL80211_IFTYPE_ADHOC:
+ 		/* DA SA BSSID */
+ 		build.da_offs = offsetof(struct ieee80211_hdr, addr1);
+@@ -3343,9 +3389,8 @@
+ 
+ 	hdr->frame_control = fc;
+ 
+-	memcpy(build.hdr + build.hdr_len,
+-	       rfc1042_header,  sizeof(rfc1042_header));
+-	build.hdr_len += sizeof(rfc1042_header);
++	ieee80211_awdl_encap(sdata, build.hdr + build.hdr_len, 1);
++	build.hdr_len += ieee80211_awdl_encap_len(sdata);
+ 
+ 	fast_tx = kmemdup(&build, sizeof(build), GFP_ATOMIC);
+ 	/* if the kmemdup fails, continue w/o fast_tx */
+@@ -3425,7 +3470,7 @@
+ 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
+ 	struct ieee80211_hdr *hdr;
+ 	struct ethhdr *amsdu_hdr;
+-	int hdr_len = fast_tx->hdr_len - sizeof(rfc1042_header);
++	int hdr_len = fast_tx->hdr_len - ieee80211_awdl_encap_len(sdata);
+ 	int subframe_len = skb->len - hdr_len;
+ 	void *data;
+ 	u8 *qc, *h_80211_src, *h_80211_dst;
+@@ -3498,7 +3543,8 @@
+ 	struct ieee80211_txq *txq = sta->sta.txq[tid];
+ 	struct txq_info *txqi;
+ 	struct sk_buff **frag_tail, *head;
+-	int subframe_len = skb->len - ETH_ALEN;
++	int subframe_len = skb->len - ETH_ALEN +
++		ieee80211_awdl_encap_len(sdata) - sizeof(rfc1042_header);
+ 	u8 max_subframes = sta->sta.max_amsdu_subframes;
+ 	int max_frags = local->hw.max_tx_fragments;
+ 	int max_amsdu_len = sta->sta.cur->max_amsdu_len;
+@@ -3555,7 +3601,8 @@
+ 	orig_truesize = head->truesize;
+ 	orig_len = head->len;
+ 
+-	if (skb->len + head->len > max_amsdu_len)
++	if (skb->len + head->len + ieee80211_awdl_encap_len(sdata) -
++	    sizeof(rfc1042_header) > max_amsdu_len)
+ 		goto out;
+ 
+ 	nfrags = 1 + skb_shinfo(skb)->nr_frags;
+@@ -3594,23 +3641,23 @@
+ 	 * we add a new subframe we pad out the previous one to a multiple
+ 	 * of 4 and thus it no longer matters in the next round.
+ 	 */
+-	hdrlen = fast_tx->hdr_len - sizeof(rfc1042_header);
++	hdrlen = fast_tx->hdr_len - ieee80211_awdl_encap_len(sdata);
+ 	if ((head->len - hdrlen) & 3)
+ 		pad = 4 - ((head->len - hdrlen) & 3);
+ 
+-	if (!ieee80211_amsdu_realloc_pad(local, skb, sizeof(rfc1042_header) +
++	if (!ieee80211_amsdu_realloc_pad(local, skb, ieee80211_awdl_encap_len(sdata) +
+ 						     2 + pad))
+ 		goto out_recalc;
+ 
+ 	ret = true;
+-	data = skb_push(skb, ETH_ALEN + 2);
++	data = skb_push(skb, ieee80211_awdl_encap_len(sdata) + 2);
+ 	ether_addr_copy(data, da);
+ 	ether_addr_copy(data + ETH_ALEN, sa);
+ 
+ 	data += 2 * ETH_ALEN;
+ 	len = cpu_to_be16(subframe_len);
+ 	memcpy(data, &len, 2);
+-	memcpy(data + 2, rfc1042_header, sizeof(rfc1042_header));
++	ieee80211_awdl_encap(sdata, data + 2, 1);
+ 
+ 	memset(skb_push(skb, pad), 0, pad);
+ 
+@@ -3789,6 +3836,9 @@
+ 	memcpy(skb->data, fast_tx->hdr, fast_tx->hdr_len);
+ 	memcpy(skb->data + fast_tx->da_offs, da, ETH_ALEN);
+ 	memcpy(skb->data + fast_tx->sa_offs, sa, ETH_ALEN);
++	if (sdata->vif.nan_data_awdl)
++		ieee80211_awdl_encap(sdata, skb->data + fast_tx->hdr_len - 14,
++			max_t(unsigned int, 1, skb_shinfo(skb)->gso_segs));
+ 
+ 	info = IEEE80211_SKB_CB(skb);
+ 	memset(info, 0, sizeof(*info));
+--- a/net/mac80211/util.c
++++ b/net/mac80211/util.c
+@@ -917,6 +917,63 @@
+ 	return NULL;
+ }
+ EXPORT_SYMBOL_GPL(__ieee80211_iterate_stations);
++
++static enum hrtimer_restart ieee80211_awdl_wake(struct hrtimer *timer)
++{
++	struct ieee80211_if_nan_data *nan = container_of(timer, struct ieee80211_if_nan_data, awdl_timer);
++	struct ieee80211_sub_if_data *sdata = container_of(nan, struct ieee80211_sub_if_data, u.nan_data);
++	struct sta_info *sta;
++
++	local_bh_disable();
++	rcu_read_lock();
++	list_for_each_entry_rcu(sta, &sdata->local->sta_list, list) {
++		if (sta->sdata != sdata)
++			continue;
++		for (int i = 0; i < IEEE80211_NUM_TIDS; i++)
++			if (sta->sta.txq[i])
++				drv_wake_tx_queue(sdata->local, to_txq_info(sta->sta.txq[i]));
++	}
++	if (sdata->vif.txq)
++		drv_wake_tx_queue(sdata->local, to_txq_info(sdata->vif.txq));
++	rcu_read_unlock();
++	local_bh_enable();
++	return HRTIMER_NORESTART;
++}
++
++int ieee80211_awdl_set_window(struct wireless_dev *wdev, u64 opens, u64 closes)
++{
++	struct ieee80211_sub_if_data *sdata = IEEE80211_WDEV_TO_SUB_IF(wdev);
++
++	lockdep_assert_wiphy(wdev->wiphy);
++	if (!sdata->vif.nan_data_awdl || !ieee80211_sdata_running(sdata) ||
++	    (closes && opens >= closes))
++		return -EINVAL;
++	hrtimer_cancel(&sdata->u.nan_data.awdl_timer);
++	WRITE_ONCE(sdata->vif.awdl_closes_ns, 0);
++	WRITE_ONCE(sdata->vif.awdl_opens_ns, opens);
++	WRITE_ONCE(sdata->vif.awdl_closes_ns, closes);
++	if (closes > ktime_get_ns())
++		hrtimer_start(&sdata->u.nan_data.awdl_timer, ns_to_ktime(opens), HRTIMER_MODE_ABS_SOFT);
++	return 0;
++}
++EXPORT_SYMBOL_GPL(ieee80211_awdl_set_window);
++
++int ieee80211_nan_data_set_awdl(struct wireless_dev *wdev)
++{
++	struct ieee80211_sub_if_data *sdata = IEEE80211_WDEV_TO_SUB_IF(wdev);
++
++	if (wdev->iftype != NL80211_IFTYPE_NAN_DATA)
++		return -EINVAL;
++	if (ieee80211_sdata_running(sdata))
++		return -EBUSY;
++	if (sdata->vif.nan_data_awdl)
++		return -EALREADY;
++	hrtimer_setup(&sdata->u.nan_data.awdl_timer, ieee80211_awdl_wake,
++		      CLOCK_MONOTONIC, HRTIMER_MODE_ABS_SOFT);
++	sdata->vif.nan_data_awdl = true;
++	return 0;
++}
++EXPORT_SYMBOL_GPL(ieee80211_nan_data_set_awdl);
+ 
+ struct ieee80211_vif *wdev_to_ieee80211_vif(struct wireless_dev *wdev)
+ {
+--- a/net/wireless/mlme.c
++++ b/net/wireless/mlme.c
+@@ -15,6 +15,7 @@
+ #include <linux/slab.h>
+ #include <linux/wireless.h>
+ #include <net/cfg80211.h>
++#include <net/awdl.h>
+ #include <net/iw_handler.h>
+ #include "core.h"
+ #include "nl80211.h"
+@@ -978,8 +979,11 @@
+ 			 * cfg80211 doesn't track the stations
+ 			 */
+ 			break;
++		case NL80211_IFTYPE_NAN_DATA:
++			if (ieee80211_is_awdl_action(mgmt, params->len))
++				break;
++			fallthrough;
+ 		case NL80211_IFTYPE_NAN:
+-		case NL80211_IFTYPE_NAN_DATA:
+ 			if (mgmt->u.action.category !=
+ 			    WLAN_CATEGORY_PROTECTED_DUAL_OF_ACTION)
+ 				err = -EOPNOTSUPP;
