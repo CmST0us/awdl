@@ -16,6 +16,6 @@ MT7925 原生 AirDrop 已通过同一 iPad Pro 的 1 GiB 随机文件双向传�
 - [D-Bus 接口](docs/service-api.md)与[文件协议](docs/protocol.md)。
 - [验证与已知限制](docs/acceptance.md)。
 
-可编辑的本机配置放在 `config/local/`，示例位于 `config/examples/`。`.build/` 存放可重建产物，`.private/` 存放私有诊断材料；配对状态与共享文件保存在目标机器上。
+可编辑的本机配置放在 `config/local/`，示例位于 `config/examples/`。`.build/` 存放可重建产物，`.private/` 仅保留必要的私有原始证据；三个目录均由 `.gitignore` 排除，不随源码提交。实现与使用结论维护在硬件说明和 `docs/`，不依赖私有临时脚本。重复校验文件、导出附件和已解包的传输包在确认原件保留后可删除；`config/local/` 是持久输入，不能按临时目录清理。配对状态与共享文件保存在目标机器上。
 
 仓库地址：`ssh://git@gitlab-r.eric3u.xyz:20022/oxygen/wireless/wireless-service.git`。现有 Wi-Fi Aware 配置内容与 iOS 安装身份保留。公共 D-Bus 命名空间为 `org.wirelessd1`。
