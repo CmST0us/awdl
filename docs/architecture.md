@@ -171,7 +171,7 @@ Rust `Publisher` 通过公共 `Radio` 操作无线设备；文件服务与 App �
 
 ### hostap 的无线驱动接口
 
-继续使用 hostap 已有的 `wpa_driver_ops`。同一份 `wpa_supplicant` 编入 nl80211 和 `rtl_nan`，由所选无线后端明确指定驱动。
+继续使用 hostap 已有的 `wpa_driver_ops`。同一份 `wpa_supplicant` 编入 nl80211、`rtl_nan` 和实验性的 `bcm_nan`，由所选无线后端明确指定驱动。
 
 NAN 发现、SAE/PASN、NIK/NPK、NDL/NDP、服务映射及协议调度协商由公共 hostap 负责。RTL 目录负责将 station、key、管理帧、NDI 和日程转换成 vendor command/event；Intel 走现有 nl80211 路径。
 

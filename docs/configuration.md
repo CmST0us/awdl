@@ -205,7 +205,7 @@ data_slots = [4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 17, 18, 19, 20,
               21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
 ```
 
-`discovery_slots` 表示发现主信道上的额外本地可用时隙；空列表只保留协议 DW。当前后端采用 512 TU 周期、16 TU 时隙，槽号为 0–31；这些单位由后端支持的调度格式定义。公共编码将槽号转换成 hostap 位图，BE200 只发布数据主信道的 `ffffffff`，RTL 发布数据／发现位图 `f0f2ffff/0f0d0000`。`data_slots` 必须非空。
+`discovery_slots` 表示发现主信道上的额外本地可用时隙；空列表只保留协议 DW。手工策略使用 512 TU 模式、16 TU 时隙，槽号为 0–31。公共编码将槽号转换成 hostap 位图，BE200 只发布数据主信道的 `ffffffff`，RTL 发布数据／发现位图 `f0f2ffff/0f0d0000`。BCM43752 将本地模式重复 16 次，生成其原生 8192 TU 周期的 512 槽日程；接收到的对端日程保留各个 DW 的不同可用窗口。`data_slots` 必须非空。
 
 数据主信道从运行配置的 `frequency` 取得。同一信道时使用已支持的单信道全周期策略；不同信道时两组槽不能重叠。对端协商和交集计算仍由 hostap 与后端执行。
 
@@ -432,4 +432,4 @@ MT7925 驱动安装要求 `config/local/install.toml` 的 `[mt7925].country`，�
 
 Q8B 执行 `install-platform --platform dragon-q8b` 后，wirelessd 依赖板级性能单元。该单元将 CPU governor 设为 `performance`，并加载 `platforms/dragon-q8b/tcp.conf` 的 TCP 自动发送／接收内存上限 32 MiB；初始内存保持原值。这是整机策略，作用于本机 TCP 和 CPU，增加空闲功耗，热限制仍由内核执行；停止无线服务不恢复这些设置。更改需修改对应源文件并重新安装、重启性能单元。安装保留 wirelessd / fileserver 原启用状态。
 
-iPad Pro 的设备标识与签名信息保存在本机私有输入中，不进入 Git，公共客户端和 AwareLab 使用既有入口。`testCommonClient` 的 `AWARE_CLIENT_STREAMS` 仅接受 1 或 4，省略为 1；`AWARE_CLIENT_UPLOAD_FILE` 为非空本地文件名匹配字符串，省略为 `upload-probe`。`speed` 的 `AWARE_CLIENT_DOWNLOAD_FILE` 为既有远端文件名，非空字符串，省略为 `speed-1g.bin`；不创建或修改板端文件。`wait_download` 仅等待正在进行的下载，保留 App 计时及连接；下载完成事件终止等待，900 秒只是失败兜底。数据计时与协议实现不因观察器改变。实测结果见[验收结论](acceptance.md#mt7925--dragon-q8b)。
+iPad Pro 的设备标识与签名信息保存在本机私有输入中，不进入 Git，公共客户端和 AwareLab 使用既有入口。`testCommonClient` 的 `AWARE_CLIENT_STREAMS` 仅接受 1 或 4，省略为 1；`AWARE_CLIENT_UPLOAD_FILE` 为非空本地文件名匹配字符串，省略为 `upload-probe`。`speed` 的 `AWARE_CLIENT_DOWNLOAD_FILE` 为既有远端文件名，非空字符串，省略为 `speed-1g.bin`；不创建或修改板端文件。`wait_download`／`wait_upload` 仅等待 App 中同一次下载／上传，保留原始计时及连接；传输完成事件终止等待，大文件上传与下载的 900 秒上限仅作失败兜底。数据计时与协议实现不因观察器改变。实测结果见[验收结论](acceptance.md#mt7925--dragon-q8b)。

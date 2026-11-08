@@ -485,7 +485,15 @@ final class M5PairingTests: XCTestCase {
         evidence["target_candidates_seen"] = candidates.filter { row.query.contains($0) }
         stamp("target_found")
         captureObservation()
-        row.element.tap()
+        let system = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let setup = system.otherElements["PRXCardBottomTray"].buttons.matching(
+            NSPredicate(format: "label IN %@", ["设置", "設定", "Set Up"])).firstMatch
+        if setup.exists && setup.isHittable {
+            evidence["setup_button"] = setup.label
+            setup.tap()
+        } else {
+            row.element.tap()
+        }
         evidence["device_tap_count"] = 1
         evidence["pairing_flow_started"] = true
         stamp("target_tap")
@@ -596,10 +604,13 @@ final class M5PairingTests: XCTestCase {
 
     @MainActor func testCommonClient() throws {
         continueAfterFailure = false
+        // 系统文件选择器的远程视图与 App 使用相同的触控坐标方向。
+        XCUIDevice.shared.orientation = .portrait
         let action = ProcessInfo.processInfo.environment["AWARE_CLIENT_ACTION"] ?? "observe"
         let client = XCUIApplication(bundleIdentifier: ProcessInfo.processInfo.environment["AWARE_CLIENT_BUNDLE_ID"] ?? TestConfiguration.clientBundle)
-        // 验收观察器超时后可继续等待同一下载，保留 App 中原始计时与连接。
-        if action == "wait_download" { client.activate() } else { client.launch() }
+        // 验收观察器超时后可继续等待同一传输，保留 App 中原始计时与连接。
+        let waitingForUpload = action == "wait_upload"
+        if action == "wait_download" || waitingForUpload { client.activate() } else { client.launch() }
         defer {
             let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
             let description = client.debugDescription + "\n" + springboard.debugDescription
@@ -611,11 +622,15 @@ final class M5PairingTests: XCTestCase {
             screen.lifetime = .keepAlways
             add(screen)
         }
-        if action == "wait_download" {
-            XCTAssertTrue(client.buttons["打开下载文件"].waitForExistence(timeout: 900))
-            let rate = client.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "下载 ")).firstMatch
+        if action == "wait_download" || waitingForUpload {
+            if waitingForUpload {
+                XCTAssertTrue(client.staticTexts["上传完成"].waitForExistence(timeout: 900))
+            } else {
+                XCTAssertTrue(client.buttons["打开下载文件"].waitForExistence(timeout: 900))
+            }
+            let rate = client.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", waitingForUpload ? "上传 " : "下载 ")).firstMatch
             XCTAssertTrue(rate.exists)
-            print("COMMON_SPEED_RESULT: " + rate.label)
+            print((waitingForUpload ? "COMMON_UPLOAD_RESULT: " : "COMMON_SPEED_RESULT: ") + rate.label)
             return
         }
         XCTAssertTrue(client.buttons["配对新设备"].waitForExistence(timeout: 5))
@@ -646,11 +661,11 @@ final class M5PairingTests: XCTestCase {
                 field.typeText(String(pin.prefix(3)))
                 field.typeText(String(pin.suffix(3)))
                 _ = submitPIN(field, app: client)
-                let done = tray.buttons.matching(NSPredicate(format: "label IN %@",
-                    ["完成", "Done"])).firstMatch
-                XCTAssertTrue(done.waitForExistence(timeout: 5))
-                done.tap()
             }
+            let done = tray.buttons.matching(NSPredicate(format: "label IN %@",
+                ["完成", "Done"])).firstMatch
+            XCTAssertTrue(done.waitForExistence(timeout: 5))
+            done.tap()
             let authorized = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
                 MainActor.assumeIsolated { client.buttons["配对新设备"].isHittable }
             }, object: nil)
@@ -664,6 +679,10 @@ final class M5PairingTests: XCTestCase {
         }
         if action == "connect" { client.buttons["连接"].tap() }
         if ["download", "upload", "cancel", "reconnect", "speed"].contains(action) {
+            // 发现、缓存认证及文件列表的失败期限，单位秒；须为正数，省略时为 30。
+            // 由实际 UI 完成事件推进，允许系统走完认证，不能在其 6 秒期限前终止。
+            let connectionTimeout = Double(ProcessInfo.processInfo.environment["AWARE_RUN_TIMEOUT"] ?? "30") ?? 30
+            XCTAssertGreaterThan(connectionTimeout, 0)
             client.buttons["连接"].tap()
             let discovered = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
                 MainActor.assumeIsolated {
@@ -671,9 +690,9 @@ final class M5PairingTests: XCTestCase {
                     client.buttons.containing(.staticText, identifier: "alignment.txt").firstMatch.exists
                 }
             }, object: nil)
-            XCTAssertEqual(XCTWaiter.wait(for: [discovered], timeout: 5), .completed)
+            XCTAssertEqual(XCTWaiter.wait(for: [discovered], timeout: connectionTimeout), .completed)
             let file = client.buttons.containing(.staticText, identifier: "alignment.txt").firstMatch
-            XCTAssertTrue(file.waitForExistence(timeout: 5))
+            XCTAssertTrue(file.waitForExistence(timeout: connectionTimeout))
             if action == "speed" {
                 // 下载并发数，无单位，仅 1 或 4；省略时为 1。
                 let streams = ProcessInfo.processInfo.environment["AWARE_CLIENT_STREAMS"] ?? "1"
@@ -706,25 +725,29 @@ final class M5PairingTests: XCTestCase {
                 client.buttons["断开"].tap()
                 XCTAssertTrue(client.buttons["连接"].waitForExistence(timeout: 5))
                 client.buttons["连接"].tap()
-                XCTAssertTrue(file.waitForExistence(timeout: 5))
+                XCTAssertTrue(file.waitForExistence(timeout: connectionTimeout))
             } else {
                 client.buttons["上传文件"].tap()
-                let local = client.cells.matching(NSPredicate(format: "label IN %@",
-                    ["我的 iPad", "我的iPad", "On My iPad"])).firstMatch
-                XCTAssertTrue(local.waitForExistence(timeout: 5))
-                local.tap()
-                let folder = client.cells.matching(NSPredicate(format: "label CONTAINS %@", ProcessInfo.processInfo.environment["AWARE_CLIENT_FOLDER"] ?? TestConfiguration.clientDisplayName)).firstMatch
-                XCTAssertTrue(folder.waitForExistence(timeout: 5))
-                folder.tap()
                 // 本地上传文件名匹配字符串；省略时沿用 upload-probe，不能为空。
                 let uploadName = ProcessInfo.processInfo.environment["AWARE_CLIENT_UPLOAD_FILE"] ?? "upload-probe"
                 XCTAssertFalse(uploadName.isEmpty)
                 let source = client.cells.matching(NSPredicate(format: "label CONTAINS %@", uploadName)).firstMatch
+                // 文件选择器会恢复上次目录，已显示目标文件时直接打开。
+                if !source.waitForExistence(timeout: 5) {
+                    let local = client.cells.matching(NSPredicate(format: "label IN %@",
+                        ["我的 iPad", "我的iPad", "On My iPad"])).firstMatch
+                    XCTAssertTrue(local.waitForExistence(timeout: 5))
+                    local.tap()
+                    let folder = client.cells.matching(NSPredicate(format: "label CONTAINS %@", ProcessInfo.processInfo.environment["AWARE_CLIENT_FOLDER"] ?? TestConfiguration.clientDisplayName)).firstMatch
+                    XCTAssertTrue(folder.waitForExistence(timeout: 5))
+                    folder.doubleTap()
+                }
                 XCTAssertTrue(source.waitForExistence(timeout: 5))
-                source.tap()
+                source.doubleTap()
                 let open = client.buttons.matching(NSPredicate(format: "label IN %@", ["打开", "Open"])).firstMatch
                 if open.exists { open.tap() }
-                XCTAssertTrue(client.staticTexts["上传完成"].waitForExistence(timeout: 90))
+                // 与大文件下载一致，由完成事件推进；900 秒仅作失败兜底。
+                XCTAssertTrue(client.staticTexts["上传完成"].waitForExistence(timeout: 900))
                 let rate = client.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "上传 ")).firstMatch
                 XCTAssertTrue(rate.exists)
                 print("COMMON_UPLOAD_RESULT: " + rate.label)
@@ -925,7 +948,7 @@ final class M5PairingTests: XCTestCase {
         let row = settings.buttons["com.apple.settings.wifi"]
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         row.tap()
-        let wifiRow = settings.switches["Wi-Fi"].firstMatch
+        let wifiRow = settings.switches["wifiSettings.powerToggle"].firstMatch
         XCTAssertTrue(wifiRow.waitForExistence(timeout: 5))
         // Settings exposes the whole row and its physical switch separately.
         let controls = settings.switches.allElementsBoundByIndex.filter {

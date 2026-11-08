@@ -2,6 +2,8 @@
 
 Linux 无线服务组件。Wi-Fi Aware 与原生 AWDL / AirDrop 接入 Intel BE200、RTL8852BE 与 MT7925。这些网卡共用 Rust `wirelessd`、hostap 2.12、Rust HTTP 文件服务和 iOS AwareClient。驱动、固件及无线接入差异位于 `hardware/`。
 
+[BCM43752 A2 / AP6275P](hardware/bcm43752/README.md) 的驱动及固件补丁已接入同一份 Rust 服务和 hostap。真机已完成原生 NAN、iPad mini 首次 PIN 配对、缓存认证、安全 NDP 和双向文件内容校验。当前整套候选的 1 GiB 单／四连接下载为 36.90／41.29 MB/s，256 MiB 上传为 30.08 MB/s，内容校验通过；首轮单连接曾停滞，原因未确定。已补齐原生活动查询和空闲会话回收；吞吐仍低于 BE200，长期稳定性及完整固件能力尚未验收，保持实验接入。整套配置及成功／失败结果见[验证结论](docs/acceptance.md#bcm43752-整套候选真机验收)。
+
 MT7925 / Dragon Q8B 已完成 iPad Pro PIN 配对；正式模块通过缓存身份认证、安全 NDP、双向文件和服务重启后重连。CN / 5 GHz / 80 MHz 性能验收为单连接下载 46.52 MB/s、四连接下载 43.44 MB/s、上传 30.69 MB/s；单连接已超过 BE200 已有参考值，四连接与上传仍低于对应参考值。固定固件的 DCEA 信标规避与认证限制见 [MT7925 验证结论](hardware/mt7925/README.md)。
 
 MT7925 原生 AirDrop 已通过同一 iPad Pro 的 1 GiB 随机文件双向传输和往返内容校验：发送 37.72 MB/s，接收 35.87 MB/s；取消后重传接收为 39.33 MB/s。数据使用 149 / VHT80 双流及原生 NAN_DATA `awdl0`，完整配置和验收边界见 [MT7925 AirDrop](docs/acceptance.md#mt7925-原生-airdrop)。
