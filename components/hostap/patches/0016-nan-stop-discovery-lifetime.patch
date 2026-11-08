@@ -1,0 +1,13 @@
+--- a/wpa_supplicant/nan_supplicant.c
++++ b/wpa_supplicant/nan_supplicant.c
+@@ -197,7 +197,9 @@
+ 	}
+ 
+ 	wpa_drv_nan_stop(wpa_s);
+-	nan_de_set_cluster_id(wpa_s->nan_de, NULL);
++	/* Interface cleanup may have already destroyed the discovery engine. */
++	if (wpa_s->nan_de)
++		nan_de_set_cluster_id(wpa_s->nan_de, NULL);
+ 	wpas_notify_nan_stopped(wpa_s);
+ }
+ 

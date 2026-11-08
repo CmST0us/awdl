@@ -1,0 +1,163 @@
+Subject: NAN：按硬件实际周期保留完整对端时隙
+
+--- a/src/common/nan_bitmap.h
++++ b/src/common/nan_bitmap.h
+@@ -4,52 +4,61 @@
+ 
+ #include <stddef.h>
+ 
+-/*
+- * Keep the availability shared by every 32 x 16 TU cycle. The firmware
+- * repeats this schedule, so a slot must be available in every peer cycle.
+- * Return 1 if the projection removes slots, 0 if exact, or -1 if invalid.
+- */
+-static inline int nan_bitmap_512(const unsigned char *src, size_t len,
+-				unsigned int duration, unsigned int period,
+-				unsigned int offset, unsigned char out[4])
++/* Preserve the driver's real period and granularity. Short-period drivers
++ * receive the intersection of all peer cycles; an 8192 TU / 16 TU driver
++ * retains the complete peer timeline. Return 1 if slots were removed,
++ * 0 if exact, or -1 for an invalid input/capability. out has 64 bytes. */
++static inline int nan_bitmap_period(const unsigned char *src, size_t len,
++                                    unsigned int duration, unsigned int period,
++                                    unsigned int offset, unsigned int target_tu,
++                                    unsigned int slot_tu, unsigned char out[64])
+ {
+-	unsigned char slots[512] = { 0 };
+-	unsigned int step, width, start, bit, sub, i;
+-	int reduced = 0;
++    unsigned char slots[512] = { 0 };
++    unsigned int step, width, start, bit, sub, i, target, stride, count;
++    int reduced = 0;
+ 
+-	if (len > 64 || duration > 3 || !period || period > 7)
+-		return -1;
+-	step = 4U << period;
+-	width = 1U << duration;
+-	if (offset >= step || len * 8 * width > step)
+-		return -1;
+-	if (!len) {
+-		for (i = 0; i < 4; i++)
+-			out[i] = 255;
+-		return 0;
+-	}
+-	for (start = offset; start < 512; start += step) {
+-		for (bit = 0; bit < len * 8; bit++) {
+-			if (!(src[bit / 8] & (1U << (bit % 8))))
+-				continue;
+-			for (sub = 0; sub < width; sub++) {
+-				i = start + bit * width + sub;
+-				if (i < 512)
+-					slots[i] = 1;
+-			}
+-		}
+-	}
+-	for (i = 32; i < 512; i++) {
+-		if (slots[i] != slots[i % 32])
+-			reduced = 1;
+-		slots[i % 32] &= slots[i];
+-	}
+-	for (i = 0; i < 4; i++)
+-		out[i] = 0;
+-	for (i = 0; i < 32; i++) {
+-		if (slots[i])
+-			out[i / 8] |= 1U << (i % 8);
+-	}
+-	return reduced;
++    if (len > 64 || (len && !src) || duration > 3 || !period || period > 7 ||
++        target_tu < 128 || target_tu > 8192 || (target_tu & (target_tu - 1)) ||
++        slot_tu < 16 || slot_tu > 128 || (slot_tu & (slot_tu - 1)))
++        return -1;
++    step = 4U << period;
++    width = 1U << duration;
++    if (offset >= step || len * 8 * width > step)
++        return -1;
++    if (!len) {
++        for (i = 0; i < 512; i++)
++            slots[i] = 1;
++    } else {
++        for (start = offset; start < 512; start += step) {
++            for (bit = 0; bit < len * 8; bit++) {
++                if (!(src[bit / 8] & (1U << (bit % 8))))
++                    continue;
++                for (sub = 0; sub < width; sub++) {
++                    i = start + bit * width + sub;
++                    if (i < 512)
++                        slots[i] = 1;
++                }
++            }
++        }
++    }
++    target = target_tu / 16;
++    stride = slot_tu / 16;
++    count = target / stride;
++    for (i = 0; i < 64; i++)
++        out[i] = 0;
++    for (bit = 0; bit < count; bit++) {
++        unsigned int available = 1, any = 0;
++        for (start = bit * stride; start < 512; start += target) {
++            for (sub = 0; sub < stride; sub++) {
++                available &= slots[start + sub];
++                any |= slots[start + sub];
++            }
++        }
++        if (available)
++            out[bit / 8] |= 1U << (bit % 8);
++        else if (any)
++            reduced = 1;
++    }
++    return reduced;
+ }
+ #endif
+--- a/wpa_supplicant/nan_supplicant.c
++++ b/wpa_supplicant/nan_supplicant.c
+@@ -211,7 +211,9 @@
+ {
+ 	const struct nan_map_chan *src_chan = &sched->maps[i].chans[j];
+ 	struct nan_chan_entry *chan_entry;
+-	u8 bitmap[4];
++	u8 bitmap[64];
++	size_t bitmap_len, b;
++	bool available = false;
+ 	int ch_idx, ret;
+ 
+ 	if (!src_chan->committed)
+@@ -238,26 +240,31 @@
+ 		return -1;
+ 	}
+ 
+-	ret = nan_bitmap_512(src_chan->tbm.bitmap, src_chan->tbm.len,
+-			     src_chan->tbm.duration, src_chan->tbm.period,
+-			     src_chan->tbm.offset, bitmap);
++	ret = nan_bitmap_period(src_chan->tbm.bitmap, src_chan->tbm.len,
++				src_chan->tbm.duration, src_chan->tbm.period,
++				src_chan->tbm.offset, wpa_s->nan_capa.schedule_period,
++				wpa_s->nan_capa.slot_duration, bitmap);
+ 	if (ret < 0) {
+ 		wpa_printf(MSG_INFO,
+ 			   "NAN: Invalid peer time bitmap for freq %u",
+ 			   src_chan->chan.freq);
+ 		return -1;
+ 	}
++	bitmap_len = (wpa_s->nan_capa.schedule_period /
++		      wpa_s->nan_capa.slot_duration + 7) / 8;
+ 	if (ret > 0)
+-		wpa_hexdump(MSG_DEBUG, "NAN: Common 512 TU peer availability",
+-			    bitmap, sizeof(bitmap));
+-	if (!(bitmap[0] | bitmap[1] | bitmap[2] | bitmap[3])) {
++		wpa_hexdump(MSG_DEBUG, "NAN: Common peer availability",
++			    bitmap, bitmap_len);
++	for (b = 0; b < bitmap_len; b++)
++		available |= bitmap[b] != 0;
++	if (!available) {
+ 		wpa_printf(MSG_DEBUG,
+ 			   "NAN: Skip peer channel without repeating availability: freq=%u",
+ 			   src_chan->chan.freq);
+ 		return 0;
+ 	}
+ 	sched_cfg->channels[ch_idx].time_bitmap =
+-		wpabuf_alloc_copy(bitmap, sizeof(bitmap));
++		wpabuf_alloc_copy(bitmap, bitmap_len);
+ 	if (!sched_cfg->channels[ch_idx].time_bitmap)
+ 		return -1;
+ 

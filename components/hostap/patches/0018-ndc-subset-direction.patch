@@ -1,0 +1,25 @@
+Subject: NAN：修正 NDC 覆盖检查的集合方向
+
+--- a/src/nan/nan_util.c
++++ b/src/nan/nan_util.c
+@@ -1850,7 +1850,8 @@
+ 		available = nan_tbm_to_bf(nan, &schedule->chans[i].committed);
+ 		if (!available)
+ 			continue;
+-		covered = bitfield_is_subset(required, available);
++		/* bitfield_is_subset(a, b) tests whether b is contained in a. */
++		covered = bitfield_is_subset(available, required) == 1;
+ 		bitfield_free(available);
+ 		if (covered)
+ 			break;
+--- a/src/nan/nan_ndl.c
++++ b/src/nan/nan_ndl.c
+@@ -544,7 +544,7 @@
+ 	 * Verify that the schedule NDC bitmap is covered by the local
+ 	 * availability for the map used for the NDC.
+ 	 */
+-	if (!bitfield_is_subset(ndc_bf, track_ndc_bf)) {
++	if (bitfield_is_subset(track_ndc_bf, ndc_bf) != 1) {
+ 		wpa_printf(MSG_DEBUG,
+ 			   "NAN: NDL: NDC bitmap is not covered by local availability on NDC channel");
+ 

@@ -1,0 +1,22 @@
+--- a/src/drivers/driver.h
++++ b/src/drivers/driver.h
+@@ -2866,6 +2866,9 @@
+ 	 * belongs.
+ 	 */
+ 	const u8 *nmi_addr;
++	/* Negotiated NAN Data Path ID (1..255); zero when not supplied.
++	 * Native firmware backends use it to bind the same protocol session. */
++	u8 nan_ndp_id;
+ #endif /* CONFIG_NAN */
+ };
+ 
+--- a/wpa_supplicant/nan_supplicant.c
++++ b/wpa_supplicant/nan_supplicant.c
+@@ -646,6 +646,7 @@
+ 		os_memset(&sta_params, 0, sizeof(sta_params));
+ 		sta_params.addr = peer_ndi;
+ 		sta_params.nmi_addr = peer_nmi;
++		sta_params.nan_ndp_id = params->ndp_id.id;
+ 		sta_params.flags = WPA_STA_AUTHENTICATED | WPA_STA_ASSOCIATED;
+ 
+ 		/* Set MFP flag early, to prevent races until keys are installed
