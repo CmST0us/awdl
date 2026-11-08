@@ -1,0 +1,673 @@
+Subject: [PATCH] 原生 NAN NDI 按完成事件保留固件和主机所有权
+
+--- a/Makefile
++++ b/Makefile
+@@ -383,7 +383,7 @@
+ # For NAN
+ ifneq ($(CONFIG_BCMDHD_NAN),)
+ 	DHDCFLAGS += -DWL_NAN -DWL_NAN_DISC_CACHE -DWL_NANP2P -DWL_NAN_ENABLE_MERGE
+-	DHDOFILES += wl_cfgnan.o bcmbloom.o wl_nan_host.o
++	DHDOFILES += wl_cfgnan.o bcmbloom.o wl_nan_host.o wl_nan_ndi.o
+ endif
+ 
+ # For Module auto-selection
+--- a/wl_cfg80211.h
++++ b/wl_cfg80211.h
+@@ -2029,8 +2029,15 @@
+ } scan_stat_cache_cores_t;
+ #endif /* LINKSTAT_EXT_SUPPORT */
+ 
++#ifdef WL_NAN
++#include "wl_nan_ndi.h"
++#endif
++
+ /* private data of cfg80211 interface */
+ struct bcm_cfg80211 {
++#ifdef WL_NAN
++	struct wl_nan_ndi_state nan_host_ndi;
++#endif
+ 	struct wireless_dev *wdev;	/* representing cfg cfg80211 device */
+ 
+ 	struct wireless_dev *p2p_wdev;	/* representing cfg cfg80211 device for P2P */
+--- a/wl_cfg80211.c
++++ b/wl_cfg80211.c
+@@ -18293,6 +18293,9 @@
+ 	/* register interested state */
+ 	set_bit(WL_STATUS_CONNECTED, &cfg->interrested_state);
+ 	spin_lock_init(&cfg->cfgdrv_lock);
++#ifdef WL_NAN
++	wl_nan_host_ndi_init(cfg);
++#endif
+ 	mutex_init(&cfg->ioctl_buf_sync);
+ 	init_waitqueue_head(&cfg->netif_change_event);
+ 	init_completion(&cfg->send_af_done);
+@@ -18675,6 +18678,9 @@
+ 
+ void wl_cfg80211_detach(struct bcm_cfg80211 *cfg)
+ {
++#ifdef WL_NAN
++	wl_nan_host_ndi_shutdown(cfg);
++#endif
+ 	WL_DBG(("Enter\n"));
+ 	if (!cfg) {
+ 		return;
+--- a/dhd_linux.h
++++ b/dhd_linux.h
+@@ -451,6 +451,10 @@
+ #endif /* BCM_ROUTER_DHD */
+ 	uint8 tx_paths_active;
+ 	bool del_in_progress;
++#ifdef WL_NAN
++	bool native_nan; /* Bare Ethernet NDI, never a cfg80211 station. */
++	int nan_flow_error;
++#endif
+ 	bool static_if;			/* used to avoid some operations on static_if */
+ #ifdef DHD_4WAYM4_FAIL_DISCONNECT
+ 	struct delayed_work m4state_work;
+@@ -606,4 +610,21 @@
+ extern bool dhd_80211_mon_pkt(dhd_pub_t *dhdp, void *pkt, int ifidx);
+ #endif /* DBG_PKT_MON */
+ 
++#ifdef WL_NAN
++bool dhd_nan_ndi_event(dhd_pub_t *dhdp, const wl_event_data_if_t *event,
++                      const char *name, const u8 *mac);
++int dhd_nan_ndi_flow_event(dhd_pub_t *dhdp, const wl_event_data_if_t *event,
++                          const u8 *mac);
++int dhd_nan_ndi_register(dhd_pub_t *dhdp, int ifidx, int bssidx,
++                        const u8 *mac, const char *name, const char *firmware_name);
++int dhd_nan_ndi_remove(dhd_pub_t *dhdp, int ifidx, int bssidx, const u8 *mac);
++int dhd_nan_ndi_resume(dhd_pub_t *dhdp, int ifidx, int bssidx, const u8 *mac);
++int dhd_nan_ndi_quiesce(dhd_pub_t *dhdp, int ifidx, int bssidx, const u8 *mac,
++                       int *firmware_error);
++bool dhd_nan_ndi_closing(dhd_pub_t *dhdp, int ifidx);
++void dhd_nan_ndi_flow_failure(dhd_pub_t *dhdp, int ifidx, int error);
++void dhd_nan_ndi_flow_complete(dhd_pub_t *dhdp, u8 ifidx, u16 flowid,
++                              u32 status, u32 operation);
++#endif
++
+ #endif /* __DHD_LINUX_H__ */
+--- a/dhd_linux.c
++++ b/dhd_linux.c
+@@ -108,6 +108,9 @@
+ #endif
+ #if defined(WL_CFG80211)
+ #include <wl_cfg80211.h>
++#ifdef WL_NAN
++#include "wl_nan_host.h"
++#endif
+ #include <wl_cfgvif.h>
+ #ifdef WL_BAM
+ #include <wl_bam.h>
+@@ -2473,8 +2476,9 @@
+ 
+ 					ndev = dhdinfo->iflist[i]->net;
+ #ifdef WL_CFG80211
+-					if (ndev->ieee80211_ptr->iftype == NL80211_IFTYPE_P2P_GO ||
+-						ndev->ieee80211_ptr->iftype == NL80211_IFTYPE_AP) {
++					if (ndev->ieee80211_ptr &&
++					    (ndev->ieee80211_ptr->iftype == NL80211_IFTYPE_P2P_GO ||
++					     ndev->ieee80211_ptr->iftype == NL80211_IFTYPE_AP)) {
+ 						allmulti = 1;
+ 						DHD_LOG_MEM(("%s: IF[%s] is AP/GO, set allmulti.\n",
+ 							__FUNCTION__, ndev->name));
+@@ -5557,6 +5561,16 @@
+ 
+ void dhd_unregister_net(struct net_device *net, bool need_rtnl_lock)
+ {
++#ifdef WL_NAN
++	/* Native NDI has no wireless_dev; cfg80211 unregister dereferences it. */
++	if (!net->ieee80211_ptr) {
++		if (need_rtnl_lock)
++			unregister_netdev(net);
++		else
++			unregister_netdevice(net);
++		return;
++	}
++#endif
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0))
+ 	if (need_rtnl_lock) {
+ 		rtnl_lock();
+@@ -7798,9 +7812,9 @@
+  * allocate a new one. the slot is reused. this function does NOT register the
+  * new interface to linux kernel. dhd_register_if does the job
+  */
+-struct net_device*
+-dhd_allocate_if(dhd_pub_t *dhdpub, int ifidx, const char *name,
+-	uint8 *mac, uint8 bssidx, bool need_rtnl_lock, const char *dngl_name)
++static struct net_device*
++dhd_allocate_if_impl(dhd_pub_t *dhdpub, int ifidx, const char *name,
++	uint8 *mac, uint8 bssidx, bool need_rtnl_lock, const char *dngl_name, bool native_nan)
+ {
+ 	dhd_info_t *dhdinfo = (dhd_info_t *)dhdpub->info;
+ 	dhd_if_t *ifp;
+@@ -7854,7 +7868,10 @@
+ 	ifp->info = dhdinfo;
+ 	ifp->idx = ifidx;
+ 	ifp->bssidx = bssidx;
+-	ifp->del_in_progress = FALSE;
++	ifp->del_in_progress = native_nan;
++#ifdef WL_NAN
++	ifp->native_nan = native_nan;
++#endif
+ #ifdef DHD_MCAST_REGEN
+ 	ifp->mcast_regen_bss_enable = FALSE;
+ #endif
+@@ -7909,7 +7926,8 @@
+ #endif /* WL_CFG80211 */
+ #endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 9) */
+ 	strlcpy(ifp->name, ifp->net->name, sizeof(ifp->name));
+-	dhdinfo->iflist[ifidx] = ifp;
++	if (!native_nan)
++		dhdinfo->iflist[ifidx] = ifp;
+ 
+ /* initialize the dongle provided if name */
+ 	if (dngl_name) {
+@@ -7950,6 +7968,9 @@
+ 	dhd_reset_tcpsync_info_by_ifp(ifp);
+ #endif /* DHDTCPSYNC_FLOOD_BLK */
+ 
++	/* Publish a native NDI only after all lists, locks and work items exist. */
++	if (native_nan)
++		dhdinfo->iflist[ifidx] = ifp;
+ 	return ifp->net;
+ 
+ fail:
+@@ -7971,6 +7992,14 @@
+ 	}
+ 	dhdinfo->iflist[ifidx] = NULL;
+ 	return NULL;
++}
++
++struct net_device*
++dhd_allocate_if(dhd_pub_t *dhdpub, int ifidx, const char *name,
++	uint8 *mac, uint8 bssidx, bool need_rtnl_lock, const char *dngl_name)
++{
++	return dhd_allocate_if_impl(dhdpub, ifidx, name, mac, bssidx,
++		need_rtnl_lock, dngl_name, false);
+ }
+ 
+ static void
+@@ -8083,6 +8112,15 @@
+ 				DHD_TRACE(("No outstanding TX!\n"));
+ 			}
+ 			dhdinfo->iflist[ifidx] = NULL;
++#ifdef WL_NAN
++			/* Failed registration can leave an unregistered NDI. Its
++			 * destructor is deliberately unset until registration succeeds. */
++			if (ifp->native_nan && ifp->net->reg_state == NETREG_UNREGISTERED) {
++				free_netdev(ifp->net);
++				ifp->net = NULL;
++				goto nan_net_released;
++			}
++#endif
+ 			/* in unregister_netdev case, the interface gets freed by net->destructor
+ 			 * (which is set to free_netdev)
+ 			 */
+@@ -8103,6 +8141,9 @@
+ 				dhd_tcpack_suppress_set(dhdpub, TCPACK_SUP_OFF);
+ #endif /* DHDTCPACK_SUPPRESS && BCMPCIE */
+ 				dhd_unregister_net(ifp->net, need_rtnl_lock);
++#ifdef WL_NAN
++				if (!ifp->native_nan) {
++#endif
+ #if defined(WLDWDS) && defined(WL_EXT_IAPSTA)
+ 				if (ifp->dwds) {
+ 					wl_ext_iapsta_dettach_dwds_netdev(ifp->net, ifidx, ifp->bssidx);
+@@ -8119,8 +8160,15 @@
+ 					wl_ext_event_dettach_netdev(ifp->net, ifidx);
+ #endif /* WL_EVENT */
+ 				}
++#ifdef WL_NAN
++				}
++#endif
+ 			}
+ 			ifp->net = NULL;
++#ifdef WL_NAN
++nan_net_released:
++#endif
++			;
+ 		}
+ #ifdef DHD_WMF
+ 		dhd_wmf_cleanup(dhdpub, ifidx);
+@@ -14099,6 +14147,276 @@
+ 	return err;
+ }
+ 
++
++#ifdef WL_NAN
++static int dhd_nan_ndi_open(struct net_device *net)
++{
++	dhd_info_t *dhd = DHD_DEV_INFO(net);
++	dhd_if_t *ifp = dhd->iflist[DHD_DEV_IFIDX(net)];
++	if (!ifp || !ifp->native_nan || ifp->del_in_progress ||
++	    !dhd->pub.up || dhd->pub.busstate != DHD_BUS_DATA)
++		return -ENODEV;
++	netif_start_queue(net);
++	return 0;
++}
++
++static int dhd_nan_ndi_stop(struct net_device *net)
++{
++	netif_stop_queue(net);
++	return 0;
++}
++
++/* Reuse the native PCIe data path; no private STA ioctls, MAC rewrite,
++ * wireless_dev, scan extension, AP/P2P role or firmware power transition. */
++static const struct net_device_ops dhd_nan_ndi_ops = {
++	.ndo_open = dhd_nan_ndi_open,
++	.ndo_stop = dhd_nan_ndi_stop,
++	.ndo_get_stats = dhd_get_stats,
++#ifdef DHD_PCIE_NATIVE_RUNTIMEPM
++	.ndo_start_xmit = dhd_start_xmit_wrapper,
++#else
++	.ndo_start_xmit = dhd_start_xmit,
++#endif
++	.ndo_set_rx_mode = dhd_set_multicast_list,
++};
++
++bool dhd_nan_ndi_event(dhd_pub_t *dhdp, const wl_event_data_if_t *event,
++                      const char *name, const u8 *mac)
++{
++	struct net_device *primary = dhd_linux_get_primary_netdev(dhdp);
++	return primary && wl_nan_host_ndi_if_event(wl_get_cfg(primary), event, name, mac);
++}
++
++void dhd_nan_ndi_flow_complete(dhd_pub_t *dhdp, u8 ifidx, u16 flowid,
++                              u32 status, u32 operation)
++{
++	struct net_device *primary = dhd_linux_get_primary_netdev(dhdp);
++	if (primary)
++		wl_nan_host_ndi_flow_completion(wl_get_cfg(primary), ifidx, flowid, status, operation);
++}
++
++int dhd_nan_ndi_flow_event(dhd_pub_t *dhdp, const wl_event_data_if_t *event,
++                          const u8 *mac)
++{
++	dhd_info_t *dhd = dhdp->info;
++	dhd_if_t *ifp;
++	if (!event->ifidx || event->ifidx >= DHD_MAX_IFS)
++		return -EINVAL;
++	ifp = dhd->iflist[event->ifidx];
++	if (ifp && (!ifp->native_nan || ifp->bssidx != event->bssidx ||
++	            memcmp(ifp->mac_addr, mac, ETHER_ADDR_LEN)))
++		return -EEXIST;
++#ifdef PCIE_FULL_DONGLE
++	dhd_update_interface_flow_info(dhdp, event->ifidx, event->opcode, event->role);
++#endif
++	if (event->opcode == WLC_E_IF_DEL) {
++		if (ifp && ifp->net) {
++			dhd_set_del_in_progress(dhdp, ifp->net);
++			netif_tx_disable(ifp->net);
++		}
++#ifdef PCIE_FULL_DONGLE
++		/* The event is authoritative; use its checked index, not name lookup
++		 * which maps an unregistered interface to primary index zero. */
++		dhd_flow_rings_delete(dhdp, event->ifidx);
++#endif
++	}
++	return 0;
++}
++
++int dhd_nan_ndi_register(dhd_pub_t *dhdp, int ifidx, int bssidx,
++                        const u8 *mac, const char *name, const char *firmware_name)
++{
++	dhd_info_t *dhd = dhdp->info;
++	dhd_if_t *ifp;
++	struct net_device *net, *primary = dhd_linux_get_primary_netdev(dhdp);
++	int result;
++	ASSERT_RTNL();
++	if (!primary || ifidx <= 0 || ifidx >= DHD_MAX_IFS || !bssidx)
++		return -EINVAL;
++	ifp = dhd->iflist[ifidx];
++	/* dhd_allocate_if otherwise destroys the current virtual slot. */
++	if (ifp) {
++		if (!ifp->native_nan || ifp->bssidx != bssidx || !ifp->net ||
++		    memcmp(ifp->mac_addr, mac, ETHER_ADDR_LEN) || strcmp(ifp->net->name, name))
++			return -EEXIST;
++		net = ifp->net;
++		if (net->reg_state == NETREG_REGISTERED)
++			return net->ifindex;
++		if (net->reg_state != NETREG_UNINITIALIZED)
++			return -EBUSY;
++	} else {
++		net = dhd_allocate_if_impl(dhdp, ifidx, name, (uint8 *)mac, bssidx,
++			FALSE, firmware_name, true);
++		if (!net)
++			return -ENOMEM;
++		ifp = dhd->iflist[ifidx];
++		/* register_netdevice calls priv_destructor on some failures; an
++		 * auto-free destructor would leave a dangling DHD owner. */
++		net->priv_destructor = NULL;
++		net->needs_free_netdev = false;
++		dev_net_set(net, dev_net(primary));
++		SET_NETDEV_DEV(net, primary->dev.parent);
++		net->netdev_ops = &dhd_nan_ndi_ops;
++		net->hard_header_len = ETH_HLEN + dhdp->hdrlen;
++		DEV_ADDR_SET(net, mac);
++	}
++	/* Failure retains the allocated native owner for retry or IF_DEL. */
++	result = register_netdevice(net);
++	if (!result)
++		net->needs_free_netdev = true;
++	return result ? result : net->ifindex;
++}
++
++bool dhd_nan_ndi_closing(dhd_pub_t *dhdp, int ifidx)
++{
++	dhd_if_t *ifp;
++	if (ifidx <= 0 || ifidx >= DHD_MAX_IFS)
++		return false;
++	ifp = dhdp->info->iflist[ifidx];
++	return ifp && ifp->native_nan && READ_ONCE(ifp->del_in_progress);
++}
++
++static bool dhd_nan_ndi_rings_idle(dhd_pub_t *dhdp, int ifidx)
++{
++#ifdef PCIE_FULL_DONGLE
++	flow_ring_table_t *table = dhdp->flow_ring_table;
++	unsigned long flags;
++	unsigned int id;
++	bool active;
++	if (!table)
++		return true;
++	for (id = 0; id < dhdp->num_h2d_rings; ++id) {
++		DHD_FLOWRING_LOCK(table[id].lock, flags);
++		active = table[id].active && table[id].flow_info.ifindex == ifidx;
++		DHD_FLOWRING_UNLOCK(table[id].lock, flags);
++		if (active)
++			return false;
++	}
++#endif
++	return true;
++}
++
++void dhd_nan_ndi_flow_failure(dhd_pub_t *dhdp, int ifidx, int error)
++{
++	dhd_if_t *ifp;
++	if (!dhd_nan_ndi_closing(dhdp, ifidx))
++		return;
++	ifp = dhdp->info->iflist[ifidx];
++	WRITE_ONCE(ifp->nan_flow_error, error);
++	wake_up_all(&dhdp->tx_completion_wait);
++}
++
++int dhd_nan_ndi_quiesce(dhd_pub_t *dhdp, int ifidx, int bssidx, const u8 *mac,
++                       int *firmware_error)
++{
++	dhd_if_t *ifp;
++	unsigned long flags;
++	long completed;
++	*firmware_error = 0;
++	if (ifidx <= 0 || ifidx >= DHD_MAX_IFS || dhdp->busstate != DHD_BUS_DATA)
++		return -ENODEV;
++	ifp = dhdp->info->iflist[ifidx];
++	if (ifp) {
++		if (!ifp->native_nan || ifp->bssidx != bssidx ||
++		    memcmp(ifp->mac_addr, mac, ETHER_ADDR_LEN))
++			return -EEXIST;
++		WRITE_ONCE(ifp->nan_flow_error, 0);
++		DHD_GENERAL_LOCK(dhdp, flags);
++		ifp->del_in_progress = TRUE;
++		DHD_GENERAL_UNLOCK(dhdp, flags);
++		if (ifp->net)
++			netif_tx_disable(ifp->net);
++		completed = wait_event_timeout(dhdp->tx_completion_wait,
++			!READ_ONCE(ifp->tx_paths_active), msecs_to_jiffies(DHD_TX_COMPLETION_TIMEOUT));
++		if (!completed)
++			return -ETIMEDOUT;
++	}
++#ifdef PCIE_FULL_DONGLE
++	dhd_flow_rings_delete(dhdp, ifidx);
++#endif
++	completed = wait_event_timeout(dhdp->tx_completion_wait,
++		(ifp && READ_ONCE(ifp->nan_flow_error)) || dhd_nan_ndi_rings_idle(dhdp, ifidx),
++		msecs_to_jiffies(DHD_TX_COMPLETION_TIMEOUT));
++	if (ifp && READ_ONCE(ifp->nan_flow_error)) {
++		*firmware_error = READ_ONCE(ifp->nan_flow_error);
++		return -EIO;
++	}
++	if (dhdp->busstate != DHD_BUS_DATA)
++		return -ENODEV;
++	return completed ? 0 : -ETIMEDOUT;
++}
++
++/* Caller holds the native owner lock and if_sync; IF_DEL and Linux removal
++ * cannot race this transition. No wait, allocation, RTNL or IOVAR here. */
++int dhd_nan_ndi_resume(dhd_pub_t *dhdp, int ifidx, int bssidx, const u8 *mac)
++{
++	dhd_if_t *ifp;
++	unsigned long flags;
++	bool closing, active;
++	if (ifidx <= 0 || ifidx >= DHD_MAX_IFS || !dhdp->up ||
++	    dhdp->busstate != DHD_BUS_DATA || dhdp->stop_in_progress)
++		return -ENODEV;
++	ifp = dhdp->info->iflist[ifidx];
++	if (!ifp || !ifp->native_nan || ifp->bssidx != bssidx || !ifp->net ||
++	    ifp->net->reg_state != NETREG_REGISTERED ||
++	    memcmp(ifp->mac_addr, mac, ETHER_ADDR_LEN))
++		return -ESTALE;
++	DHD_GENERAL_LOCK(dhdp, flags);
++	closing = ifp->del_in_progress;
++	active = DHD_IF_IS_TX_ACTIVE(ifp);
++	DHD_GENERAL_UNLOCK(dhdp, flags);
++	/* Repeating a completed RESUME must not stall other live NDPs. */
++	if (!closing)
++		return 0;
++	if (active || READ_ONCE(ifp->nan_flow_error) ||
++	    !dhd_nan_ndi_rings_idle(dhdp, ifidx))
++		return -EBUSY;
++	/* del_in_progress has kept new TX out while each ring was checked. */
++	DHD_GENERAL_LOCK(dhdp, flags);
++	if (DHD_IF_IS_TX_ACTIVE(ifp)) {
++		DHD_GENERAL_UNLOCK(dhdp, flags);
++		return -EBUSY;
++	}
++	ifp->del_in_progress = FALSE;
++	DHD_GENERAL_UNLOCK(dhdp, flags);
++	if (netif_running(ifp->net))
++		netif_tx_wake_all_queues(ifp->net);
++	return 0;
++}
++
++int dhd_nan_ndi_remove(dhd_pub_t *dhdp, int ifidx, int bssidx, const u8 *mac)
++{
++	dhd_info_t *dhd = dhdp->info;
++	dhd_if_t *ifp;
++	unsigned long flags;
++	bool active;
++	ASSERT_RTNL();
++	if (ifidx <= 0 || ifidx >= DHD_MAX_IFS)
++		return -EINVAL;
++	ifp = dhd->iflist[ifidx];
++	if (!ifp)
++		return dhd_nan_ndi_rings_idle(dhdp, ifidx) ? 0 : -EBUSY;
++	if (!ifp->native_nan || ifp->bssidx != bssidx ||
++	    memcmp(ifp->mac_addr, mac, ETHER_ADDR_LEN))
++		return -EEXIST;
++	if (ifp->net && ifp->net->reg_state == NETREG_UNREGISTERING)
++		return -EBUSY;
++	if (ifp->net)
++		netif_tx_disable(ifp->net);
++	DHD_GENERAL_LOCK(dhdp, flags);
++	ifp->del_in_progress = TRUE;
++	active = DHD_IF_IS_TX_ACTIVE(ifp);
++	DHD_GENERAL_UNLOCK(dhdp, flags);
++	/* Generic removal cleans resources before its timeout and then frees
++	 * even on timeout. Enter it only after TX has actually relinquished them. */
++	if (active)
++		return -EBUSY;
++	if (!dhd_nan_ndi_rings_idle(dhdp, ifidx))
++		return -EBUSY;
++	return dhd_remove_if(dhdp, ifidx, FALSE);
++}
++#endif /* WL_NAN */
++
+ void
+ dhd_bus_detach(dhd_pub_t *dhdp)
+ {
+@@ -14162,6 +14480,12 @@
+ 		dev = ifp->net;
+ 	}
+ 
++#if defined(WL_CFG80211) && defined(WL_NAN)
++	/* Stop completion work before primary/virtual netdev or protocol teardown.
++	 * This path has not acquired RTNL; a running worker can finish safely. */
++	if (dev && (dhd->dhd_state & DHD_ATTACH_STATE_CFG80211))
++		wl_nan_host_ndi_shutdown(wl_get_cfg(dev));
++#endif
+ 	if (dev) {
+ 		rtnl_lock();
+ #if defined(WL_CFG80211) && defined(WL_STATIC_IF)
+--- a/dhd_common.c
++++ b/dhd_common.c
+@@ -6201,6 +6201,12 @@
+ 			DHD_ERROR(("WLC_E_IF: NO_IF set, event Ignored\r\n"));
+ 			return (BCME_UNSUPPORTED);
+ 		}
++#if defined(__linux__) && defined(WL_NAN)
++		/* Claim NAN before generic flow deletion or station netdev creation.
++		 * The native owner validates MAC + ifidx + bssidx before either. */
++		if (dhd_nan_ndi_event(dhd_pub, ifevent, event->ifname, event->addr.octet))
++			break;
++#endif
+ #ifdef PCIE_FULL_DONGLE
+ 		dhd_update_interface_flow_info(dhd_pub, ifevent->ifidx,
+ 			ifevent->opcode, ifevent->role);
+--- a/dhd_linux_tx.c
++++ b/dhd_linux_tx.c
+@@ -96,6 +96,9 @@
+ #include <dhd_debug.h>
+ #if defined(WL_CFG80211)
+ #include <wl_cfg80211.h>
++#ifdef WL_NAN
++#include "wl_nan_host.h"
++#endif
+ #ifdef WL_BAM
+ #include <wl_bam.h>
+ #endif	/* WL_BAM */
+@@ -870,7 +873,7 @@
+ 	}
+ #else
+ #if defined(BCMPCIE) && defined(DHD_VSDB_SKIP_ORPHAN) && defined(WL_CFG80211)
+-	if (!cfg->vsdb_mode)
++	if (!cfg || !cfg->vsdb_mode)
+ #endif /* (BCMPCIE) && (DHD_VSDB_SKIP_ORPHAN) && defined(WL_CFG80211) */
+ 	skb_orphan(skb);
+ #endif /* LINUX_VERSION_CODE >= 4.19.0 && DHD_TCP_PACING_SHIFT */
+@@ -1061,6 +1064,11 @@
+ 	/* Call wmb() to make sure before waking up the other event value gets updated */
+ 	OSL_SMP_WMB();
+ 	wake_up(&dhd->tx_completion_wait);
++#ifdef WL_NAN
++	/* May hold DHD_GENERAL_LOCK: the work gate does not acquire owner lock. */
++	if (dhd_linux_get_primary_netdev(dhd))
++		wl_nan_host_ndi_wake(wl_get_cfg(dhd_linux_get_primary_netdev(dhd)));
++#endif
+ }
+ 
+ void
+--- a/dhd_pcie.c
++++ b/dhd_pcie.c
+@@ -15132,6 +15132,9 @@
+ {
+ 	flow_ring_node_t *flow_ring_node;
+ 	unsigned long flags;
++#ifdef WL_NAN
++	u8 nan_ifidx;
++#endif
+ 
+ 	DHD_INFO(("%s :Flow Response %d \n", __FUNCTION__, flowid));
+ 
+@@ -15159,8 +15162,15 @@
+ 	if (status != BCME_OK) {
+ 		DHD_ERROR(("%s Flow create Response failure error status = %d \n",
+ 		     __FUNCTION__, status));
++#ifdef WL_NAN
++		nan_ifidx = flow_ring_node->flow_info.ifindex;
++#endif
+ 		/* Call Flow clean up */
+ 		dhd_bus_clean_flow_ring(bus, flow_ring_node);
++#ifdef WL_NAN
++		wake_up_all(&bus->dhd->tx_completion_wait);
++		dhd_nan_ndi_flow_complete(bus->dhd, nan_ifidx, flowid, status, 1);
++#endif
+ 		return;
+ 	}
+ 
+@@ -15188,6 +15198,15 @@
+ 	dll_prepend(&bus->flowring_active_list, &flow_ring_node->list);
+ 	DHD_FLOWRING_LIST_UNLOCK(bus->dhd->flowring_list_lock, flags);
+ 
++#ifdef WL_NAN
++	dhd_nan_ndi_flow_complete(bus->dhd, flow_ring_node->flow_info.ifindex, flowid, status, 1);
++	if (dhd_nan_ndi_closing(bus->dhd, flow_ring_node->flow_info.ifindex)) {
++		/* A creation already in flight must also drain on native NDI stop. */
++		dhd_bus_flow_ring_delete_request(bus, flow_ring_node);
++		wake_up_all(&bus->dhd->tx_completion_wait);
++		return;
++	}
++#endif
+ 	dhd_bus_schedule_queue(bus, flowid, FALSE, 0, NULL); /* from queue to flowring */
+ 
+ 	return;
+@@ -15230,6 +15249,20 @@
+ 	DHD_FLOWRING_UNLOCK(flow_ring_node->lock, flags);
+ 
+ 	/* Send Msg to device about flow ring deletion */
++#ifdef WL_NAN
++	if (dhd_nan_ndi_closing(bus->dhd, flow_ring_node->flow_info.ifindex)) {
++		int result = dhd_prot_flow_ring_delete(bus->dhd, flow_ring_node);
++		if (result) {
++			/* No ring message was submitted. Retain the active ring and
++			 * permit an explicit retry; do not claim a pending completion. */
++			DHD_FLOWRING_LOCK(flow_ring_node->lock, flags);
++			flow_ring_node->status = FLOW_RING_STATUS_OPEN;
++			DHD_FLOWRING_UNLOCK(flow_ring_node->lock, flags);
++			dhd_nan_ndi_flow_failure(bus->dhd, flow_ring_node->flow_info.ifindex, result);
++		}
++		return result;
++	}
++#endif
+ 	dhd_prot_flow_ring_delete(bus->dhd, flow_ring_node);
+ 
+ 	return BCME_OK;
+@@ -15239,6 +15272,9 @@
+ dhd_bus_flow_ring_delete_response(dhd_bus_t *bus, uint16 flowid, uint32 status)
+ {
+ 	flow_ring_node_t *flow_ring_node;
++#ifdef WL_NAN
++	u8 nan_ifidx;
++#endif
+ 
+ 	DHD_INFO(("%s :Flow Delete Response %d \n", __FUNCTION__, flowid));
+ 
+@@ -15266,11 +15302,27 @@
+ 	if (status != BCME_OK) {
+ 		DHD_ERROR(("%s Flow Delete Response failure error status = %d \n",
+ 		    __FUNCTION__, status));
++#ifdef WL_NAN
++		if (dhd_nan_ndi_closing(bus->dhd, flow_ring_node->flow_info.ifindex)) {
++			unsigned long flags;
++			DHD_FLOWRING_LOCK(flow_ring_node->lock, flags);
++			flow_ring_node->status = FLOW_RING_STATUS_OPEN;
++			DHD_FLOWRING_UNLOCK(flow_ring_node->lock, flags);
++			dhd_nan_ndi_flow_failure(bus->dhd, flow_ring_node->flow_info.ifindex, status);
++		}
++		dhd_nan_ndi_flow_complete(bus->dhd, flow_ring_node->flow_info.ifindex, flowid, status, 2);
++#endif
+ 		return;
+ 	}
++#ifdef WL_NAN
++	nan_ifidx = flow_ring_node->flow_info.ifindex;
++#endif
+ 	/* Call Flow clean up */
+ 	dhd_bus_clean_flow_ring(bus, flow_ring_node);
+-
++#ifdef WL_NAN
++	wake_up_all(&bus->dhd->tx_completion_wait);
++	dhd_nan_ndi_flow_complete(bus->dhd, nan_ifidx, flowid, status, 2);
++#endif
+ 	return;
+ 
+ }

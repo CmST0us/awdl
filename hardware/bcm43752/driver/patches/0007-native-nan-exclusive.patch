@@ -1,0 +1,216 @@
+Subject: [PATCH] BCM43752 A2: 原生 NAN 独占控制和数据入口
+
+保留物理命令节点，禁用额外模式和接口；NDI 沿用真实固件资源。
+
+--- a/wl_cfg80211.c
++++ b/wl_cfg80211.c
+@@ -12024,6 +12024,17 @@
+ }
+ #endif /* !DISABLE_CFG_GET_CHANNEL && LINUX_VERSION_CODE >= KERNEL_VERSION (3, 8, 0) */
+ 
++#ifdef WL_NAN
++/* The physical netdev is only a vendor-command endpoint. Linux 6.1 NAN
++ * cannot represent an Ethernet NDI; no STA/AP/P2P/monitor operations are
++ * offered by this endpoint. Firmware owns the real NMI and NDI roles. */
++static const struct cfg80211_ops wl_nan_host_control_ops = {
++	.get_station = wl_cfg80211_get_station,
++	.dump_station = wl_cfg80211_dump_station,
++	.get_tx_power = wl_cfg80211_get_tx_power,
++};
++#endif
++
+ static struct cfg80211_ops wl_cfg80211_ops = {
+ 	.add_virtual_intf = wl_cfg80211_add_virtual_iface,
+ 	.del_virtual_intf = wl_cfg80211_del_virtual_iface,
+@@ -12992,7 +13003,12 @@
+ //#endif /* defined(BCMDONGLEHOST) && KERNEL >= 3, 4, 0 || defined(WL_COMPAT_WIRELESS)) */
+ 
+ 	wdev->wiphy =
++#ifdef WL_NAN
++	    wiphy_new(wl_nan_host_device(dhd) ? &wl_nan_host_control_ops :
++		&wl_cfg80211_ops, sizeof(struct bcm_cfg80211));
++#else
+ 	    wiphy_new(&wl_cfg80211_ops, sizeof(struct bcm_cfg80211));
++#endif
+ 	if (unlikely(!wdev->wiphy)) {
+ 		WL_ERR(("Couldn not allocate wiphy device\n"));
+ 		err = -ENOMEM;
+@@ -13234,6 +13250,23 @@
+ #endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 0) */
+ #endif
+ 
++#ifdef WL_NAN
++	if (wl_nan_host_device(dhd)) {
++		/* STATION is the inherited control-node label, not an enabled
++		 * infrastructure BSS. Do not falsely advertise cfg80211 NAN. */
++		wdev->wiphy->interface_modes = BIT(NL80211_IFTYPE_STATION);
++		wdev->wiphy->iface_combinations = NULL;
++		wdev->wiphy->n_iface_combinations = 0;
++		wdev->wiphy->flags = WIPHY_FLAG_NETNS_OK;
++		wdev->wiphy->features = 0;
++		memset(wdev->wiphy->ext_features, 0, sizeof(wdev->wiphy->ext_features));
++		wdev->wiphy->max_acl_mac_addrs = 0;
++		wdev->wiphy->max_sched_scan_reqs = 0;
++		wdev->wiphy->max_sched_scan_plans = 0;
++		wdev->wiphy->max_remain_on_channel_duration = 0;
++		wdev->wiphy->max_num_csa_counters = 0;
++	}
++#endif
+ 	/* Now we can register wiphy with cfg80211 module */
+ 	err = wiphy_register(wdev->wiphy);
+ 	if (unlikely(err < 0)) {
+@@ -18441,6 +18474,10 @@
+ 		WL_ERR(("cfg is invaild\n"));
+ 		return -EINVAL;
+ 	}
++#ifdef WL_NAN
++	if (wl_nan_host_supported(cfg))
++		return 0; /* No P2P state or discovery interface in native NAN. */
++#endif
+ 	if (!wl_get_drv_status(cfg, READY, ndev)) {
+ 		if (cfg->wdev) {
+ 			ret = wl_cfgp2p_supported(cfg, ndev);
+@@ -18507,6 +18544,10 @@
+ 		WL_ERR(("cfg null\n"));
+ 		return BCME_ERROR;
+ 	}
++#ifdef WL_NAN
++	if (wl_nan_host_supported(cfg))
++		return BCME_OK;
++#endif
+ #ifdef WL_STATIC_IF
+ 	/* Register dummy n/w iface. FW init will happen only from dev_open */
+ #ifdef WLDWDS
+@@ -18623,9 +18664,14 @@
+ #endif /* CONFIG_CFG80211_INTERNAL_REGDB */
+ 
+ #if defined(WL_ENABLE_P2P_IF) || defined (WL_NEWCFG_PRIVCMD_SUPPORT)
+-	err = wl_cfg80211_attach_p2p(cfg);
+-	if (err)
+-		goto cfg80211_attach_out;
++#ifdef WL_NAN
++	if (!wl_nan_host_supported(cfg))
++#endif
++	{
++		err = wl_cfg80211_attach_p2p(cfg);
++		if (err)
++			goto cfg80211_attach_out;
++	}
+ #endif
+ 
+ #if defined(OEM_ANDROID) && defined(DHCP_SCAN_SUPPRESS)
+@@ -18714,7 +18760,10 @@
+ 		wl_cfgp2p_del_p2p_disc_if(cfg->p2p_wdev, cfg);
+ #endif /* WL_CFG80211_P2P_DEV_IF  */
+ #if defined(WL_ENABLE_P2P_IF) || defined (WL_NEWCFG_PRIVCMD_SUPPORT)
+-	wl_cfg80211_detach_p2p(cfg);
++#ifdef WL_NAN
++	if (!wl_nan_host_supported(cfg))
++#endif
++		wl_cfg80211_detach_p2p(cfg);
+ #endif
+ #ifdef WL_BAM
+ 	wl_bad_ap_mngr_deinit(cfg);
+--- a/wl_cfgnan.c
++++ b/wl_cfgnan.c
+@@ -33,6 +33,7 @@
+ #include <wl_cfgscan.h>
+ #include <wl_android.h>
+ #include <wl_cfgnan.h>
++#include "wl_nan_host.h"
+ 
+ #if defined(BCMDONGLEHOST)
+ #include <dngl_stats.h>
+@@ -10286,7 +10287,7 @@
+ 
+ 	nancfg = cfg->nancfg;
+ #ifdef WL_NMI_IF
+-	if (wl_cfgnan_register_nmi_ndev(cfg) < 0) {
++	if (!wl_nan_host_supported(cfg) && wl_cfgnan_register_nmi_ndev(cfg) < 0) {
+ 		WL_ERR(("NAN NMI ndev reg failed in attach \n"));
+ 		return -ENODEV;
+ 	}
+@@ -10319,7 +10320,8 @@
+ 
+ #ifdef WL_NMI_IF
+ 		/* Unregister NMI ndev */
+-		wl_cfgnan_unregister_nmi_ndev(cfg);
++		if (!wl_nan_host_supported(cfg))
++			wl_cfgnan_unregister_nmi_ndev(cfg);
+ #endif /* WL_NMI_IF */
+ 
+ 		MFREE(cfg->osh, cfg->nancfg, sizeof(wl_nancfg_t));
+--- a/wl_cfgvendor.c
++++ b/wl_cfgvendor.c
+@@ -14292,6 +14292,12 @@
+ 
+ 	wiphy->vendor_commands	= wl_vendor_cmds;
+ 	wiphy->n_vendor_commands = ARRAY_SIZE(wl_vendor_cmds);
++#ifdef WL_NAN
++	/* The first command is the native NAN transport. No alternate vendor
++	 * path may start scanning, P2P, AP, monitor or autonomous NDP. */
++	if (wl_nan_host_device(dhd))
++		wiphy->n_vendor_commands = 1;
++#endif
+ 
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0))
+ 	wl_cfgvendor_apply_cmd_policy(wiphy);
+--- a/dhd_linux.c
++++ b/dhd_linux.c
+@@ -6139,6 +6139,11 @@
+ 	void __user *ioc_buf_user = NULL; /**< buffer in user space */
+ 	u16 buflen = 0;
+ 
++#ifdef WL_NAN
++	if (wl_nan_host_device(&dhd->pub) && cmd != SIOCETHTOOL &&
++	    cmd != SIOCDEVPRIVATE)
++		return -EOPNOTSUPP; /* The private path below permits read-only diagnostics. */
++#endif
+ 	if (atomic_read(&exit_in_progress)) {
+ 		DHD_ERROR(("%s module exit in progress\n", __func__));
+ 		bcmerror = BCME_DONGLE_DOWN;
+@@ -6298,6 +6303,17 @@
+ 		ioc.buf = local_buf;
+ 	}
+ 
++#ifdef WL_NAN
++	/* Retain only the existing A2 bounded ROM/RAM reader. Check the copied
++	 * kernel buffer, not user memory, before any ioctl dispatch. No radio
++	 * iovar, mode change, write or alternate private command may pass. */
++	if (wl_nan_host_device(&dhd->pub) &&
++	    (ioc.driver != DHD_IOCTL_MAGIC || ioc.cmd != DHD_GET_VAR || ioc.set ||
++	     buflen < 17 || memcmp(local_buf, "membytes", 9))) {
++		bcmerror = BCME_UNSUPPORTED;
++		goto done;
++	}
++#endif
+ #if defined(OEM_ANDROID)
+ 	/* Skip all the non DHD iovars (wl iovars) after f/w hang */
+ 	if (ioc.driver != DHD_IOCTL_MAGIC && dhd->pub.hang_was_sent) {
+--- a/dhd_linux_tx.c
++++ b/dhd_linux_tx.c
+@@ -99,6 +99,9 @@
+ #ifdef WL_NAN
+ #include "wl_nan_host.h"
+ #endif
++#ifdef WL_NAN
++#include "wl_nan_host.h"
++#endif
+ #ifdef WL_BAM
+ #include <wl_bam.h>
+ #endif	/* WL_BAM */
+@@ -197,6 +200,14 @@
+ 	unsigned long flags;
+ 	uint datalen;
+ 
++#ifdef WL_NAN
++	if (ifidx == 0 && wl_nan_host_device(dhdp)) {
++		/* The primary netdev carries commands only. Data must reference a
++		 * native NDI, its authorized NAN SCB and its actual key/flow owner. */
++		PKTCFREE(dhdp->osh, pktbuf, TRUE);
++		return -EOPNOTSUPP;
++	}
++#endif
+ 	DHD_GENERAL_LOCK(dhdp, flags);
+ 	ifp = dhd_get_ifp(dhdp, ifidx);
+ 	if (!ifp || ifp->del_in_progress) {

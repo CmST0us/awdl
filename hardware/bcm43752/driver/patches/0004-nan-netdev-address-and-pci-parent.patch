@@ -1,0 +1,34 @@
+--- a/wl_cfgnan.c
++++ b/wl_cfgnan.c
+@@ -2005,7 +2005,7 @@
+ 	}
+ #ifdef WL_NMI_IF
+ 	/* copy new nmi addr to dedicated NMI interface */
+-	eacopy(if_addr.octet, cfg->nmi_ndev->dev_addr);
++	DEV_ADDR_SET(cfg->nmi_ndev, if_addr.octet);
+ #endif /* WL_NMI_IF */
+ 	return ret;
+ fail:
+@@ -10202,7 +10202,7 @@
+ 	ndev->netdev_ops = &wl_cfgnan_nmi_if_ops;
+ 
+ 	/* Register with a dummy MAC addr */
+-	eacopy(temp_addr, ndev->dev_addr);
++	DEV_ADDR_SET(ndev, temp_addr);
+ 
+ 	ndev->ieee80211_ptr = wdev;
+ 	wdev->netdev = ndev;
+--- a/wl_cfg80211.c
++++ b/wl_cfg80211.c
+@@ -18539,7 +18539,11 @@
+ #if !defined(BCMDONGLEHOST)
+ 	wl_cfg80211_set_parent_dev(context);
+ #endif
++#ifdef BCMPCIE
++	dev = dhd_bus_to_dev(dhd->bus);
++#else
+ 	dev = wl_cfg80211_get_parent_dev();
++#endif
+ 
+ 	wdev = (struct wireless_dev *)MALLOCZ(dhd->osh, sizeof(*wdev));
+ 	if (unlikely(!wdev)) {

@@ -1,0 +1,92 @@
+Subject: [PATCH] 原生 NAN 保留 TCP 记账直到 PCIe 发送完成
+
+NDI 启用无线聚合所需的 pacing 额度，排除两处提前 orphan；其他接口保留上游行为。
+
+--- a/dhd_linux_tx.c
++++ b/dhd_linux_tx.c
+@@ -57,6 +57,7 @@
+ #include <linux/net_stat_tizen.h>
+ #endif /* CONFIG_TIZEN */
+ #include <net/addrconf.h>
++#include <net/sock.h>
+ #ifdef ENABLE_ADAPTIVE_SCHED
+ #include <linux/cpufreq.h>
+ #endif /* ENABLE_ADAPTIVE_SCHED */
+@@ -875,25 +876,38 @@
+ 	}
+ #endif /* DHD_PSTA */
+ 
++#ifdef WL_NAN
++	if (ifp->native_nan) {
++		/* Preserve TCP Small Queues ownership through PCIe completion.
++		 * Early orphaning hides the firmware backlog from TCP. About 8 ms
++		 * of pacing allowance leaves room for native aggregation without
++		 * filling the complete 2048-packet flow ring on every connection. */
++		if (skb->sk)
++			sk_pacing_shift_update(skb->sk, 7);
++	} else
++#endif
++	{
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0) && defined(DHD_TCP_PACING_SHIFT)
+ #ifndef DHD_DEFAULT_TCP_PACING_SHIFT
+ #define DHD_DEFAULT_TCP_PACING_SHIFT 7
+ #endif /* DHD_DEFAULT_TCP_PACING_SHIFT */
+-	if (skb->sk) {
+-		sk_pacing_shift_update(skb->sk, DHD_DEFAULT_TCP_PACING_SHIFT);
+-	}
++		if (skb->sk) {
++			sk_pacing_shift_update(skb->sk, DHD_DEFAULT_TCP_PACING_SHIFT);
++		}
+ #else
+ #if defined(BCMPCIE) && defined(DHD_VSDB_SKIP_ORPHAN) && defined(WL_CFG80211)
+-	if (!cfg || !cfg->vsdb_mode)
++		if (!cfg || !cfg->vsdb_mode)
+ #endif /* (BCMPCIE) && (DHD_VSDB_SKIP_ORPHAN) && defined(WL_CFG80211) */
+-	skb_orphan(skb);
++		skb_orphan(skb);
+ #endif /* LINUX_VERSION_CODE >= 4.19.0 && DHD_TCP_PACING_SHIFT */
+ 
+-	/* move from dhdsdio_sendfromq(), try to orphan skb early */
+-	if (dhd->pub.conf->orphan_move == 2)
+-		PKTORPHAN(skb, dhd->pub.conf->tsq);
+-	else if (dhd->pub.conf->orphan_move == 3)
+-		skb_orphan(skb);
++		/* move from dhdsdio_sendfromq(), try to orphan skb early */
++		if (dhd->pub.conf->orphan_move == 2)
++			PKTORPHAN(skb, dhd->pub.conf->tsq);
++		else if (dhd->pub.conf->orphan_move == 3)
++			skb_orphan(skb);
++
++	}
+ 
+ #ifdef DHDTCPSYNC_FLOOD_BLK
+ 	if (dhd_tcpdata_get_flag(&dhd->pub, pktbuf) == FLAG_SYNCACK) {
+--- a/dhd_pcie.c
++++ b/dhd_pcie.c
+@@ -55,6 +55,10 @@
+ #if defined(__linux__)
+ #include <dhd_daemon.h>
+ #include <dhd_linux.h>
++#ifdef WL_NAN
++#include <wl_cfg80211.h>
++#include "wl_nan_host.h"
++#endif
+ #include <dhd_plat.h>
+ #endif /* __linux__ */
+ #include <dhdioctl.h>
+@@ -5973,8 +5977,13 @@
+ 		}
+ 
+ 		while ((txp = dhd_flow_queue_dequeue(bus->dhd, queue)) != NULL) {
+-			if (bus->dhd->conf->orphan_move <= 1)
+-				PKTORPHAN(txp, bus->dhd->conf->tsq);
++			/* Native NAN retains the socket's bytes until the real TX
++			 * completion frees this skb. Bus posting is not completion. */
++#ifdef WL_NAN
++			if (!wl_nan_host_device(bus->dhd))
++#endif
++				if (bus->dhd->conf->orphan_move <= 1)
++					PKTORPHAN(txp, bus->dhd->conf->tsq);
+ 
+ 			/*
+ 			 * Modifying the packet length caused P2P cert failures.

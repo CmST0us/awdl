@@ -1,0 +1,5 @@
+# pro-rk3568-h 板级构建默认值；下一次构建生效，本机配置和命令行可覆盖。
+# Rust 目标三元组，无单位，必须匹配 ARM64 Linux GNU ABI；省略时使用构建机目标。
+rust_target = "aarch64-unknown-linux-gnu"
+# Kbuild ARCH，无单位；本平台为 arm64，省略时由 Rust 目标推导。
+kernel_arch = "arm64"

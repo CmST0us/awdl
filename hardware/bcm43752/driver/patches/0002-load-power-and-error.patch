@@ -1,0 +1,34 @@
+--- a/Makefile
++++ b/Makefile
+@@ -64,8 +64,7 @@
+ 	-DPOWERUP_MAX_RETRY=0 -DIFACE_HANG_FORCE_DEV_CLOSE -DWAIT_DEQUEUE     \
+ 	-DUSE_NEW_RSPEC_DEFS                                                  \
+ 	-DWL_EXT_IAPSTA -DWL_ESCAN -DCCODE_LIST -DSUSPEND_EVENT               \
+-	-DKEY_INSTALL_CHECK                                                   \
+-	-DENABLE_INSMOD_NO_FW_LOAD
++	-DKEY_INSTALL_CHECK
+ 
+ DHDCFLAGS += -Wframe-larger-than=2048
+ 
+--- a/dhd_linux.c
++++ b/dhd_linux.c
+@@ -14905,9 +14905,7 @@
+ 		err = 0;
+ 	}
+ #endif /* DHD_SUPPORT_HDM */
+-#if defined(BCMDHD_MODULAR) && defined(DHD_MODULE_INIT_FORCE_SUCCESS)
+-	err = 0;
+-#endif /* BCMDHD_MODULAR && DHD_MODULE_INIT_FORCE_SUCCESS */
++	/* Preserve initialization failure; failed resources are already released. */
+ 	return err;
+ 
+ }
+@@ -14980,7 +14978,7 @@
+ 	if (IS_ERR(kthread))
+ 		pr_err("create wifi_init_thread failed.\n");
+ #else
+-	dhd_module_init();
++	return dhd_module_init();
+ #endif
+ 	return 0;
+ }

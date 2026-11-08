@@ -1,0 +1,103 @@
+Subject: [PATCH] BCM43752 A2: 接入主机 NAN 命令和原生完成事件
+
+项目源码及唯一 ABI 头文件由 prepare.py 复制，禁止 Android 自动协商接口竞争。
+
+--- a/Makefile
++++ b/Makefile
+@@ -383,7 +383,7 @@
+ # For NAN
+ ifneq ($(CONFIG_BCMDHD_NAN),)
+ 	DHDCFLAGS += -DWL_NAN -DWL_NAN_DISC_CACHE -DWL_NANP2P -DWL_NAN_ENABLE_MERGE
+-	DHDOFILES += wl_cfgnan.o bcmbloom.o
++	DHDOFILES += wl_cfgnan.o bcmbloom.o wl_nan_host.o
+ endif
+ 
+ # For Module auto-selection
+--- a/wl_cfg80211.c
++++ b/wl_cfg80211.c
+@@ -88,6 +88,9 @@
+ #include <dhd_pno.h>
+ #endif /* PNO_SUPPORT */
+ #include <wl_cfgvendor.h>
++#ifdef WL_NAN
++#include "wl_nan_host.h"
++#endif
+ #endif /* defined(BCMDONGLEHOST) */
+ 
+ #ifdef CONFIG_SLEEP_MONITOR
+@@ -17389,8 +17392,8 @@
+ 	cfg->evt_handler[WLC_E_RMC_EVENT] = wl_notify_rmc_status;
+ #endif /* WL_RELMCAST */
+ #ifdef WL_NAN
+-	cfg->evt_handler[WLC_E_NAN_CRITICAL] = wl_cfgnan_notify_nan_status;
+-	cfg->evt_handler[WLC_E_NAN_NON_CRITICAL] = wl_cfgnan_notify_nan_status;
++	cfg->evt_handler[WLC_E_NAN_CRITICAL] = wl_nan_host_event;
++	cfg->evt_handler[WLC_E_NAN_NON_CRITICAL] = wl_nan_host_event;
+ #endif /* WL_NAN */
+ 	cfg->evt_handler[WLC_E_CSA_COMPLETE_IND] = wl_csa_complete_ind;
+ 	cfg->evt_handler[WLC_E_AP_STARTED] = wl_ap_start_ind;
+--- a/wl_cfgvendor.c
++++ b/wl_cfgvendor.c
+@@ -81,6 +81,7 @@
+ #include <wl_cfgvif.h>
+ #ifdef WL_NAN
+ #include <wl_cfgnan.h>
++#include "wl_nan_host.h"
+ #endif /* WL_NAN */
+ 
+ #ifdef OEM_ANDROID
+@@ -12936,6 +12937,14 @@
+ #endif /* LINUX_VERSION >= 5.3 */
+ 
+ static struct wiphy_vendor_command wl_vendor_cmds [] = {
++#ifdef WL_NAN
++	{
++		.info = { .vendor_id = BCM_NAN_VENDOR_OUI, .subcmd = BCM_NAN_VENDOR_SUBCMD },
++		.flags = WIPHY_VENDOR_CMD_NEED_WDEV | WIPHY_VENDOR_CMD_NEED_NETDEV,
++		.doit = wl_nan_host_command,
++		.policy = VENDOR_CMD_RAW_DATA,
++	},
++#endif
+ 	{
+ 		{
+ 			.vendor_id = OUI_BRCM,
+@@ -14245,6 +14254,9 @@
+ 		{ OUI_GOOGLE, GOOGLE_NAN_EVENT_MATCH_EXPIRY},
+ 		{ OUI_BRCM, BRCM_VENDOR_EVENT_RCC_FREQ_INFO},
+ 		{ OUI_BRCM, BRCM_VENDOR_EVENT_CONNECTIVITY_LOG},
++#ifdef WL_NAN
++		{ BCM_NAN_VENDOR_OUI, BCM_NAN_VENDOR_SUBCMD },
++#endif
+ };
+ 
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0))
+@@ -14265,6 +14277,15 @@
+ 
+ int wl_cfgvendor_attach(struct wiphy *wiphy, dhd_pub_t *dhd)
+ {
++#ifdef WL_NAN
++	unsigned int i;
++	/* This hardware backend has one protocol owner: common hostap. */
++	for (i = 0; i < ARRAY_SIZE(wl_vendor_cmds); ++i)
++		if (wl_vendor_cmds[i].info.vendor_id == OUI_GOOGLE &&
++		    wl_vendor_cmds[i].info.subcmd >= NAN_WIFI_SUBCMD_ENABLE &&
++		    wl_vendor_cmds[i].info.subcmd <= NAN_WIFI_SUBCMD_ENABLE_MERGE)
++			wl_vendor_cmds[i].doit = wl_nan_host_legacy_command;
++#endif
+ 
+ 	WL_INFORM_MEM(("Vendor: Register BRCM cfg80211 vendor cmd(0x%x) interface \n",
+ 		NL80211_CMD_VENDOR));
+--- a/dhd_linux.c
++++ b/dhd_linux.c
+@@ -12742,6 +12742,11 @@
+ #endif
+ 	/* nan events */
+ 	setbit(mask, WLC_E_NAN);
++#ifdef WL_NAN
++	/* The patched host transport uses the current NAN event IDs. */
++	setbit(mask, WLC_E_NAN_CRITICAL);
++	setbit(mask, WLC_E_NAN_NON_CRITICAL);
++#endif
+ #if defined(PCIE_FULL_DONGLE) && defined(DHD_LOSSLESS_ROAMING)
+ 	dhd_update_flow_prio_map(dhd, DHD_FLOW_PRIO_LLR_MAP);
+ #endif /* defined(PCIE_FULL_DONGLE) && defined(DHD_LOSSLESS_ROAMING) */

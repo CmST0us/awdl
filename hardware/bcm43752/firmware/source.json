@@ -1,0 +1,27 @@
+{
+  "repository": "https://github.com/radxa/rkwifibt",
+  "commit": "b61a1e8499a4f1956ef417cbcfaa6c2cf805ce08",
+  "archive": "https://github.com/radxa/rkwifibt/archive/b61a1e8499a4f1956ef417cbcfaa6c2cf805ce08.tar.gz",
+  "archive_sha256": "5140c696881c4d823ae0e7bfaf6e69767c64c7a00fff2add3664c60acd63efd8",
+  "directory": "firmware/broadcom/AP6275_PCIE/wifi",
+  "license": "LICENSE.rkwifibt",
+  "license_archive_path": "LICENSE",
+  "license_sha256": "ec1dabfa95bf2e8f0de4311a9ceacfd841c45a772bf7eab3aa4c121284616df2",
+  "files": [
+    {
+      "file": "clm_bcm43752a2_pcie_ag.blob",
+      "sha256": "d81ba8adc8b3bc0a5589146b31bc318122693d8a116a5028d3fe826556c5a92a",
+      "bytes": 30993
+    },
+    {
+      "file": "fw_bcm43752a2_pcie_ag.bin",
+      "sha256": "6a2dbe01e72221defba91a52e158768d973a3c85ca2d881c924379e35ad36b23",
+      "bytes": 936074
+    },
+    {
+      "file": "nvram_ap6275p.txt",
+      "sha256": "b4780f7b86a5680dbe496815dbe07aa22010701de2d8c60570b8274a42db215b",
+      "bytes": 7458
+    }
+  ]
+}

@@ -9,7 +9,7 @@ pub fn install(root: &Path, cfg: &Settings) -> Result<()> {
         .as_deref()
         .or(cfg.install.platform.as_deref())
         .context("请明确 --platform")?;
-    ensure!(["rock5b", "dragon-q8b"].contains(&name), "未知平台 {name}");
+    ensure!(["rock5b", "dragon-q8b", "pro-rk3568"].contains(&name), "未知平台 {name}");
     let entries: &[(&str, &str)] = match name {
         "dragon-q8b" => &[
             (
@@ -21,6 +21,17 @@ pub fn install(root: &Path, cfg: &Settings) -> Result<()> {
                 "etc/systemd/system/wirelessd.service.d/q8b-performance.conf",
             ),
             ("tcp.conf", "etc/sysctl.d/90-wifi-aware-q8b.conf"),
+        ],
+        "pro-rk3568" => &[
+            (
+                "wifi-aware-performance.service",
+                "etc/systemd/system/wifi-aware-performance.service",
+            ),
+            (
+                "performance.conf",
+                "etc/systemd/system/wirelessd.service.d/rk3568-performance.conf",
+            ),
+            ("tcp.conf", "etc/sysctl.d/90-wifi-aware-rk3568.conf"),
         ],
         _ => &[(
             "usbmoded-shutdown.conf",

@@ -3,6 +3,8 @@ mod catalog;
 pub use catalog::Hardware;
 #[path = "be200/build.rs"]
 mod be200;
+#[path = "bcm43752/build.rs"]
+mod bcm43752;
 #[path = "mt7925/build.rs"]
 mod mt7925;
 #[path = "rtl8852be/build.rs"]
@@ -89,6 +91,7 @@ impl Hardware {
             ),
             Self::Rtl8852be => rtl8852be::prepare(root, output, archive),
             Self::Mt7925 => mt7925::prepare(root, output, archive),
+            Self::Bcm43752 => bcm43752::prepare(root, output, archive),
         }
     }
 
@@ -105,6 +108,7 @@ impl Hardware {
             Self::Be200 => be200::build(root, source, headers, kernel, command),
             Self::Rtl8852be => rtl8852be::build(root, cfg, source, headers, command),
             Self::Mt7925 => mt7925::build(cfg, source, headers, kernel, command),
+            Self::Bcm43752 => bcm43752::build(cfg, source, headers, kernel, command),
         }
     }
 
@@ -113,6 +117,7 @@ impl Hardware {
             Self::Be200 => be200::MODULES,
             Self::Rtl8852be => rtl8852be::MODULES,
             Self::Mt7925 => mt7925::MODULES,
+            Self::Bcm43752 => bcm43752::MODULES,
         }
     }
 
@@ -126,13 +131,14 @@ impl Hardware {
             Self::Be200 => be200::installation(root, cfg),
             Self::Rtl8852be => rtl8852be::installation(root, cfg, modules),
             Self::Mt7925 => mt7925::installation(root, cfg),
+            Self::Bcm43752 => bcm43752::installation(),
         }
     }
 
     pub fn obsolete(self, cfg: &Settings, updates: &Path) -> Vec<PathBuf> {
         match self {
             Self::Be200 => be200::obsolete(cfg, updates),
-            Self::Rtl8852be | Self::Mt7925 => vec![],
+            Self::Rtl8852be | Self::Mt7925 | Self::Bcm43752 => vec![],
         }
     }
 }
@@ -149,7 +155,10 @@ pub fn prepare(
             &root.join("components/hostap"),
             output,
             archive,
-            &[root.join("hardware/rtl8852be/hostap/patches")],
+            &[
+                root.join("hardware/rtl8852be/hostap/patches"),
+                root.join("hardware/bcm43752/hostap/patches"),
+            ],
         );
     }
     let hardware = Hardware::from_name(component);
@@ -158,17 +167,22 @@ pub fn prepare(
 }
 
 pub fn hostap_config(root: &Path) -> Result<String> {
-    Ok(std::fs::read_to_string(
-        root.join("hardware/rtl8852be/hostap/hostap.config"),
-    )?)
+    Ok(format!(
+        "{}\n{}",
+        std::fs::read_to_string(root.join("hardware/rtl8852be/hostap/hostap.config"))?,
+        std::fs::read_to_string(root.join("hardware/bcm43752/hostap/hostap.config"))?
+    ))
 }
 
 pub fn build_hostap(root: &Path, cfg: &Settings, source: &Path) -> Result<Vec<String>> {
-    rtl8852be::build_hostap(root, cfg, source)
+    let mut libraries = rtl8852be::build_hostap(root, cfg, source)?;
+    libraries.extend(bcm43752::build_hostap(root, cfg, source)?);
+    Ok(libraries)
 }
 
 pub fn clean_hostap(root: &Path, cfg: &Settings) -> Result<()> {
-    rtl8852be::clean_hostap(root, cfg)
+    rtl8852be::clean_hostap(root, cfg)?;
+    bcm43752::clean_hostap(root, cfg)
 }
 
 pub const OBSOLETE_USERSPACE_FILES: &[&str] = &[
@@ -191,12 +205,14 @@ pub fn awdl_installation(root: &Path, cfg: &Settings) -> Result<Vec<(PathBuf, Pa
             cfg.user_dir(root).join("aware-awdl/mt7925-awdl"),
             cfg.dest.join("usr/local/libexec/wirelessd/mt7925-awdl"),
         )],
+        Hardware::Bcm43752 => anyhow::bail!("BCM43752 后端未实现 AWDL"),
     })
 }
 pub fn awdl_service(cfg: &Settings) -> Result<&'static str> {
     Ok(match cfg.hardware()? {
         Hardware::Be200 | Hardware::Mt7925 => "wirelessd.service",
         Hardware::Rtl8852be => "wirelessd-awdl.service",
+        Hardware::Bcm43752 => anyhow::bail!("BCM43752 后端未实现 AWDL"),
     })
 }
 

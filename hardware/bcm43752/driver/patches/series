@@ -1,0 +1,9 @@
+0001-external-module-includes.patch
+0002-load-power-and-error.patch
+0003-readonly-firmware-memory.patch
+0004-nan-netdev-address-and-pci-parent.patch
+0005-native-host-transport.patch
+0006-native-ndi-lifecycle.patch
+0007-native-nan-exclusive.patch
+0008-native-firmware-path.patch
+0009-native-nan-tcp-queue.patch

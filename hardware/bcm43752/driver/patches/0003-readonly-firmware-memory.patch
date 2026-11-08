@@ -1,0 +1,100 @@
+--- a/dhd_pcie.c
++++ b/dhd_pcie.c
+@@ -368,9 +368,7 @@
+ /* IOVar table */
+ enum {
+ 	IOV_INTR = 1,
+-#ifdef DHD_BUS_MEM_ACCESS
+ 	IOV_MEMBYTES,
+-#endif /* DHD_BUS_MEM_ACCESS */
+ 	IOV_MEMSIZE,
+ 	IOV_SET_DOWNLOAD_STATE,
+ 	IOV_SET_DOWNLOAD_INFO,
+@@ -487,9 +485,7 @@
+ 
+ const bcm_iovar_t dhdpcie_iovars[] = {
+ 	{"intr",	IOV_INTR,	0, 	0, IOVT_BOOL,	0 },
+-#ifdef DHD_BUS_MEM_ACCESS
+ 	{"membytes",	IOV_MEMBYTES,	0, 	0, IOVT_BUFFER,	2 * sizeof(int) },
+-#endif /* DHD_BUS_MEM_ACCESS */
+ 	{"memsize",	IOV_MEMSIZE,	0, 	0, IOVT_UINT32,	0 },
+ 	{"dwnldstate",	IOV_SET_DOWNLOAD_STATE,	0, 	0, IOVT_BOOL,	0 },
+ 	{"dwnldinfo",	IOV_SET_DOWNLOAD_INFO,	0, 	0, IOVT_BUFFER,
+@@ -8669,53 +8665,38 @@
+ 		int_val = (int32)bus->ramsize;
+ 		bcopy(&int_val, arg, val_size);
+ 		break;
+-#ifdef DHD_BUS_MEM_ACCESS
+ 	case IOV_SVAL(IOV_MEMBYTES):
++		bcmerror = BCME_UNSUPPORTED;
++		break;
+ 	case IOV_GVAL(IOV_MEMBYTES):
+ 	{
+-		uint32 address;		/* absolute backplane address */
+-		uint size, dsize;
+-		uint8 *data;
+-
+-		bool set = (actionid == IOV_SVAL(IOV_MEMBYTES));
+-
+-		ASSERT(plen >= 2*sizeof(int));
+-
+-		address = (uint32)int_val;
+-		bcopy((char *)params + sizeof(int_val), &int_val, sizeof(int_val));
+-		size = (uint)int_val;
+-
+-		/* Do some validation */
+-		dsize = set ? plen - (2 * sizeof(int)) : len;
+-		if (dsize < size) {
+-			DHD_ERROR(("%s: error on %s membytes, addr 0x%08x size %d dsize %d\n",
+-			           __FUNCTION__, (set ? "set" : "get"), address, size, dsize));
++		uint32 address, size;
++
++		/* This read-only diagnostic is specific to BCM43752 A2. */
++		if (si_chipid(bus->sih) != BCM43752_CHIP_ID ||
++		    bus->sih->chiprev != 2 ||
++		    bus->dongle_ram_base != 0x170000 || bus->ramsize != 0x140000) {
++			bcmerror = BCME_UNSUPPORTED;
++			break;
++		}
++		if (plen < 2 * sizeof(uint32)) {
+ 			bcmerror = BCME_BADARG;
+ 			break;
+ 		}
+-
+-		DHD_INFO(("%s: Request to %s %d bytes at address 0x%08x\n dsize %d ", __FUNCTION__,
+-		          (set ? "write" : "read"), size, address, dsize));
+-
+-		/* check if CR4 */
+-		if (si_setcore(bus->sih, ARMCR4_CORE_ID, 0) ||
+-		    si_setcore(bus->sih, ARMCA7_CORE_ID, 0) ||
+-		    si_setcore(bus->sih, SYSMEM_CORE_ID, 0)) {
+-			/* if address is 0, store the reset instruction to be written in 0 */
+-			if (set && address == bus->dongle_ram_base) {
+-				bus->resetinstr = *(((uint32*)params) + 2);
+-			}
+-		}
+-
+-		/* Generate the actual data pointer */
+-		data = set ? (uint8*)params + 2 * sizeof(int): (uint8*)arg;
+-
+-		/* Call to do the transfer */
+-		bcmerror = dhdpcie_bus_membytes(bus, set, address, data, size);
+-
++		bcopy(params, &address, sizeof(address));
++		bcopy((char *)params + sizeof(address), &size, sizeof(size));
++		/* Permit ROM and RAM only; never expose peripheral registers. */
++		if (!size || size > 4096 || len < size ||
++		    !((address < 0x160000 && size <= 0x160000 - address) ||
++		      (address >= 0x170000 && address < 0x2b0000 &&
++		       size <= 0x2b0000 - address))) {
++			bcmerror = BCME_BADARG;
++			break;
++		}
++		bcmerror = dhdpcie_bus_membytes(bus, FALSE, address, (uint8 *)arg, size);
+ 		break;
+ 	}
+-#endif /* DHD_BUS_MEM_ACCESS */
++
+ 
+ 	/* Debug related. Dumps core registers or one of the dongle memory */
+ 	case IOV_GVAL(IOV_DUMP_DONGLE):

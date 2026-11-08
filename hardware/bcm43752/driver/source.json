@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/rockchip-linux/kernel.git",
+  "commit": "77168c8d5ab82399f65a80e9f807b50ba37cf483",
+  "directory": "drivers/net/wireless/rockchip_wlan/rkwifi/bcmdhd",
+  "version": "101.10.591.52.27 (20240409-1)(20240411-2)",
+  "license": "GPL-2.0 with Broadcom independent-module linking exception; retain per-file notices",
+  "patch_series": "patches/series",
+  "archive_sha256": "216595765796959a3c52ca71abfb00723158369e2b62ed472be221d908d5da90"
+}
