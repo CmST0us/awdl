@@ -30,7 +30,19 @@ NetworkManager 的 `/etc/NetworkManager/conf.d` 配置可覆盖 `/run` 的同类
 
 操作者已授权使用小电拼 8509 的 **C1（端口索引 2）** 给本板断电重启。设备卡死且软件恢复失败时，在持有租约的操作范围内核对端口映射和当前状态，只关闭 C1、确认关闭后再开启并核对恢复；不得操作其他端口。SSH、租约记录和控制器原始结果不进入 Git。
 
-临时验收单元与正式 `wirelessd.service` 一样使用 `KillMode=mixed` 和 `TimeoutStopSec=15` 秒：先由主进程注销服务、结束 NDP，再通知 hostap 清理；期限只作为失败兜底。默认 `control-group` 会同时终止两者，无法验证正常退出顺序。
+临时验收单元与正式 `wirelessd.service` 一样使用 `KillMode=mixed` 和 `TimeoutStopSec=90` 秒，覆盖 AWDL 正常停止、异常进程恢复清理及 hostap 退出。先由主进程注销服务、结束 NDP，再通知 hostap 清理；期限只作为失败兜底。默认 `control-group` 会同时终止两者，无法验证正常退出顺序。
+
+## AirDrop 蓝牙依赖
+
+本板设备树将 AP6275P 蓝牙接到 `/dev/ttyS8`，RTS/CTS 使用 UART8 引脚，电源由 `wireless-bluetooth` 的 `rfkill_bt` 驱动管理。内核已包含 H4、BCM 与 LE 支持；仅有 Wi-Fi 驱动并不会创建蓝牙 HCI。
+
+安装发行版 `bluez` 包以取得 `/usr/bin/hciattach`，并执行 `systemctl disable --now bluetooth.service`，防止 HCI 出现时被 BlueZ 自动接管。`install-platform` 安装 `wifi-aware-bluetooth.service` 与 AirDrop 依赖项；只有启动 AirDrop 时才启动 UART 初始化。服务与 `bluetooth.service` 互斥，为公共 AirDrop 保留关闭状态的专用 `hci0`，由应用在操作期间取得 HCI user channel。不要同时启动 BlueZ 管理守护进程。
+
+所需 `/lib/firmware/BCM4362A2.hcd` 来自与 Wi-Fi 固件相同的固定 [rkwifibt 来源](https://github.com/radxa/rkwifibt/tree/b61a1e8499a4f1956ef417cbcfaa6c2cf805ce08/firmware/broadcom/AP6275_PCIE/bt)，SHA-256 为 `3a0a926fa800c121f850ed4f961a1e058a993666d9ee565c1e46dfd596e25567`，原始授权为 `hardware/bcm43752/firmware/LICENSE.rkwifibt`。目标系统已带此文件；平台安装器不下载或替换它，启动准备检查摘要，不匹配即失败。
+
+UART 初始速率为 115200 bit/s、下载和运行速率为 1500000 bit/s，使用硬件流控。[BlueZ 5.72 hciattach](https://github.com/bluez/bluez/blob/5.72/tools/hciattach.c) 在初始化成功后才 fork，systemd 据父进程完成判定就绪；30 秒初始化期限仅作失败兜底。停止时关闭 UART line discipline，rfkill 保持上电；下次启动重新执行本板复位与固件下载。已有 `hci0` 时拒绝复位，不接管其他控制器。已在本板完成固件下载与 HCI 初始化，`wifi-aware-bluetooth.service`、`wirelessd.service` 和 `airdrop.service` 均启动成功；系统 BlueZ 守护进程保持停用。该结果不代表系统 AirDrop 双向文件验收通过。
+
+当前板载内核的 `/proc/bluetooth/sleep/btwrite` 读取处理会直接访问用户态缓冲区，实测触发 `bluesleep_read_proc_btwrite` Oops；不得用 `cat` 等方式查询该节点。上游同源 `lpm` 读取处理也使用同样写法。启动准备仅写入 `btwrite`，通过 rfkill、HCI 和 systemd 状态观测结果；本项目未修改板载内核的该读取缺陷。
 
 ## 性能策略
 

@@ -25,7 +25,8 @@ int nan_mac_merge_candidate(void *mac, void *bss);
 #define NAN_MAC_HOST_STOPPING 0x130
 #define NAN_MAC_HOST_STATIONS 0x134
 #define NAN_MAC_HOST_GROUP_KEYS 0x138
-#define NAN_MAC_CONTEXT_SIZE 0x13c
+#define NAN_MAC_AWDL 0x13c
+#define NAN_MAC_CONTEXT_SIZE 0x140
 int nan_mac_prepare_bsscfg(void *wlc, void *mac, const unsigned char *nmi,
                            unsigned char option);
 int nan_mac_remove_bsscfg(void *mac);

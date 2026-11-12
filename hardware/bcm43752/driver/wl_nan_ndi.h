@@ -11,6 +11,7 @@
  * under lock; it must never wait for RTNL or issue an IOVAR. Records survive
  * command failures and hostap restarts, and expire with the owning wiphy. */
 struct wl_nan_ndi_owner {
+	u64 awdl_generation; /* Pending/active owner; STOP or empty QUERY releases. */
 	u32 flags;
 	u32 ifindex;
 	u8 ifidx, bssidx, mac[6];

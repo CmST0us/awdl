@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* A2 received availability and negotiated CRB validation. Keep parsed maps
  * and native allocation owners on errors; never turn failed validation into
  * a newly active peer. The host remains the sole protocol owner by default. */
@@ -61,42 +62,42 @@ int nan_dam_check_peer_crb(void *dam, void *peer)
             return -16;
     }
     uint16_t period = U16(container, 2), advertised = 0;
-    int error = ((int (*)(void *, void *, uint16_t *))0x30cd5u)(
+    int error = ((int (*)(void *, void *, uint16_t *))native_0x30cd5)(
         nan, source, &advertised);
     if (error)
         return error;
     if (advertised > period || (installed && U16(installed, 2) != period))
-        error = ((int (*)(void *, void *, uint16_t *))0x32155u)(nan, peer, &period);
+        error = ((int (*)(void *, void *, uint16_t *))native_0x32155)(nan, peer, &period);
     else
         error = nan_dam_resize_map(nan, source, 16, period);
     if (error)
         return error;
     void *maps[2], *out[2];
-    ((void (*)(void *, void **, void **, void *, void *))0x20c5du)(
+    ((void (*)(void *, void **, void **, void *, void *))native_0x20c5d)(
         dam, maps, out, source, map);
     if (out[1] || (out[0] && U16(out[0], 2) != period))
         return -30;
     for (unsigned i = 0; i < 2; ++i)
         if (maps[i] && U16(maps[i], 2) != period)
             return -30;
-    void *prohibited = ((void *(*)(void *))0x316d9u)(nan);
-    error = ((int (*)(void *, void *, void *))0x30e05u)(nan, source, prohibited);
+    void *prohibited = ((void *(*)(void *))native_0x316d9)(nan);
+    error = ((int (*)(void *, void *, void *))native_0x30e05)(nan, source, prohibited);
     if (error)
         return error;
     unsigned band2 = 0, band5 = 0;
     for (unsigned m = 0; m < 2; ++m) {
         for (unsigned i = 0; maps[m] && i < period / 16; ++i) {
             uint16_t channel, committed;
-            if (((int (*)(void *, unsigned, unsigned, uint16_t *))0x20f2du)(
+            if (((int (*)(void *, unsigned, unsigned, uint16_t *))native_0x20f2d)(
                     maps[m], i, 1, &channel) || !channel || channel == 0xff ||
                 (channel & 0xff00u) == 0xff00u ||
                 ((channel & 0xc000u) && (channel & 0xc000u) != 0xc000u))
                 continue;
-            unsigned primary20 = ((unsigned (*)(unsigned))0xc009u)(channel);
+            unsigned primary20 = ((unsigned (*)(unsigned))native_0xc009)(channel);
             if (!nan_dam_valid_chanspec(dam, prohibited, primary20, 3) ||
-                ((int (*)(void *, unsigned, unsigned, uint16_t *))0x20f2du)(
+                ((int (*)(void *, unsigned, unsigned, uint16_t *))native_0x20f2d)(
                     out[0], i, 1, &committed) ||
-                !((int (*)(unsigned, unsigned))0xbd71u)(channel, committed))
+                !((int (*)(unsigned, unsigned))native_0xbd71)(channel, committed))
                 continue;
             if (committed & 0xc000u)
                 ++band5;
@@ -125,35 +126,35 @@ int nan_dam_parse_peer_schedule(void *dam, unsigned type, void *peer,
         return -16;
     void *nan = PTR(dam, 4);
     unsigned cursor = 0;
-    void *attribute = ((void *(*)(void *, void *, unsigned, unsigned *))0x36a39u)(
+    void *attribute = ((void *(*)(void *, void *, unsigned, unsigned *))native_0x36a39)(
         nan, attributes, 0x12, &cursor);
     if (!attribute || (!force && U8(attribute, 3) ==
-        ((unsigned (*)(void *, void *))0x373c9u)(nan, peer)))
+        ((unsigned (*)(void *, void *))native_0x373c9)(nan, peer)))
         return 0;
     if (PTR(dam, 0x1c)) {
         if (!PTR(peer, 0x0c) || PTR(peer, 0x0c) == PTR(dam, 0x1c))
             return -16;
-        int error = ((int (*)(void *, void *, void *))0x307d9u)(
+        int error = ((int (*)(void *, void *, void *))native_0x307d9)(
             nan, PTR(peer, 0x0c), PTR(dam, 0x1c));
         if (!error)
-            error = ((int (*)(void *, void *, void *))0x307fdu)(
+            error = ((int (*)(void *, void *, void *))native_0x307fd)(
                 nan, PTR(peer, 0x0c), PTR(dam, 0x1c));
         if (error)
             return error;
     }
-    int error = ((int (*)(void *, unsigned, void *, void **))0x328e5u)(
+    int error = ((int (*)(void *, unsigned, void *, void **))native_0x328e5)(
         nan, type, attributes, &PTR(dam, 0x1c));
     if (!error)
-        error = ((int (*)(void *, void *, void *))0x31f65u)(nan, frame, PTR(dam, 0x1c));
+        error = ((int (*)(void *, void *, void *))native_0x31f65)(nan, frame, PTR(dam, 0x1c));
     if (!error)
-        error = ((int (*)(void *, unsigned, void *, void **))0x328e5u)(
+        error = ((int (*)(void *, unsigned, void *, void **))native_0x328e5)(
             nan, type, attributes, &PTR(peer, 0x0c));
     if (!error)
-        error = ((int (*)(void *, void *, void *))0x31f65u)(nan, frame, PTR(peer, 0x0c));
+        error = ((int (*)(void *, void *, void *))native_0x31f65)(nan, frame, PTR(peer, 0x0c));
     if (!error && U8(PTR(dam, 8), 0) == 3)
         error = nan_dam_check_peer_crb(dam, peer);
     if (!error && frame)
-        error = ((int (*)(void *, void *, void *, unsigned))0x34259u)(
+        error = ((int (*)(void *, void *, void *, unsigned))native_0x34259)(
             nan, peer, (uint8_t *)frame + 8, 0);
     return error;
 }

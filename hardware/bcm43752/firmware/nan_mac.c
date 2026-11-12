@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* BCM43752A2 .146 only. All native entry points and field offsets below are
  * derived from the hash-locked A2 ROM, not the reference B0 structure layout.
  * This restores MAC storage/commands, beacon IE registries and pre-enable
@@ -15,14 +16,14 @@
 
 static void *allocate(size_t size)
 {
-    return ((void *(*)(size_t))0x7146du)(size);
+    return ((void *(*)(size_t))native_0x7146d)(size);
 }
 
 static void release_slot(void *owner, size_t offset)
 {
     void *resource = PTR(owner, offset);
     if (resource) {
-        ((void (*)(void *))0x71491u)(resource);
+        ((void (*)(void *))native_0x71491)(resource);
         PTR(owner, offset) = 0;
     }
 }
@@ -59,7 +60,7 @@ static int social_channels(const struct nan_command_digest *digest,
                U8(config, 0x50) == !!high ? 0 : -16;
     if (!PTR(config, 0x74) || !PTR(nan, 0x5c))
         return -25;
-    if (high && ((unsigned (*)(void *))0x8bba1u)(wlc) < 2)
+    if (high && ((unsigned (*)(void *))native_0x8bba1)(wlc) < 2)
         return -3;
     int (*valid_channel)(void *, unsigned) = (int (*)(void *, unsigned))0xc815du;
     if (!valid_channel(PTR(nan, 0x2c), low) ||
@@ -68,12 +69,12 @@ static int social_channels(const struct nan_command_digest *digest,
     U16(config, 0x52) = low;
     U16(config, 0x54) = high;
     U8(config, 0x50) = !!high;
-    int error = ((int (*)(void *))0x2f625u)(mac);
+    int error = ((int (*)(void *))native_0x2f625)(mac);
     if (error)
         return error;
     /* 0x31898 is the fixed A2 single-radio policy query (returns zero),
      * not the configured high-band DW flag. Preserve that native policy. */
-    ((void (*)(void *, unsigned))0x2203du)(PTR(nan, 0x5c), 0);
+    ((void (*)(void *, unsigned))native_0x2203d)(PTR(nan, 0x5c), 0);
     return 0;
 }
 
@@ -121,7 +122,7 @@ int nan_mac_merge_candidate(void *mac, void *bss)
      * Preserve the native host-election exclusion and success boolean. */
     if (!U8(config, 0x28) || U8(config, 0x5c) || !U8(candidate, 0x30))
         return 0;
-    return ((int (*)(void *, void *, void *))0x2aa0du)(mac, candidate, bss) == 0;
+    return ((int (*)(void *, void *, void *))native_0x2aa0d)(mac, candidate, bss) == 0;
 }
 
 static void configure(void *mac)
@@ -163,7 +164,7 @@ static void configure(void *mac)
     U8(cfg, 0x79) = 8; /* RSSI rolling window; native storage has eight samples. */
     for (size_t offset = 0x6c; offset <= 0x70; offset += 4)
         U16(PTR(cfg, offset), 0) = 128; /* Native scan dwell; zero period selects native default. */
-    ((void (*)(void *))0x2a925u)(mac); /* Native runtime reset: 0x68 bytes. */
+    ((void (*)(void *))native_0x2a925)(mac); /* Native runtime reset: 0x68 bytes. */
 }
 
 static int attach_beacon_registries(void *wlc, void *mac)
@@ -235,13 +236,13 @@ static int release_context(void *nan)
         return error;
     for (size_t offset = 0x24; offset <= 0x28; offset += 4) {
         if (PTR(mac, offset)) {
-            ((void (*)(void *))0x22eff9u)(PTR(mac, offset));
+            ((void (*)(void *))native_0x22eff9)(PTR(mac, offset));
             PTR(mac, offset) = 0;
         }
     }
     void *cfg = PTR(mac, 0x20);
     if (cfg) {
-        ((void (*)(void *, void **))0x2b2d5u)(mac, &PTR(cfg, 0x74));
+        ((void (*)(void *, void **))native_0x2b2d5)(mac, &PTR(cfg, 0x74));
         release_slot(cfg, 0x64);
         release_slot(cfg, 0x6c);
         release_slot(cfg, 0x70);
@@ -299,7 +300,7 @@ int nan_mac_context_attach(void *wlc, void *nan)
     if (!PTR(mac, 0x20))
         goto nomem;
     void *cfg = PTR(mac, 0x20);
-    if (((int (*)(void *, void **))0x2b425u)(mac, &PTR(cfg, 0x74)))
+    if (((int (*)(void *, void **))native_0x2b425)(mac, &PTR(cfg, 0x74)))
         goto nomem;
     const uint8_t offsets[] = {0x64, 0x6c, 0x70};
     for (size_t i = 0; i < sizeof(offsets); ++i) {
@@ -355,6 +356,7 @@ int nan_mac_deinitialize(void *wlc, void *nan)
         PTR(mac, 0xe4) || PTR(mac, 0x10c) || U32(mac, 0xb4) ||
         PTR(mac, NAN_MAC_HOST_TX) || U32(mac, NAN_MAC_HOST_TX_COUNT) ||
         PTR(mac, NAN_MAC_HOST_STATIONS) || PTR(mac, NAN_MAC_HOST_GROUP_KEYS) ||
+        PTR(mac, NAN_MAC_AWDL) ||
         PTR(PTR(bands, 0), 0) || PTR(PTR(bands, 4), 0) ||
         PTR(mac, NAN_MAC_BSS_MANAGER) || PTR(mac, NAN_MAC_BSS_NODE) ||
         PTR(mac, NAN_MAC_EVENT_BSS) || PTR(mac, NAN_MAC_EVENT_MANAGER))
@@ -380,19 +382,19 @@ int nan_mac_deinitialize(void *wlc, void *nan)
     if (stats && PTR(stats, 4)) {
         if (PTR(stats, 4) != PTR(mac, 0xd8))
             return -30;
-        ((void (*)(void *, size_t))0x18660bu)(stats, 12);
+        ((void (*)(void *, size_t))native_0x18660b)(stats, 12);
     }
     const uint16_t allocations[] = {0x34, 0x44, 0x48, 0x70, 0xa0, 0xc4,
                                      0xc8, 0xd0, 0xd8, 0x108};
     for (size_t i = 0; i < sizeof(allocations) / sizeof(allocations[0]); ++i)
         release_slot(mac, allocations[i]);
-    ((void (*)(void *))0x2d931u)(mac);
+    ((void (*)(void *))native_0x2d931)(mac);
     /* Band 1 borrows band 0's timer records; native free clears only band 0. */
     PTR(PTR(bands, 4), 4) = 0;
     PTR(PTR(bands, 4), 8) = 0;
-    ((void (*)(void *))0x2a6c5u)(mac);
-    ((void (*)(void *))0x2b4d1u)(mac);
-    ((void (*)(void *, void *))0x2b4b1u)(mac, PTR(PTR(mac, 0x20), 0x74));
+    ((void (*)(void *))native_0x2a6c5)(mac);
+    ((void (*)(void *))native_0x2b4d1)(mac);
+    ((void (*)(void *, void *))native_0x2b4b1)(mac, PTR(PTR(mac, 0x20), 0x74));
     U8(PTR(mac, 0x38), 0x66) = 0;
     U8(mac, 0x1c) = 0;
     return 0;
@@ -409,7 +411,7 @@ int nan_mac_initialize(void *wlc, void *nan)
     if (PTR(mac, 0x2c) || PTR(mac, 0x30) || PTR(mac, 0x34) ||
         PTR(mac, 0x7c) || PTR(mac, 0x80) || PTR(mac, 0x84))
         return -16;
-    int error = ((int (*)(void *, void *))0x2f465u)(wlc, nan);
+    int error = ((int (*)(void *, void *))native_0x2f465)(wlc, nan);
     if (error) {
         int cleanup = nan_mac_deinitialize(wlc, nan);
         if (cleanup)

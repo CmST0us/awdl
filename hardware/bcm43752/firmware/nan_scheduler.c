@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* BCM43752 A2 host-scheduled NAN. Native 0x37f94 translates the four-byte
  * availability entries and registers MSCH; 0x37ce0 / 0x37b84 deliver its real
  * events. The generic module enable is intentionally empty in A2 and B0.
@@ -20,10 +21,10 @@
 
 static void *allocate(size_t bytes)
 {
-    return ((void *(*)(size_t))0x7146du)(bytes);
+    return ((void *(*)(size_t))native_0x7146d)(bytes);
 }
 
-__attribute__((naked)) void nan_msch_trace_allocate(void)
+NATIVE_ENTRY void nan_msch_trace_allocate(void)
 {
     /* A2 0xf8744 allocates a four-byte record header plus only 512 bytes.
      * Both native trace serializers copy the full channel list unchecked:
@@ -47,20 +48,20 @@ static int prepare_msch_trace(void *wlc)
     /* Boot can already own the original 516-byte buffer before NAN init.
      * Drain its pending record through the native logger, then replace the
      * actual owner. No record is being built during this command callback. */
-    void *replacement = ((void *(*)(size_t))0x1526e1u)(2052);
+    void *replacement = ((void *(*)(size_t))native_0x1526e1)(2052);
     if (!replacement)
         return -27;
-    ((void (*)(void *))0xf7eadu)(trace);
+    ((void (*)(void *))native_0xf7ead)(trace);
     PTR(state, 0x18) = replacement;
     PTR(state, 4) = (uint8_t *)replacement + 4;
-    ((void (*)(void *))0x71491u)(old);
+    ((void (*)(void *))native_0x71491)(old);
     return 0;
 }
 
 static void release_slot(void *owner, size_t offset)
 {
     if (PTR(owner, offset)) {
-        ((void (*)(void *))0x71491u)(PTR(owner, offset));
+        ((void (*)(void *))native_0x71491)(PTR(owner, offset));
         PTR(owner, offset) = 0;
     }
 }
@@ -71,7 +72,7 @@ void nan_scheduler_mac_event(void *mac, unsigned event, unsigned channel)
      * compares the raw chanspec low byte with the discovery primary. For
      * VHT80 that byte is the center channel (155 rather than primary 149),
      * so it leaves WLC's NAN-on-channel bit clear throughout the data slot. */
-    ((void (*)(void *, unsigned, unsigned))0x2e4d9u)(mac, event, channel);
+    ((void (*)(void *, unsigned, unsigned))native_0x2e4d9)(mac, event, channel);
     unsigned sideband = (channel >> 8) & 7u;
     if ((channel & 0xf800u) != 0xe000u || sideband >= 4 || !(event & 6u))
         return;
@@ -92,7 +93,7 @@ static void *scheduler_wlc(void *nan)
     if (!mac || !PTR(mac, 8) || !PTR(PTR(mac, 8), 0) ||
         !PTR(PTR(PTR(mac, 8), 0), 0))
         return 0;
-    return ((void *(*)(void *, unsigned))0x2f37du)(mac, 0);
+    return ((void *(*)(void *, unsigned))native_0x2f37d)(mac, 0);
 }
 
 int nan_scheduler_context_attach(void *wlc, void *nan)
@@ -121,7 +122,7 @@ int nan_scheduler_context_attach(void *wlc, void *nan)
     return 0;
 fail:
     release_slot(scheduler, 0x44);
-    ((void (*)(void *))0x71491u)(scheduler);
+    ((void (*)(void *))native_0x71491)(scheduler);
     return -27;
 }
 
@@ -138,7 +139,7 @@ int nan_scheduler_initialize(void *wlc, void *nan)
     int error = prepare_msch_trace(wlc);
     if (error)
         return error;
-    error = ((int (*)(void *, void *))0x38329u)(wlc, nan);
+    error = ((int (*)(void *, void *))native_0x38329)(wlc, nan);
     if (!error)
         U32(scheduler, INITIALIZED) = 1;
     return error;
@@ -156,7 +157,7 @@ int nan_msch_unregister_owned(void *msch, void **owner)
         return -30;
     /* Native unregister clears its argument before validating/freeing. */
     void *request = handle;
-    int error = ((int (*)(void *, void **))0xf7115u)(msch, &request);
+    int error = ((int (*)(void *, void **))native_0xf7115)(msch, &request);
     if (error)
         return error;
     if (request || contains(msch, handle))
@@ -173,12 +174,12 @@ int nan_scheduler_unregister(void *nan)
     void *wlc = scheduler_wlc(nan);
     void *handle = PTR(scheduler, 8);
     if (wlc && PTR(wlc, 0x678) &&
-        !((unsigned (*)(void *))0x127969u)(PTR(wlc, 0x678)))
+        !((unsigned (*)(void *))native_0x127969)(PTR(wlc, 0x678)))
         return -16;
     if (handle) {
         if (!wlc || !PTR(wlc, 0x574) || !PTR(nan, 0x30))
             return -25;
-        void *bss = ((void *(*)(void *, unsigned))0x2f045u)(PTR(nan, 0x14), 0);
+        void *bss = ((void *(*)(void *, unsigned))native_0x2f045)(PTR(nan, 0x14), 0);
         if (!bss || !PTR(bss, 0x98))
             return -25;
         uint16_t channel = U16(PTR(bss, 0x98), 0x36);
@@ -187,10 +188,10 @@ int nan_scheduler_unregister(void *nan)
         if (error)
             return error;
         /* The NAN data / MAC consumers close the actual active channel. */
-        ((void (*)(void *, uint16_t, unsigned))0x37f45u)(nan, channel, 4);
-        ((void (*)(void *, unsigned, uint16_t, unsigned))0x2259du)(nan, 4, channel, 0x10);
+        ((void (*)(void *, uint16_t, unsigned))native_0x37f45)(nan, channel, 4);
+        ((void (*)(void *, unsigned, uint16_t, unsigned))native_0x2259d)(nan, 4, channel, 0x10);
         nan_scheduler_mac_event(PTR(nan, 0x14), 4, channel);
-        ((void (*)(void *, unsigned, unsigned, unsigned))0x1f0e1u)(nan, 0, 4, 0);
+        ((void (*)(void *, unsigned, unsigned, unsigned))native_0x1f0e1)(nan, 0, 4, 0);
     }
     release_slot(scheduler, 0x1c);
     U8(scheduler, 0x0c) = 0;
@@ -199,7 +200,7 @@ int nan_scheduler_unregister(void *nan)
     U8(scheduler, 0x4c) = 0;
     U32(scheduler, LAST_ERROR) = 0;
     if (wlc)
-        ((void (*)(void *, unsigned))0x22559u)(nan, 0);
+        ((void (*)(void *, unsigned))native_0x22559)(nan, 0);
     return 0;
 }
 
@@ -220,7 +221,7 @@ int nan_scheduler_deinitialize(void *wlc, void *nan)
         if (U32(entry, 0) || PTR(entry, 4) != PTR(scheduler, 0x44) ||
             U32(entry, 8) != 0x08010038u)
             return -30;
-        ((void (*)(void *, size_t))0x18660bu)(entry, 12);
+        ((void (*)(void *, size_t))native_0x18660b)(entry, 12);
     }
     release_slot(scheduler, 0x1c);
     if (U32(scheduler, INITIALIZED))
@@ -254,8 +255,8 @@ static uint64_t period_start(void *nan, unsigned period)
 {
     void *mac = PTR(nan, 0x14);
     uint32_t high, low;
-    ((void (*)(void *, uint32_t *, uint32_t *))0x30245u)(mac, &high, &low);
-    unsigned dw = ((unsigned (*)(void *))0x2f08du)(mac);
+    ((void (*)(void *, uint32_t *, uint32_t *))native_0x30245)(mac, &high, &low);
+    unsigned dw = ((unsigned (*)(void *))native_0x2f08d)(mac);
     /* Same CDW origin as native 0x381c4. Autonomous map expansion can use
      * shorter periods; host-installed maps retain their 8192 TU period. */
     uint64_t start = ((uint64_t)high << 32) | low;
@@ -286,13 +287,16 @@ int nan_scheduler_register(void *nan, void *const *schedules, unsigned count)
     if (error)
         return error;
     uint32_t params[12];
-    ((void (*)(void *, size_t))0x18660bu)(params, sizeof(params));
+    ((void (*)(void *, size_t))native_0x18660b)(params, sizeof(params));
     params[0] = 5;
-    params[2] = 3;
+    /* Keep discovery DW at its native priority 4. The independently owned
+     * AWDL map uses 3, so an idle NAN data map cannot pin it to channel 149.
+     * Normal NAN data retains its own MSCH handle and resumes in free slots. */
+    params[2] = 2;
     params[5] = BCM_NAN_HOST_SCHEDULE_SLOT_TU * 1024; /* Microseconds. */
     params[6] = period * 1024;
     uint64_t start = period_start(nan, period);
-    uint64_t now = ((uint64_t (*)(void *))0xf0dddu)(PTR(wlc, 0x574));
+    uint64_t now = ((uint64_t (*)(void *))native_0xf0ddd)(PTR(wlc, 0x574));
     if (now > start && now - start > params[6] - params[5])
         start += params[6];
     params[3] = (uint32_t)start;
@@ -304,7 +308,7 @@ int nan_scheduler_register(void *nan, void *const *schedules, unsigned count)
     U16(scheduler, 0x16) = BCM_NAN_HOST_SCHEDULE_SLOT_TU;
     U8(scheduler, 0x15) = U8(schedule, 6);
     U8(scheduler, 0x14) = U8(schedule, 5);
-    error = ((int (*)(void *, void *, unsigned, void *const *, unsigned))0x37f95u)(
+    error = ((int (*)(void *, void *, unsigned, void *const *, unsigned))native_0x37f95)(
         nan, params, 2, schedules, count);
     if (error && !PTR(scheduler, 8)) {
         release_slot(scheduler, 0x1c);
@@ -314,7 +318,7 @@ int nan_scheduler_register(void *nan, void *const *schedules, unsigned count)
     }
     U32(scheduler, LAST_ERROR) = (uint32_t)error;
     if (!error)
-        ((void (*)(void *, unsigned))0x22559u)(nan, 1);
+        ((void (*)(void *, unsigned))native_0x22559)(nan, 1);
     return error;
 }
 
@@ -346,19 +350,19 @@ void nan_scheduler_slot_start(void *nan)
         return;
     }
     uint32_t params[12];
-    ((void (*)(void *, size_t))0x18660bu)(params, sizeof(params));
+    ((void (*)(void *, size_t))native_0x18660b)(params, sizeof(params));
     params[3] = low;
     params[4] = high;
     if (PTR(wlc, 0x678) &&
-        !((unsigned (*)(void *))0x127969u)(PTR(wlc, 0x678))) {
+        !((unsigned (*)(void *))native_0x127969)(PTR(wlc, 0x678))) {
         U32(scheduler, LAST_ERROR) = (uint32_t)-16;
         return;
     }
-    int error = ((int (*)(void *, void *, void *, unsigned))0xf72f5u)(
+    int error = ((int (*)(void *, void *, void *, unsigned))native_0xf72f5)(
         PTR(wlc, 0x574), PTR(scheduler, 8), params, 1);
     U32(scheduler, LAST_ERROR) = (uint32_t)error;
     if (error)
         return;
-    ((void (*)(void *, unsigned))0x37f69u)(nan, 0);
+    ((void (*)(void *, unsigned))native_0x37f69)(nan, 0);
     U32(PTR(scheduler, 0x44), 0)++;
 }

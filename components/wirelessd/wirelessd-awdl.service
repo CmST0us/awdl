@@ -22,7 +22,8 @@ RuntimeDirectoryMode=0700
 UMask=0077
 # 先由管理器请求原生 STOP，再使用进程组退出兜底。
 KillMode=mixed
-TimeoutStopSec=15
+# 覆盖 AWDL 正常停止及恢复清理各 30 秒；增大 AWDL 期限时需同步调整。
+TimeoutStopSec=90
 
 [Install]
 # 仅在明确选择 AWDL 开机模式时启用。

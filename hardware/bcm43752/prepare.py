@@ -34,9 +34,9 @@ def main():
                    for line in series.read_text().splitlines()
                    if line.split("#", 1)[0].strip()]
         owned = [directory / n for n in ("wl_nan_host.c", "wl_nan_host.h",
-                                         "wl_nan_ndi.c", "wl_nan_ndi.h")]
+                                         "wl_nan_ndi.c", "wl_nan_ndi.h", "wl_awdl_data.c")]
         headers = [directory.parent / "include" / n
-                   for n in ("nan_host_abi.h", "nan_vendor_abi.h")]
+                   for n in ("nan_host_abi.h", "nan_vendor_abi.h", "awdl_host_abi.h", "awdl_frame.h")]
         inputs = {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
                   for p in [Path(__file__).resolve(), directory / "source.json", series,
                             *patches, *owned, *headers]}

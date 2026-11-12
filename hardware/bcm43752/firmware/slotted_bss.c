@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* Restore the A2 callback registration used by NAN BSSCFG creation.
  * Caller 0x2e7de..0x2e7fe constructs exactly 28 bytes; B0 uses 32 bytes.
  * Native A2 unregister 0x128648 owns/frees node +0x0c with osl_mfree.
@@ -16,7 +17,7 @@ unsigned slotted_bss_stop_pre_close_timer(void *manager)
     if (!manager || !PTR(manager, 0) || !PTR(manager, 0x58) ||
         !PTR(PTR(manager, 0x58), 0x44))
         return 0;
-    return ((unsigned (*)(void *, void *))0x7fe95u)(
+    return ((unsigned (*)(void *, void *))native_0x7fe95)(
         PTR(PTR(manager, 0), 8), PTR(manager, 0x58));
 }
 
@@ -25,7 +26,7 @@ int slotted_bss_start_pre_close_timer(void *manager, unsigned milliseconds,
 {
     if (!slotted_bss_stop_pre_close_timer(manager))
         return -16;
-    return ((unsigned (*)(void *, void *, unsigned, unsigned))0x7fdc9u)(
+    return ((unsigned (*)(void *, void *, unsigned, unsigned))native_0x7fdc9)(
         PTR(PTR(manager, 0), 8), PTR(manager, 0x58), milliseconds, periodic)
         ? 0 : -1;
 }
@@ -37,7 +38,7 @@ uint32_t bsscfg_now(void *bss)
 {
     void *wlc = PTR(bss, 0);
     if (*(uint32_t *)((uint8_t *)bss + 0x74) == 5)
-        return ((uint32_t (*)(void *, void *))0x127a79u)(PTR(wlc, 0x678), bss);
+        return ((uint32_t (*)(void *, void *))native_0x127a79)(PTR(wlc, 0x678), bss);
     return *(uint32_t *)((uint8_t *)PTR(wlc, 0) + 0x28);
 }
 
@@ -54,7 +55,7 @@ int slotted_bss_register_callbacks(void *manager, const uint32_t *callbacks,
         return -2;
     if (PTR(node, 0x0c))
         return -16;
-    uint32_t *owned = ((void *(*)(size_t))0x7146du)(28);
+    uint32_t *owned = ((void *(*)(size_t))native_0x7146d)(28);
     if (!owned)
         return -27;
     for (size_t i = 0; i < 7; ++i)

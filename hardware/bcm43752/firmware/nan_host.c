@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* Hash-locked A2 NMI management transport. Keep native NAN BSS, scheduler,
  * packet allocation and PCB machinery; hostap owns the negotiation frames. */
 #include "nan_host.h"
@@ -6,6 +7,7 @@
 #include "nan_station.h"
 #include "nan_schedule.h"
 #include "nan_group.h"
+#include "awdl_event.h"
 
 #define FIELD(type, base, offset) (*(type *)((uint8_t *)(base) + (offset)))
 #define PTR(base, offset) FIELD(void *, base, offset)
@@ -49,12 +51,12 @@ static void put32(uint8_t *p, uint32_t value)
 
 static void copy(void *to, const void *from, size_t length)
 {
-    ((void *(*)(void *, const void *, size_t))0x151a21u)(to, from, length);
+    ((void *(*)(void *, const void *, size_t))native_0x151a21)(to, from, length);
 }
 
 static int equal(const void *a, const void *b, size_t length)
 {
-    return !((int (*)(const void *, const void *, size_t))0xa7a9u)(a, b, length);
+    return !((int (*)(const void *, const void *, size_t))native_0xa7a9)(a, b, length);
 }
 
 void *nan_tx_packet_header(void *wlc, void *packet)
@@ -63,7 +65,7 @@ void *nan_tx_packet_header(void *wlc, void *packet)
     /* Native A2 TX parsing accounts for offload-prefix size, descriptor
      * length and split packet headers. TX-status only calls this for packets
      * with WLF_TXHDR; do not mistake the D11 descriptor for an 802.11 header. */
-    ((void (*)(void *, void *, void **, void **, void **))0x1f78f1u)(
+    ((void (*)(void *, void *, void **, void **, void **))native_0x1f78f1)(
         wlc, packet, &offload, &descriptor, &header);
     return header;
 }
@@ -165,7 +167,7 @@ static void send_event(void *nan, const void *data, unsigned length)
 {
     /* Native event construction copies this payload before returning, as for
      * original NAN events that release their temporary buffer immediately. */
-    ((void (*)(void *, unsigned, unsigned, const void *, unsigned, unsigned))0x1fcb5u)(
+    ((void (*)(void *, unsigned, unsigned, const void *, unsigned, unsigned))native_0x1fcb5)(
         nan, BCM_NAN_HOST_EVENT, BCM_NAN_HOST_REASON, data, length, 0);
 }
 
@@ -177,10 +179,7 @@ static void finish(struct host_tx *tx, uint32_t result, unsigned flags)
         slot = &(*slot)->next;
     if (*slot != tx)
         return;
-    if ((tx->frame[0] & 0xfcu) == 0xb0u && !(flags & BCM_NAN_HOST_ACK))
-        ((int (*)(const char *, ...))0xa815u)(
-            "NAN auth TX failed: state=%u status=%x submit=%d channel=%x valid=%u\n",
-            tx->state, result, tx->submit_error, tx->channel, tx_context_valid(tx));
+    /* The host completion below carries the actual result and ACK state. */
     if (tx->frame[4] & 1u)
         flags &= ~BCM_NAN_HOST_ACK; /* Group TX completion is not a peer ACK. */
     uint8_t event[BCM_NAN_HOST_HEADER_SIZE];
@@ -191,7 +190,7 @@ static void finish(struct host_tx *tx, uint32_t result, unsigned flags)
     send_event(nan, event, sizeof(event));
     *slot = tx->next;
     --U32(PTR(nan, 0x14), NAN_MAC_HOST_TX_COUNT);
-    ((void (*)(void *))0x71491u)(tx);
+    ((void (*)(void *))native_0x71491)(tx);
 }
 
 void nan_host_tx_complete(void *wlc, uint32_t status, struct host_tx *tx)
@@ -238,12 +237,12 @@ static void submit(struct host_tx *tx)
          * Native key_prep_tx_mpdu sets Protected while authenticating the
          * actual header; no payload encryption is implemented by this patch. */
         packet = ((void *(*)(void *, unsigned, const void *, const void *,
-                            const void *, unsigned, void **, unsigned, unsigned))0x8a769u)(
+                            const void *, unsigned, void **, unsigned, unsigned))native_0x8a769)(
             wlc, get16(frame) & ~0x4000u, frame + 4, frame + 10, frame + 16,
             tx->length - 24, &body, iv, icv);
     } else {
         packet = ((void *(*)(void *, unsigned, const void *, const void *,
-                               const void *, unsigned, void **))0x8a74du)(
+                               const void *, unsigned, void **))native_0x8a74d)(
             wlc, get16(frame), frame + 4, frame + 10, frame + 16,
             tx->length - 24, &body);
     }
@@ -259,16 +258,16 @@ static void submit(struct host_tx *tx)
     U8(packet, 0x25) = U8(tx->bss, 0x3c);
     if (protected)
         U32(packet, 0x1c) |= 0x20000000u; /* native WLF_MFP key selection */
-    error = ((int (*)(void *, uintptr_t, void *, void *))0x102161u)(
+    error = ((int (*)(void *, uintptr_t, void *, void *))native_0x102161)(
         PTR(wlc, 0x2c4), (uintptr_t)nan_host_tx_complete, tx, packet);
     if (error) {
         /* PCB registration failed, so no callback can own this packet. */
-        ((void (*)(void *, void *, unsigned))0x151ae1u)(PTR(wlc, 4), packet, 1);
+        ((void (*)(void *, void *, unsigned))native_0x151ae1)(PTR(wlc, 4), packet, 1);
         finish(tx, (uint32_t)error, 0);
         return;
     }
     tx->state = TX_SUBMITTING;
-    error = ((int (*)(void *, void *, void *, unsigned))0x2d6b5u)(
+    error = ((int (*)(void *, void *, void *, unsigned))native_0x2d6b5)(
         mac, tx->bss, packet, 1);
     if (tx->state == TX_COMPLETE) {
         uint32_t status = tx->status;
@@ -371,7 +370,7 @@ int nan_host_tx_command(const struct nan_command_digest *digest,
         slot = &(*slot)->next;
     }
     unsigned frame_length = length - BCM_NAN_HOST_HEADER_SIZE;
-    struct host_tx *tx = ((void *(*)(size_t))0x7146du)(sizeof(*tx) + frame_length);
+    struct host_tx *tx = ((void *(*)(size_t))native_0x7146d)(sizeof(*tx) + frame_length);
     if (!tx)
         return -27;
     tx->nan = nan;
@@ -468,7 +467,7 @@ int nan_host_stop(void *nan)
 void nan_host_dw_start(void *wlc, void *mac, void *bss, void *runtime,
                         void *event, unsigned band, unsigned flags)
 {
-    ((void (*)(void *, void *, void *, void *, void *, unsigned, unsigned))0x2b729u)(
+    ((void (*)(void *, void *, void *, void *, void *, unsigned, unsigned))native_0x2b729)(
         wlc, mac, bss, runtime, event, band, flags);
     void *nan = PTR(mac, 4);
     if (band > 1 || !nan_host_active(nan) || nan_host_nmi(nan) != bss ||
@@ -478,6 +477,7 @@ void nan_host_dw_start(void *wlc, void *mac, void *bss, void *runtime,
     if (band != ((channel & 0xc000u) == 0xc000u) ||
         !discovery_channel(nan, channel) || channel != U16(PTR(bss, 0x98), 0x36))
         return;
+    awdl_event_nan_dw(nan, (uint16_t)channel);
     uint8_t notification[BCM_NAN_HOST_HEADER_SIZE];
     event_header(notification, BCM_NAN_HOST_DW_START, 0, 0, 0, channel, 0, 0);
     send_event(nan, notification, sizeof(notification));
@@ -498,20 +498,20 @@ static void host_receive(void *nan, const uint8_t *header, const uint8_t *body,
                            unsigned length, unsigned channel, unsigned flags)
 {
     unsigned bytes = BCM_NAN_HOST_HEADER_SIZE + 24 + length;
-    uint8_t *event = ((void *(*)(size_t))0x7146du)(bytes);
+    uint8_t *event = ((void *(*)(size_t))native_0x7146d)(bytes);
     if (!event)
         return;
     event_header(event, BCM_NAN_HOST_RX, 24 + length, 0, 0, channel, flags, 0);
     copy(event + BCM_NAN_HOST_HEADER_SIZE, header, 24);
     copy(event + BCM_NAN_HOST_HEADER_SIZE + 24, body, length);
     send_event(nan, event, bytes);
-    ((void (*)(void *))0x71491u)(event);
+    ((void (*)(void *))native_0x71491)(event);
 }
 
 /* Preserve the original RAM flashpatch for every non-NMI authentication.
  * Its first instruction only saves registers; no PC-relative relocation is
  * involved. The build verifies those four bytes before interposing them. */
-__attribute__((naked)) static int original_auth(
+NATIVE_ENTRY static int original_auth(
     void *, uintptr_t, const uint8_t *, void *, void *,
     const uint8_t *, unsigned, const void *, void *)
 {
@@ -540,7 +540,7 @@ int nan_host_rx_auth(void *wlc, uintptr_t arg2, const uint8_t *header,
     /* The real caller 0x11af1c passes the D11 subheader (+12) to auth;
      * Action receives the enclosing receive descriptor. Channel decoding
      * expects that enclosing descriptor in both cases. */
-    unsigned channel = ((unsigned (*)(void *, const void *))0x119465u)(
+    unsigned channel = ((unsigned (*)(void *, const void *))native_0x119465)(
         wlc, (const uint8_t *)rx - 12);
     if (channel && channel <= 196)
         host_receive(nan, header, body, length, channel | (channel > 14 ? 0xd000u : 0x1000u), 0);
@@ -581,7 +581,7 @@ int nan_host_rx_action(void *mac, void *bss, const uint8_t *header,
             return 1;
         flags = BCM_NAN_HOST_RX_DECRYPTED;
     }
-    unsigned channel = ((unsigned (*)(void *, const void *))0x119465u)(PTR(nan, 8), rx);
+    unsigned channel = ((unsigned (*)(void *, const void *))native_0x119465)(PTR(nan, 8), rx);
     if (!channel || channel > 196)
         return 1;
     channel |= channel > 14 ? 0xd000u : 0x1000u;
@@ -596,7 +596,7 @@ int nan_host_rx_action(void *mac, void *bss, const uint8_t *header,
 void nan_host_group_received(void *nan, const uint8_t *header, const uint8_t *body,
                               unsigned length, const void *rx)
 {
-    unsigned channel = ((unsigned (*)(void *, const void *))0x119465u)(PTR(nan, 8), rx);
+    unsigned channel = ((unsigned (*)(void *, const void *))native_0x119465)(PTR(nan, 8), rx);
     if (channel && channel <= 196)
         host_receive(nan, header, body, length,
                      channel | (channel > 14 ? 0xd000u : 0x1000u), BCM_NAN_HOST_RX_DECRYPTED);

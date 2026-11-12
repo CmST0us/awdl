@@ -21,11 +21,11 @@ impl Backend {
             Self::Rtl8852be => Ok("/usr/local/libexec/wirelessd/rtl-awdl"),
             Self::Be200 => Ok("/usr/local/libexec/wirelessd/be200-awdl"),
             Self::Mt7925 => Ok("/usr/local/libexec/wirelessd/mt7925-awdl"),
-            Self::Bcm43752 => anyhow::bail!("BCM43752 后端只实现原生 NAN，未实现 AWDL"),
+            Self::Bcm43752 => Ok("/usr/local/libexec/wirelessd/bcm43752-awdl"),
         }
     }
     pub fn shared_awdl(self) -> bool {
-        matches!(self, Self::Be200 | Self::Mt7925)
+        matches!(self, Self::Be200 | Self::Mt7925 | Self::Bcm43752)
     }
     pub fn awdl_environment(self, cfg: &Configuration) -> Result<Vec<(String, String)>> {
         if !self.shared_awdl() {
@@ -79,7 +79,7 @@ impl Backend {
     }
     pub fn awdl_channel(self, frequency: u32) -> Result<u8> {
         match self {
-            Self::Be200 | Self::Mt7925 => {
+            Self::Be200 | Self::Mt7925 | Self::Bcm43752 => {
                 ensure!(
                     matches!(frequency, 5745 | 5805),
                     "原生 AWDL 需要 NAN 数据频率为 5745 或 5805 MHz"
@@ -87,7 +87,6 @@ impl Backend {
                 Ok(((frequency - 5000) / 5) as u8)
             }
             Self::Rtl8852be => Ok(149),
-            Self::Bcm43752 => anyhow::bail!("BCM43752 后端未实现 AWDL"),
         }
     }
     pub fn driver(self) -> &'static str {

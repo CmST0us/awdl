@@ -17,8 +17,9 @@ Restart=no
 # 接收文件权限掩码。
 UMask=0077
 # 正常取消传输、关闭 BLE 并释放 AWDL 的退出兜底，单位秒。
+# 覆盖 AWDL 正常停止及恢复清理各 30 秒；增大 AWDL 期限时需同步调整。
 KillMode=mixed
-TimeoutStopSec=15
+TimeoutStopSec=90
 
 [Install]
 # 明确选择 AirDrop 开机模式时启用。

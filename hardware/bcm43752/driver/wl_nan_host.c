@@ -13,6 +13,99 @@
 #include <wldev_common.h>
 #include "wl_nan_host.h"
 #include "nan_host_abi.h"
+#include "awdl_host_abi.h"
+
+/* Reject malformed AWDL messages before they reach the firmware parser.
+ * Native resource/channel validation remains in firmware. In particular,
+ * passing this check does not advertise AWDL support on an older image. */
+static int awdl_request(const u8 *p, size_t length, u16 operation, u16 limit)
+{
+	u16 op, size;
+	if (length < BCM_AWDL_HEADER_SIZE ||
+	    get_unaligned_le16(p) != BCM_AWDL_ABI_VERSION ||
+	    get_unaligned_le16(p + 4) != length || get_unaligned_le16(p + 6))
+		return -EINVAL;
+	op = get_unaligned_le16(p + 2);
+	if (op == BCM_AWDL_QUERY)
+		return operation == BCM_NAN_VENDOR_GET &&
+			limit == BCM_AWDL_STATUS_SIZE && length == BCM_AWDL_HEADER_SIZE ? 0 : -EINVAL;
+	if (operation != BCM_NAN_VENDOR_SET || limit || !get_unaligned_le64(p + 8))
+		return -EINVAL;
+	switch (op) {
+	case BCM_AWDL_START:
+		size = BCM_AWDL_START_SIZE;
+		break;
+	case BCM_AWDL_STOP:
+		size = BCM_AWDL_HEADER_SIZE;
+		break;
+	case BCM_AWDL_PLAN:
+		size = BCM_AWDL_PLAN_SIZE;
+		break;
+	case BCM_AWDL_WINDOW:
+		size = BCM_AWDL_WINDOW_SIZE;
+		break;
+	case BCM_AWDL_CANCEL_TX:
+		if (length != BCM_AWDL_CANCEL_TX_SIZE || !get_unaligned_le64(p + 16))
+			return -EINVAL;
+		return 0;
+	case BCM_AWDL_PEER:
+		if (length < BCM_AWDL_PEER_HEADER_SIZE ||
+		    get_unaligned_le16(p + 22) > BCM_AWDL_PEER_IE_MAX ||
+		    get_unaligned_le16(p + 22) != length - BCM_AWDL_PEER_HEADER_SIZE)
+			return -EINVAL;
+		return 0;
+	case BCM_AWDL_TX:
+		if (length < BCM_AWDL_TX_HEADER_SIZE + 36 ||
+		    length > BCM_AWDL_TX_HEADER_SIZE + BCM_AWDL_TX_FRAME_MAX ||
+		    !get_unaligned_le64(p + 16) || !get_unaligned_le16(p + 24) ||
+		    !get_unaligned_le64(p + 28) ||
+		    get_unaligned_le16(p + 26) != length - BCM_AWDL_TX_HEADER_SIZE)
+			return -EINVAL;
+		return 0;
+	default:
+		return -EOPNOTSUPP;
+	}
+	return length == size ? 0 : -EINVAL;
+}
+
+static int awdl_event(const u8 *p, size_t length)
+{
+	u16 kind, flags;
+	if (length < BCM_AWDL_EVENT_HEADER_SIZE ||
+	    get_unaligned_le16(p) != BCM_AWDL_ABI_VERSION ||
+	    get_unaligned_le16(p + 4) != length ||
+	    get_unaligned_le16(p + 38) != length - BCM_AWDL_EVENT_HEADER_SIZE ||
+	    !get_unaligned_le64(p + 8))
+		return -EPROTO;
+	kind = get_unaligned_le16(p + 2);
+	flags = get_unaligned_le16(p + 6);
+	if (kind < BCM_AWDL_RX || kind > BCM_AWDL_SENDER ||
+	    (flags & ~BCM_AWDL_TX_ACK) || (flags && kind != BCM_AWDL_TX_DONE))
+		return -EPROTO;
+	if (kind == BCM_AWDL_RX) {
+		if (length < BCM_AWDL_EVENT_HEADER_SIZE + 24 ||
+		    length > BCM_AWDL_EVENT_HEADER_SIZE + BCM_AWDL_TX_FRAME_MAX ||
+		    get_unaligned_le64(p + 24) || get_unaligned_le32(p + 32) ||
+		    !get_unaligned_le16(p + 36))
+			return -EPROTO;
+	} else if (kind == BCM_AWDL_SENDER) {
+		if (length != BCM_AWDL_EVENT_HEADER_SIZE + ETH_ALEN ||
+		    get_unaligned_le32(p + 32) || get_unaligned_le16(p + 36) ||
+		    !is_valid_ether_addr(p + BCM_AWDL_EVENT_HEADER_SIZE))
+			return -EPROTO;
+	} else if (length != BCM_AWDL_EVENT_HEADER_SIZE) {
+		return -EPROTO;
+	}
+	if ((kind == BCM_AWDL_TX_DONE && !get_unaligned_le64(p + 24)) ||
+	    (kind != BCM_AWDL_TX_DONE && get_unaligned_le64(p + 24)))
+		return -EPROTO;
+	if ((kind == BCM_AWDL_CHANNEL_OPEN || kind == BCM_AWDL_CHANNEL_CLOSED || kind == BCM_AWDL_NAN_DW) &&
+	    (!get_unaligned_le16(p + 36) || get_unaligned_le32(p + 32)))
+		return -EPROTO;
+	if (kind == BCM_AWDL_STOPPED && get_unaligned_le32(p + 32))
+		return -EPROTO;
+	return 0;
+}
 
 bool wl_nan_host_device(dhd_pub_t *dhd)
 {
@@ -43,6 +136,7 @@ int wl_nan_host_command(struct wiphy *wiphy, struct wireless_dev *wdev,
 	u16 command, operation, limit, result_length = 0;
 	size_t input_length, buffer_length;
 	int result, error;
+	bool awdl_locked = false;
 
 	if (!wdev || !wdev->netdev || !wl_nan_host_supported(cfg))
 		return -EOPNOTSUPP;
@@ -61,6 +155,12 @@ int wl_nan_host_command(struct wiphy *wiphy, struct wireless_dev *wdev,
 	    (operation == BCM_NAN_VENDOR_SET && limit))
 		return -EINVAL;
 	input_length = length - BCM_NAN_VENDOR_REQUEST_SIZE;
+	if (command == BCM_AWDL_COMMAND && operation != BCM_NAN_VENDOR_NDI) {
+		error = awdl_request(input + BCM_NAN_VENDOR_REQUEST_SIZE,
+			input_length, operation, limit);
+		if (error)
+			return error;
+	}
 	if (operation == BCM_NAN_VENDOR_NDI &&
 	    (input_length != BCM_NAN_NDI_REQUEST_SIZE || limit != BCM_NAN_NDI_STATUS_SIZE))
 		return -EINVAL;
@@ -85,12 +185,25 @@ int wl_nan_host_command(struct wiphy *wiphy, struct wireless_dev *wdev,
 	put_unaligned_le16(input_length, request + 2);
 	put_unaligned_le16(command, request + 4);
 	memcpy(request + 6, input + BCM_NAN_VENDOR_REQUEST_SIZE, input_length);
+	if (command == BCM_AWDL_COMMAND) {
+		mutex_lock(&cfg->if_sync);
+		awdl_locked = true;
+		if (operation == BCM_NAN_VENDOR_SET &&
+		    get_unaligned_le16(request + 8) == BCM_AWDL_START) {
+			error = wl_nan_host_awdl_claim(cfg, request + 6);
+			if (error)
+				goto out;
+		}
+	}
 	if (operation == BCM_NAN_VENDOR_SET)
 		result = wldev_iovar_setbuf(wdev->netdev, "nan", request,
 			6 + input_length, buffer, buffer_length, &cfg->ioctl_buf_sync);
 	else
 		result = wldev_iovar_getbuf(wdev->netdev, "nan", request,
 			6 + input_length, buffer, buffer_length, &cfg->ioctl_buf_sync);
+	if (!result && command == BCM_AWDL_COMMAND && operation == BCM_NAN_VENDOR_SET &&
+	    get_unaligned_le16(request + 8) == BCM_AWDL_STOP)
+		wl_nan_host_awdl_released(cfg, get_unaligned_le64(request + 14));
 	if (!result && operation == BCM_NAN_VENDOR_GET) {
 		result_length = get_unaligned_le16(buffer + 2);
 		if (get_unaligned_le16(buffer) != 2 ||
@@ -103,6 +216,21 @@ int wl_nan_host_command(struct wiphy *wiphy, struct wireless_dev *wdev,
 			goto out;
 		}
 		memcpy(reply + BCM_NAN_VENDOR_REPLY_SIZE, buffer + 6, result_length);
+		if (command == BCM_AWDL_COMMAND) {
+			const u8 *status = buffer + 6;
+			u64 requested = get_unaligned_le64(input + BCM_NAN_VENDOR_REQUEST_SIZE + 8);
+			if (result_length != BCM_AWDL_STATUS_SIZE ||
+			    get_unaligned_le16(status) != BCM_AWDL_ABI_VERSION ||
+			    get_unaligned_le16(status + 2) != BCM_AWDL_QUERY ||
+			    get_unaligned_le16(status + 4) != BCM_AWDL_STATUS_SIZE ||
+			    get_unaligned_le16(status + 6) || get_unaligned_le16(status + 54) ||
+			    (requested && requested != get_unaligned_le64(status + 8))) {
+				error = -EPROTO;
+				goto out;
+			}
+			if (!get_unaligned_le64(status + 8) && !get_unaligned_le32(status + 24))
+				wl_nan_host_awdl_released(cfg, 0);
+		}
 	}
 respond:
 	put_unaligned_le16(BCM_NAN_VENDOR_VERSION, reply);
@@ -120,6 +248,8 @@ respond:
 	skb_put_data(skb, reply, BCM_NAN_VENDOR_REPLY_SIZE + result_length);
 	error = cfg80211_vendor_cmd_reply(skb);
 out:
+	if (awdl_locked)
+		mutex_unlock(&cfg->if_sync);
 	/* A SET input may contain PASN key material. Never echo it in a reply,
 	 * log it, or leave it in this transport's reusable heap buffers. */
 	if (request)
@@ -148,6 +278,9 @@ s32 wl_nan_host_event(struct bcm_cfg80211 *cfg, bcm_struct_cfgdev *cfgdev,
 	if ((type != WLC_E_NAN_CRITICAL && type != WLC_E_NAN_NON_CRITICAL) ||
 	    length > BCM_NAN_VENDOR_MAX_EVENT || (length && !data))
 		return -EINVAL;
+	if (reason == BCM_AWDL_EVENT_REASON &&
+	    (type != WLC_E_NAN_CRITICAL || awdl_event(data, length)))
+		return -EPROTO;
 	if (reason == BCM_NAN_HOST_REASON) {
 		const u8 *frame = data;
 		u16 kind;

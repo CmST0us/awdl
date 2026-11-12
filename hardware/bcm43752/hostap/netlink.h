@@ -26,6 +26,8 @@ int bcm_link_wiphy(struct bcm_link *link, bcm_wiphy_fn callback, void *context);
 int bcm_link_country(struct bcm_link *link, char country[3]);
 unsigned bcm_link_ifindex(const struct bcm_link *link);
 unsigned bcm_link_phy(const struct bcm_link *link);
+int bcm_link_clear_tcp_metrics(struct bcm_link *, const uint8_t source[16],
+                                const uint8_t destination[16]);
 const uint8_t *bcm_link_address(const struct bcm_link *link);
 int bcm_nla_parse(const void *input, size_t length, const struct nlattr **entry, size_t count);
 const void *bcm_nla_value(const struct nlattr *attribute);

@@ -4,6 +4,11 @@
 #include "nan_vendor_abi.h"
 
 struct dhd_pub;
+struct sk_buff;
+bool wl_nan_host_awdl_active(struct bcm_cfg80211 *cfg, int ifidx);
+int wl_nan_host_awdl_claim(struct bcm_cfg80211 *cfg, const u8 *payload);
+void wl_nan_host_awdl_released(struct bcm_cfg80211 *cfg, u64 generation);
+int wl_nan_host_awdl_rx(struct bcm_cfg80211 *cfg, int ifidx, struct sk_buff *skb);
 bool wl_nan_host_device(struct dhd_pub *dhd);
 bool wl_nan_host_supported(struct bcm_cfg80211 *cfg);
 void wl_nan_host_ndi_init(struct bcm_cfg80211 *cfg);

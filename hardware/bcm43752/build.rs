@@ -71,3 +71,12 @@ pub fn clean_hostap(root: &Path, cfg: &Settings) -> Result<()> {
     }
     Ok(())
 }
+
+/// Reuse the same hostap NDI/PHY/vendor transport and public AWDL controller.
+pub fn build_awdl(root: &Path, cfg: &Settings) -> Result<()> {
+    let source = cfg.user_dir(root).join("hostap");
+    ensure!(source.join("src/utils/common.h").is_file(), "请先 prepare-source hostap");
+    run(cfg.c_make(&root.join("hardware/bcm43752/awdl"))
+        .arg(format!("UP={}", source.display()))
+        .arg(format!("BUILD={}", cfg.user_dir(root).join("aware-awdl").display())))
+}

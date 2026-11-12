@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* Native A2 data-path exchange dispatch. The ROM engine at 0x28e7c
  * matches byte state / byte event, then invokes the three-argument handler.
  * These are A2 ROM addresses, never pointers from the B0 reference image.
@@ -44,15 +45,15 @@ static int ndpe_deinitialize(void *nan, void *owner)
     void *entry = registration(nan, owner);
     if (!entry)
         return -30;
-    int error = ((int (*)(void *, unsigned))0x28cf5u)(nan, U32(owner, 4));
+    int error = ((int (*)(void *, unsigned))native_0x28cf5)(nan, U32(owner, 4));
     if (error)
         return error;
     if (U32(entry, 0) || U32(entry, 4) || U32(entry, 8) ||
         U32(entry, 12) || PTR(entry, 20))
         return -16;
     /* The native deregister leaves only the unowned type/reserved bytes. */
-    ((void (*)(void *, size_t))0x150891u)(entry, 0x18);
-    ((void (*)(void *))0x71491u)(owner);
+    ((void (*)(void *, size_t))native_0x150891)(entry, 0x18);
+    ((void (*)(void *))native_0x71491)(owner);
     return 0;
 }
 
@@ -89,12 +90,12 @@ int nan_fsm_context_attach(void *nan)
         return -2;
     if (PTR(nan, 0x48))
         return -16;
-    void *fsm = ((void *(*)(size_t))0x7146du)(FSM_BYTES);
+    void *fsm = ((void *(*)(size_t))native_0x7146d)(FSM_BYTES);
     if (!fsm)
         return -27;
-    PTR(fsm, 4) = ((void *(*)(size_t))0x7146du)(FSM_REGISTRATIONS * 0x18u);
+    PTR(fsm, 4) = ((void *(*)(size_t))native_0x7146d)(FSM_REGISTRATIONS * 0x18u);
     if (!PTR(fsm, 4)) {
-        ((void (*)(void *))0x71491u)(fsm);
+        ((void (*)(void *))native_0x71491)(fsm);
         return -27;
     }
     U8(fsm, 8) = FSM_REGISTRATIONS;

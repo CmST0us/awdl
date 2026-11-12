@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* Host-owned NMI/NDI SCBs and pairwise keys in the hash-locked A2 native
  * key manager. Native NDP records bind negotiated NDI identities to peers. */
 #include "nan_station.h"
@@ -7,6 +8,9 @@
 #include "nan_link.h"
 #include "nan_group.h"
 #include "nan_data.h"
+
+#include "awdl_peer.h"
+#include "awdl_frame.h"
 
 #define FIELD(type, base, offset) (*(type *)((uint8_t *)(base) + (offset)))
 #define PTR(base, offset) FIELD(void *, base, offset)
@@ -40,12 +44,12 @@ static int zero(const uint8_t *p, unsigned length)
 
 static void copy(void *to, const void *from, size_t length)
 {
-    ((void *(*)(void *, const void *, size_t))0x151a21u)(to, from, length);
+    ((void *(*)(void *, const void *, size_t))native_0x151a21)(to, from, length);
 }
 
 static int equal(const void *a, const void *b, size_t length)
 {
-    return !((int (*)(const void *, const void *, size_t))0xa7a9u)(a, b, length);
+    return !((int (*)(const void *, const void *, size_t))native_0xa7a9)(a, b, length);
 }
 
 static struct station **head(void *nan)
@@ -63,7 +67,7 @@ static struct station **find(void *nan, void *bss, const uint8_t *address)
 
 static void *native_find(void *nan, void *bss, const uint8_t *address)
 {
-    return ((void *(*)(void *, void *, const uint8_t *))0x123d05u)(
+    return ((void *(*)(void *, void *, const uint8_t *))native_0x123d05)(
         PTR(nan, 8), bss, address);
 }
 
@@ -102,7 +106,7 @@ int nan_station_validate(const struct nan_command_digest *digest, uint32_t actio
 static int station_present(void *nan, struct station *entry)
 {
     /* Never dereference an SCB before checking its native lookup table. */
-    void *bss = entry->data ? ((void *(*)(void *, const void *))0x22a1du)(
+    void *bss = entry->data ? ((void *(*)(void *, const void *))native_0x22a1d)(
         PTR(nan, 0x30), entry->local) : nan_host_nmi(nan);
     return entry->pinned && bss == entry->bss &&
         native_find(nan, entry->bss, entry->address) == entry->scb &&
@@ -130,7 +134,7 @@ static int deauthorize(void *nan, struct station *entry)
         return 0;
     if (!station_present(nan, entry))
         return -30;
-    ((void (*)(void *, void *, unsigned))0x123821u)(PTR(nan, 8), entry->scb, 0x10);
+    ((void (*)(void *, void *, unsigned))native_0x123821)(PTR(nan, 8), entry->scb, 0x10);
     return U8(entry->scb, 0x1c) & 0x10 ? -16 : 0;
 }
 
@@ -153,7 +157,7 @@ static int key_info(void *nan, struct station *entry, uint8_t info[20])
         return -30;
     /* A2 wlc_keymgmt_get_scb_key, key ID 0, pairwise flags 0. Its native
      * wlc_key_get_info fills 20 bytes, even for the null/disabled key. */
-    ((void *(*)(void *, void *, unsigned, unsigned, void *))0x151ec1u)(
+    ((void *(*)(void *, void *, unsigned, unsigned, void *))native_0x151ec1)(
         manager, entry->scb, 0, 0, info);
     return 0;
 }
@@ -173,7 +177,7 @@ static int iovar(void *nan, struct station *entry, const char *name,
                    void *data, unsigned length)
 {
     return ((int (*)(void *, const char *, void *, unsigned, void *, unsigned,
-                      unsigned, void *))0xdf6d5u)(
+                      unsigned, void *))native_0xdf6d5)(
         PTR(nan, 8), name, 0, 0, data, length, 1, PTR(entry->bss, 0x0c));
 }
 
@@ -190,18 +194,15 @@ static int key_replay_window(void *nan, struct station *entry, unsigned enable)
     void *key;
     if (enable)
         key = ((void *(*)(void *, void *, const void *, unsigned, unsigned,
-                         void *))0x1ca65u)(manager, entry->bss, entry->address, 0, 0, info);
+                         void *))native_0x1ca65)(manager, entry->bss, entry->address, 0, 0, info);
     else
-        key = ((void *(*)(void *, void *, unsigned, unsigned, void *))0x151ec1u)(
+        key = ((void *(*)(void *, void *, unsigned, unsigned, void *))native_0x151ec1)(
             manager, entry->scb, 0, 0, info);
     unsigned index = get16(info);
     if (!enable && index == 0xffff)
         return 0; /* The install failed before native key allocation. */
     if (index >= U16(manager, 0x0e) || info[12] || info[13] ||
         !equal(info + 2, entry->address, 6)) {
-        ((int (*)(const char *, ...))0xa815u)(
-            "NAN key replay lookup: data=%u index=%u algo=%u id=%u wsec=%x\n",
-            entry->data, index, info[12], info[13], U32(entry->bss, 0x48));
         return -30;
     }
     void *record = (uint8_t *)PTR(manager, 0x10) + index * 16;
@@ -209,12 +210,9 @@ static int key_replay_window(void *nan, struct station *entry, unsigned enable)
     if (PTR(record, 0) != key || PTR(record, 8) != entry->scb ||
         (U16(record, 4) & 0x4001) != 0x4001 || !ivtw ||
         index >= U16(ivtw, 8) || !PTR(ivtw, 12)) {
-        ((int (*)(const char *, ...))0xa815u)(
-            "NAN key replay owner: data=%u index=%u flags=%x scb=%p owner=%p\n",
-            entry->data, index, U16(record, 4), entry->scb, PTR(record, 8));
         return -30;
     }
-    int error = ((int (*)(void *, unsigned, unsigned))0x18bb1u)(ivtw, index, enable);
+    int error = ((int (*)(void *, unsigned, unsigned))native_0x18bb1)(ivtw, index, enable);
     if (error)
         return error;
     /* Allocation/free must actually finish; retain the station and key
@@ -226,7 +224,7 @@ static int key_write(void *nan, struct station *entry, const uint8_t *input)
 {
     uint32_t words[41];
     uint8_t *key = (uint8_t *)words;
-    ((void (*)(void *, size_t))0x150891u)(words, sizeof(words));
+    ((void (*)(void *, size_t))native_0x150891)(words, sizeof(words));
     /* Exact A2 wl_wsec_key_t: 164 bytes. The native NAN setter 0x394f8
      * uses the same primary flag, algorithm, length and peer offsets. */
     words[0x74 / 4] = 2;
@@ -246,9 +244,9 @@ static int key_write(void *nan, struct station *entry, const uint8_t *input)
      * installer below that wrapper, leaving authorization to the explicit
      * hostap AUTHORIZE command after all negotiated keys are installed. */
     if (entry->data)
-        ((void (*)(void *, void *, unsigned))0x123821u)(PTR(nan, 8), entry->scb, 0x10);
+        ((void (*)(void *, void *, unsigned))native_0x123821)(PTR(nan, 8), entry->scb, 0x10);
     int error = entry->data && input
-        ? ((int (*)(void *, void *, unsigned, void *, void *))0x18009u)(
+        ? ((int (*)(void *, void *, unsigned, void *, void *))native_0x18009)(
               PTR(PTR(nan, 8), 0x420), entry->bss, 0, key, key)
         : iovar(nan, entry, (const char *)0x157160u, key, sizeof(words));
     /* Do not retain temporary key material on a reusable firmware stack. */
@@ -286,7 +284,7 @@ static int remove_key(void *nan, struct station *entry)
             !equal(info + 2, entry->address, 6) ||
             PTR((uint8_t *)PTR(manager, 0x10) + index * 16, 8) != entry->scb)
             return -30;
-        error = ((int (*)(void *))0x19119u)(key);
+        error = ((int (*)(void *))native_0x19119)(key);
         if (error)
             return error;
         error = key_info(nan, entry, info);
@@ -325,7 +323,7 @@ static int remove_station(void *nan, struct station **slot)
     if (U8(entry->scb, 0x1d) != 1)
         return -16;
     --U8(entry->scb, 0x1d);
-    unsigned freed = ((unsigned (*)(void *, void *))0x123d59u)(PTR(nan, 8), entry->scb);
+    unsigned freed = ((unsigned (*)(void *, void *))native_0x123d59)(PTR(nan, 8), entry->scb);
     void *remaining = native_find(nan, entry->bss, entry->address);
     if (remaining == entry->scb) {
         ++U8(entry->scb, 0x1d);
@@ -336,7 +334,7 @@ static int remove_station(void *nan, struct station **slot)
     if (!freed || remaining)
         return -30;
     *slot = entry->next;
-    ((void (*)(void *))0x71491u)(entry);
+    ((void (*)(void *))native_0x71491)(entry);
     return 0;
 }
 
@@ -390,15 +388,15 @@ int nan_station_command(const struct nan_command_digest *digest,
     /* A queued public discovery response has no station/key owner yet.
      * Creating this first SCB cannot invalidate an existing reference;
      * key mutation and station removal still wait for their TX owners. */
-    struct station *entry = ((void *(*)(size_t))0x7146du)(sizeof(*entry));
+    struct station *entry = ((void *(*)(size_t))native_0x7146d)(sizeof(*entry));
     if (!entry)
         return -27;
     entry->bss = bss;
     copy(entry->address, input + 8, 6);
-    entry->scb = ((void *(*)(void *, void *, const uint8_t *))0x123e65u)(
+    entry->scb = ((void *(*)(void *, void *, const uint8_t *))native_0x123e65)(
         PTR(nan, 8), bss, entry->address);
     if (!entry->scb) {
-        ((void (*)(void *))0x71491u)(entry);
+        ((void (*)(void *))native_0x71491)(entry);
         return -27;
     }
     *slot = entry;
@@ -429,7 +427,7 @@ int nan_station_key_command(const struct nan_command_digest *digest,
     void *nan = ((void *const *)digest)[1];
     if (!nan_host_nmi(nan))
         return -25;
-    void *bss = data ? ((void *(*)(void *, const void *))0x22a1du)(
+    void *bss = data ? ((void *(*)(void *, const void *))native_0x22a1d)(
         PTR(nan, 0x30), input + 64) : nan_host_nmi(nan);
     struct station *entry = *find(nan, bss, input + 8);
     if (!entry)
@@ -454,15 +452,12 @@ int nan_station_key_command(const struct nan_command_digest *digest,
      * slots to NDI data. Native CCMP/GCMP integrity and PN checks still run.
      * Each owned BSS keeps this policy until actual BSSCFG destruction. */
     uint32_t value = data ? 4 : 4 | 8;
-    unsigned stage = 1;
     error = iovar(nan, entry, (const char *)0x1571aau, &value, sizeof(value));
     if (!error) {
-        stage = 2;
         value = 0x80;
         error = iovar(nan, entry, (const char *)0x15786eu, &value, sizeof(value));
     }
     if (!error) {
-        stage = 3;
         /* DHD enables buf_key_b4_m4 by default. NDI inherits that BSS
          * policy, but its four-way exchange is carried by NAN management
          * frames and completed by hostap, not the firmware EAPOL parser.
@@ -471,24 +466,16 @@ int nan_station_key_command(const struct nan_command_digest *digest,
         error = iovar(nan, entry, (const char *)0x157176u, &value, sizeof(value));
     }
     if (!error) {
-        stage = 4;
         error = key_replay_window(nan, entry, 1);
     }
     if (!error) {
-        stage = 5;
         error = key_write(nan, entry, input);
     }
     if (error) {
-        ((int (*)(const char *, ...))0xa815u)(
-            "NAN key install: data=%u stage=%u error=%d\n", entry->data, stage, error);
         return error;
     }
     error = key_info(nan, entry, info);
     if (error || info[12] != input[15] || !key_usable(info, entry->address, 6)) {
-        ((int (*)(const char *, ...))0xa815u)(
-            "NAN key verify: data=%u error=%d index=%u algo=%u flags=%x\n",
-            entry->data, error, error ? 0xffff : get16(info),
-            error ? 0 : info[12], error ? 0 : U32(info, 8));
         return error ? error : -30;
     }
     entry->key_owned = 2;
@@ -605,16 +592,18 @@ int nan_data_station_inactivity(const struct nan_command_digest *digest,
     void *nan = ((void *const *)digest)[1];
     if (!nan_host_active(nan) || !PTR(nan, 0x30))
         return -25;
-    void *bss = ((void *(*)(void *, const void *))0x22a1du)(PTR(nan, 0x30), input + 14);
+    void *bss = ((void *(*)(void *, const void *))native_0x22a1d)(PTR(nan, 0x30), input + 14);
     if (!bss || U32(bss, 0x74) != 5 || U32(bss, 0x78) != 11)
         return -30;
+    if (awdl_session_holds_bss(nan, bss))
+        return -16;
     struct station *entry = *find(nan, bss, input + 20);
     if (!entry || !entry->data || entry->closing || entry->id != input[26] ||
         !equal(entry->nmi, input + 8, 6) || !station_present(nan, entry) ||
         !entry->ndp_ref || !data_record_present(nan, entry) ||
         !U8(entry->record, 0x2a) ||
-        ((void *(*)(void *, const void *, unsigned))0x37189u)(nan, entry->nmi, 0) != entry->peer ||
-        ((void *(*)(void *, void *))0x37511u)(nan, entry->scb) != entry->peer)
+        ((void *(*)(void *, const void *, unsigned))native_0x37189)(nan, entry->nmi, 0) != entry->peer ||
+        ((void *(*)(void *, void *))native_0x37511)(nan, entry->scb) != entry->peer)
         return -30;
     /* Hash-locked A2 sta_info (ROM 0x8eb40) uses pub->now - scb->used.
      * Native RX updates scb+0x20, including the NAN data receive path.
@@ -630,7 +619,7 @@ int nan_data_station_inactivity(const struct nan_command_digest *digest,
 static int remove_data_station(void *nan, struct station **slot)
 {
     struct station *entry = *slot;
-    if (((void *(*)(void *, const void *, unsigned))0x37189u)(
+    if (((void *(*)(void *, const void *, unsigned))native_0x37189)(
             nan, entry->nmi, 0) != entry->peer ||
         (entry->record && !data_record_present(nan, entry)) ||
         PTR(entry->peer, 0x38) != entry->ies || U32(entry->peer, 0x34) != entry->ie_length)
@@ -651,13 +640,13 @@ static int remove_data_station(void *nan, struct station **slot)
         if (error || info[12])
             return error ? error : -16;
         if (entry->ndp_ref) {
-            unsigned left = ((unsigned (*)(void *, void *, unsigned))0x376e9u)(
+            unsigned left = ((unsigned (*)(void *, void *, unsigned))native_0x376e9)(
                 nan, entry->record, 1);
             if (left || U8(entry->record, 0x2a))
                 return -16;
             entry->ndp_ref = 0;
         }
-        unsigned freed = ((unsigned (*)(void *, void *))0x127c5du)(
+        unsigned freed = ((unsigned (*)(void *, void *))native_0x127c5d)(
             PTR(PTR(nan, 8), 0x678), entry->scb);
         void *remaining = native_find(nan, entry->bss, entry->address);
         if (remaining == entry->scb) {
@@ -680,9 +669,9 @@ static int remove_data_station(void *nan, struct station **slot)
     }
     PTR(entry->peer, 0x38) = 0;
     U32(entry->peer, 0x34) = 0;
-    ((void (*)(void *))0x71491u)(entry->ies);
+    ((void (*)(void *))native_0x71491)(entry->ies);
     *slot = entry->next;
-    ((void (*)(void *))0x71491u)(entry);
+    ((void (*)(void *))native_0x71491)(entry);
     return 0;
 }
 
@@ -693,7 +682,7 @@ static int authorize_data_station(void *nan, struct station *entry)
     if (entry->closing || !station_present(nan, entry) || !entry->ndp_ref ||
         !data_record_present(nan, entry) || !U8(entry->record, 0x2a) ||
         !PTR(entry->peer, 0x0c) || U8(entry->peer, 9) < 2 ||
-        ((void *(*)(void *, void *))0x37511u)(nan, entry->scb) != entry->peer)
+        ((void *(*)(void *, void *))native_0x37511)(nan, entry->scb) != entry->peer)
         return -30;
     uint8_t info[20];
     int error = key_info(nan, entry, info);
@@ -708,7 +697,7 @@ static int authorize_data_station(void *nan, struct station *entry)
     error = station_busy(nan, entry);
     if (error)
         return error;
-    ((void (*)(void *, void *, unsigned))0x123a7du)(PTR(nan, 8), entry->scb, 0x10);
+    ((void (*)(void *, void *, unsigned))native_0x123a7d)(PTR(nan, 8), entry->scb, 0x10);
     return U8(entry->scb, 0x1c) & 0x10 ? 0 : -16;
 }
 
@@ -724,10 +713,10 @@ int nan_data_station_command(const struct nan_command_digest *digest,
     void *nan = ((void *const *)digest)[1], *dp = PTR(nan, 0x30);
     if (!dp || !PTR(nan, 0x34))
         return -25;
-    unsigned index = ((unsigned (*)(void *, const void *))0x22a8du)(dp, input + 14);
+    unsigned index = ((unsigned (*)(void *, const void *))native_0x22a8d)(dp, input + 14);
     if (index >= 2)
         return -30;
-    void *bss = ((void *(*)(void *, const void *))0x22a1du)(dp, input + 14);
+    void *bss = ((void *(*)(void *, const void *))native_0x22a1d)(dp, input + 14);
     if (!bss || U32(bss, 0x74) != 5 || U32(bss, 0x78) != 11)
         return -30;
     struct station **slot = find(nan, bss, input + 20);
@@ -761,7 +750,7 @@ int nan_data_station_command(const struct nan_command_digest *digest,
     }
     if (!nan_host_active(nan))
         return -25;
-    void *peer = ((void *(*)(void *, const void *, unsigned))0x37189u)(nan, input + 8, 0);
+    void *peer = ((void *(*)(void *, const void *, unsigned))native_0x37189)(nan, input + 8, 0);
     if (!peer || !PTR(peer, 0x0c))
         return -30;
     if (*slot || U8(peer, 9) != 1 || PTR(peer, 0x38) || U32(peer, 0x34) ||
@@ -776,19 +765,19 @@ int nan_data_station_command(const struct nan_command_digest *digest,
     int error = nan_data_enable(nan, bss, index);
     if (error)
         return error;
-    struct station *entry = ((void *(*)(size_t))0x7146du)(sizeof(*entry));
+    struct station *entry = ((void *(*)(size_t))native_0x7146d)(sizeof(*entry));
     if (!entry)
         return -27;
     entry->ie_length = get16(input + 28);
-    entry->ies = ((void *(*)(size_t))0x7146du)(entry->ie_length);
+    entry->ies = ((void *(*)(size_t))native_0x7146d)(entry->ie_length);
     if (!entry->ies) {
-        ((void (*)(void *))0x71491u)(entry);
+        ((void (*)(void *))native_0x71491)(entry);
         return -27;
     }
     entry->record = nan_ndp_entry_allocate(PTR(nan, 0x34), input + 8, input + 26, 1);
     if (!entry->record) {
-        ((void (*)(void *))0x71491u)(entry->ies);
-        ((void (*)(void *))0x71491u)(entry);
+        ((void (*)(void *))native_0x71491)(entry->ies);
+        ((void (*)(void *))native_0x71491)(entry);
         return -27;
     }
     entry->bss = bss;
@@ -808,7 +797,7 @@ int nan_data_station_command(const struct nan_command_digest *digest,
     *slot = entry;
     /* Native add allocates/hash-registers the NDI SCB, invokes its NAN
      * cubby bind, installs peer PHY capabilities, and owns exactly one pin. */
-    error = ((int (*)(void *, const void *, const void *))0x37589u)(
+    error = ((int (*)(void *, const void *, const void *))native_0x37589)(
         nan, entry->local, entry->address);
     entry->scb = native_find(nan, bss, entry->address);
     if (entry->scb)
@@ -817,10 +806,10 @@ int nan_data_station_command(const struct nan_command_digest *digest,
         return error;
     if (!station_present(nan, entry) || U8(entry->scb, 0x1d) != 1 ||
         (U8(entry->scb, 0x1c) & 3) != 3 ||
-        ((void *(*)(void *, void *))0x37511u)(nan, entry->scb) != peer)
+        ((void *(*)(void *, void *))native_0x37511)(nan, entry->scb) != peer)
         return -30;
     U32(entry->scb, 4) |= 0x200u;
-    unsigned refs = ((unsigned (*)(void *, void *, unsigned))0x376e9u)(
+    unsigned refs = ((unsigned (*)(void *, void *, unsigned))native_0x376e9)(
         nan, entry->record, 0);
     entry->ndp_ref = U8(entry->record, 0x2a) != 0;
     if (refs != 1 || !entry->ndp_ref)
@@ -832,6 +821,16 @@ int nan_data_station_command(const struct nan_command_digest *digest,
 int nan_station_idle(void *nan)
 {
     return nan && PTR(nan, 0x14) && *head(nan) ? -16 : 0;
+}
+
+int nan_station_bss_busy(void *nan, void *bss)
+{
+    if (!nan || !PTR(nan, 0x14) || !bss)
+        return -2;
+    for (struct station *s = *head(nan); s; s = s->next)
+        if (s->bss == bss)
+            return -16;
+    return 0;
 }
 
 static int packet_crypto(void *nan, const uint8_t *address, unsigned direction,
@@ -873,6 +872,9 @@ void *nan_station_tx_owner(void *wlc, void *bss, void *packet)
         !U8(bss, 4) || !U8(bss, 5) || !U8(bss, 8) ||
         !equal(ethernet + 6, (uint8_t *)bss + 0x66, 6))
         return 0;
+    struct awdl_session *awdl = awdl_session_get(nan);
+    if (awdl && awdl->bss == bss)
+        return awdl_peer_tx_owner(awdl, bss, ethernet);
     for (struct station *s = *head(nan); s; s = s->next) {
         if (!s->data || s->bss != bss || s->closing ||
             (!(ethernet[0] & 1u) && !equal(ethernet, s->address, 6)) ||
@@ -893,7 +895,7 @@ void *nan_station_tx_owner(void *wlc, void *bss, void *packet)
     return 0;
 }
 
-__attribute__((naked)) void nan_station_tx_gate(void)
+NATIVE_ENTRY void nan_station_tx_gate(void)
 {
     /* The stock sendpkt rejects every NDI before generic SCB allocation.
      * Supply only an existing authorized NAN owner, then rejoin its native
@@ -919,6 +921,14 @@ void *nan_station_rx_lookup(void **wlc, const uint8_t *sender, void **bss)
     void *wrapper = PTR(*wlc, 0x520);
     void *nan = wrapper ? PTR(wrapper, 4) : 0;
     if (nan && nan_host_active(nan)) {
+        static const uint8_t awdl_bssid[6] = BCM_AWDL_BSSID_BYTES;
+        struct awdl_session *awdl = awdl_session_get(nan);
+        if (awdl && equal(header + 16, awdl_bssid, 6)) {
+            void *owner = awdl_peer_rx_owner(awdl, header);
+            if (owner)
+                *bss = awdl->bss;
+            return owner;
+        }
         unsigned type = get16(header) & 0x0cu;
         void *nmi = nan_host_nmi(nan);
         if (!type && nmi &&
@@ -944,10 +954,10 @@ void *nan_station_rx_lookup(void **wlc, const uint8_t *sender, void **bss)
                     return s->scb;
                 }
     }
-    return ((void *(*)(void **, const void *, void **))0x123dc1u)(wlc, sender, bss);
+    return ((void *(*)(void **, const void *, void **))native_0x123dc1)(wlc, sender, bss);
 }
 
-__attribute__((naked)) static int original_rx_key(void *, void *, void *)
+NATIVE_ENTRY static int original_rx_key(void *, void *, void *)
 {
     /* The original entry loads a PC-relative stack-canary pointer before
      * its six-byte prologue. Read the unchanged original literal. */
@@ -986,7 +996,7 @@ static int restore_nmi_ciphertext(void *nan, struct station *owner,
             !PTR(data_key, 0x24))
             continue;
         uint32_t expanded[60], counter_words[4];
-        ((void (*)(void *, unsigned))0x150891u)(counter_words, sizeof(counter_words));
+        ((void (*)(void *, unsigned))native_0x150891)(counter_words, sizeof(counter_words));
         uint8_t *counter = (uint8_t *)counter_words;
         counter[0] = 1; /* CCM L=2; protected management nonce priority=16. */
         counter[1] = 16;
@@ -995,7 +1005,7 @@ static int restore_nmi_ciphertext(void *nan, struct station *owner,
         counter[10] = frame[29]; counter[11] = frame[28];
         counter[12] = frame[25]; counter[13] = frame[24];
         counter[15] = 1;
-        ((void (*)(void *, const void *, unsigned))0x6f7b9u)(
+        ((void (*)(void *, const void *, unsigned))native_0x6f7b9)(
             expanded, (uint8_t *)PTR(data_key, 0x24) + 6, 128);
         int (*ctr)(const void *, unsigned, const void *, unsigned, const void *, void *) =
             (void *)0x865u;
@@ -1031,7 +1041,7 @@ int nan_station_rx_key(void *key, void *packet, void *rx)
     /* Bounded metadata only: no keys, PN or packet contents are retained. */
     if (error && owner && owner->rx_failure_reports < 4) {
         ++owner->rx_failure_reports;
-        ((int (*)(const char *, ...))0xa815u)(
+        ((int (*)(const char *, ...))native_0xa815)(
             "NAN RX key: data=%u fc=%x index=%u hw=%u status=%x error=%d\n",
             owner->data, fc, U16(key, 4), U16(key, 0x1c), status, error);
     }

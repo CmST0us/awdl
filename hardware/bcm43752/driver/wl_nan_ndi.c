@@ -320,6 +320,10 @@ int wl_nan_host_ndi_command(struct bcm_cfg80211 *cfg, u16 command,
 		result = -ENOENT;
 	} else if (name[0] && strcmp(name, owner->name)) {
 		result = -EEXIST;
+	} else if (command == BCM_NAN_NDI_DELETE && owner->awdl_generation) {
+		/* STOP must drain the firmware peer/schedule before NDI deletion.
+		 * A failed START also retains its claim until an empty QUERY. */
+		result = -EBUSY;
 	}
 unlock:
 	spin_unlock_irqrestore(&state->lock, flags);

@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* A2 NDL/NDP context and native attribute lifecycle. Hostap remains the only
  * negotiation owner. Native data lookup and SCB callbacks consume these
  * contexts; the autonomous Broadcom NDP command group is not registered. */
@@ -18,13 +19,13 @@
 
 static void *allocate(size_t size)
 {
-    return ((void *(*)(size_t))0x7146du)(size);
+    return ((void *(*)(size_t))native_0x7146d)(size);
 }
 
 static void release(void *p)
 {
     if (p)
-        ((void (*)(void *))0x71491u)(p);
+        ((void (*)(void *))native_0x71491)(p);
 }
 
 static int configured(void *nan)
@@ -61,7 +62,7 @@ void *nan_ndp_entry_allocate(void *ndp, const unsigned char *nmi,
     if (!nonzero)
         return 0;
     void *nan = PTR(ndp, 8);
-    void *peer = ((void *(*)(void *, const void *, unsigned))0x37189u)(nan, nmi, 0);
+    void *peer = ((void *(*)(void *, const void *, unsigned))native_0x37189)(nan, nmi, 0);
     if (!peer || U8(peer, 9) == UINT8_MAX)
         return 0;
     unsigned index;
@@ -83,7 +84,7 @@ void *nan_ndp_entry_allocate(void *ndp, const unsigned char *nmi,
     for (unsigned i = 0; i < 6; ++i)
         U8(record, 0x0e + i) = nmi[i];
     U8(record, 0x30) = index;
-    ((void *(*)(void *, const void *, unsigned))0x37189u)(nan, nmi, 1);
+    ((void *(*)(void *, const void *, unsigned))native_0x37189)(nan, nmi, 1);
     PTR(PTR(ndp, 0x10), index * 4) = record;
     return record;
 }
@@ -100,7 +101,7 @@ int nan_ndp_entry_release(void *ndp, void *record)
     if (index == U32(ndp, NDP_CAPACITY) || U8(record, 0x30) != index)
         return -30;
     void *nan = PTR(ndp, 8);
-    void *peer = ((void *(*)(void *, const void *, unsigned))0x37189u)(
+    void *peer = ((void *(*)(void *, const void *, unsigned))native_0x37189)(
         nan, (uint8_t *)record + 0x0e, 0);
     if (!peer || !U8(peer, 9))
         return -30;
@@ -109,7 +110,7 @@ int nan_ndp_entry_release(void *ndp, void *record)
     int error = nan_peer_check_stations(nan, peer, (uint8_t *)record + 0x14);
     if (error)
         return error;
-    ((void *(*)(void *, const void *, unsigned))0x37189u)(
+    ((void *(*)(void *, const void *, unsigned))native_0x37189)(
         nan, (uint8_t *)record + 0x0e, 2);
     PTR(PTR(ndp, 0x10), index * 4) = 0;
     release(PTR(record, 0x20));
@@ -198,7 +199,7 @@ static int unregister_attribute(void *nan, void *owner, unsigned offset)
 {
     if (!PTR(owner, offset))
         return 0;
-    int error = ((int (*)(void *, void *))0x1ffc9u)(nan, PTR(owner, offset));
+    int error = ((int (*)(void *, void *))native_0x1ffc9)(nan, PTR(owner, offset));
     if (!error)
         PTR(owner, offset) = 0;
     return error;
@@ -240,7 +241,7 @@ int nan_ndp_deinitialize(void *wlc, void *nan)
         return -30;
     error = unregister_attribute(nan, ndp, 0x0c);
     if (!error) {
-        ((void (*)(void *, size_t))0x18660bu)(stats, 12);
+        ((void (*)(void *, size_t))native_0x18660b)(stats, 12);
         U32(ndp, NDP_INITIALIZED) = 0;
     }
     return error;
@@ -253,7 +254,7 @@ int nan_ndl_initialize(void *wlc, void *nan)
     void *ndl = PTR(nan, 0x38);
     if (U32(ndl, NDL_INITIALIZED) || PTR(ndl, 0x0c) || PTR(ndl, 0x10))
         return -16;
-    int error = ((int (*)(void *, void *))0x34451u)(wlc, nan);
+    int error = ((int (*)(void *, void *))native_0x34451)(wlc, nan);
     if (error) {
         int cleanup = nan_ndl_deinitialize(wlc, nan);
         return cleanup ? cleanup : error;
@@ -272,7 +273,7 @@ int nan_ndp_initialize(void *wlc, void *nan)
     if (U32(ndp, NDP_INITIALIZED) || PTR(ndp, 0x0c) ||
         U32(stats, 0) || U32(stats, 4) || U32(stats, 8))
         return -16;
-    int error = ((int (*)(void *, void *))0x35d81u)(wlc, nan);
+    int error = ((int (*)(void *, void *))native_0x35d81)(wlc, nan);
     if (error) {
         int cleanup = nan_ndp_deinitialize(wlc, nan);
         return cleanup ? cleanup : error;

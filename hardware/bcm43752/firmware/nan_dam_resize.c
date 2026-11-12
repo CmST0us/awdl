@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* A2 0x32154 expands local and peer timelines before schedule negotiation.
  * Its original map helper drops the old grids before allocating replacements.
  * Prepare every replacement first; publish only a complete set of owners.
@@ -49,7 +50,7 @@ static void discard_growth(void *nan, struct map_growth *growth)
 {
     for (unsigned i = 0; i < growth->count; ++i)
         if (growth->next[i])
-            ((void (*)(void *, void **))0x30af9u)(nan, &growth->next[i]);
+            ((void (*)(void *, void **))native_0x30af9)(nan, &growth->next[i]);
 }
 
 static int prepare_growth(void *nan, void *map, unsigned unit, unsigned period,
@@ -74,7 +75,7 @@ static int prepare_growth(void *nan, void *map, unsigned unit, unsigned period,
         return 0; /* Native contract only extends; it never shrinks. */
     growth->count = count;
     for (unsigned i = 0; i < count; ++i) {
-        void *next = ((void *(*)(void *, unsigned, unsigned))0x305f5u)(
+        void *next = ((void *(*)(void *, unsigned, unsigned))native_0x305f5)(
             nan, unit, period);
         if (!next) {
             discard_growth(nan, growth);
@@ -98,7 +99,7 @@ static void publish_growth(void *nan, struct map_growth *growth)
         PTR(growth->map, 0x18 + i * 0x14) = growth->next[i];
     for (unsigned i = 0; i < growth->count; ++i) {
         growth->next[i] = 0;
-        ((void (*)(void *, void **))0x30af9u)(nan, &growth->old[i]);
+        ((void (*)(void *, void **))native_0x30af9)(nan, &growth->old[i]);
     }
 }
 
@@ -136,14 +137,14 @@ int nan_dam_resize_schedule(void *dam, unsigned unit, unsigned period)
     if (old_period >= period) {
         /* A prior expansion can have failed at attributes/MSCH after the
          * owner swap. Retry that real commit instead of claiming success. */
-        return ((int (*)(void *, unsigned))0x21771u)(dam, 1);
+        return ((int (*)(void *, unsigned))native_0x21771)(dam, 1);
     }
     struct map_growth proposal;
     proposal.count = 0;
     void *map = PTR(dam, 0x38);
     if (map && U8(map, 0) > 2)
         return -2;
-    if (map && ((int (*)(void *))0x20845u)(dam)) {
+    if (map && ((int (*)(void *))native_0x20845)(dam)) {
         for (unsigned i = 0; i < U8(map, 0); ++i)
             if (PTR(map, 0x18 + i * 0x14) == grid)
                 return -16;
@@ -151,7 +152,7 @@ int nan_dam_resize_schedule(void *dam, unsigned unit, unsigned period)
         if (error)
             return error;
     }
-    void *next = ((void *(*)(void *, unsigned, unsigned))0x201bdu)(dam, unit, period);
+    void *next = ((void *(*)(void *, unsigned, unsigned))native_0x201bd)(dam, unit, period);
     if (!next) {
         discard_growth(nan, &proposal);
         return -27;
@@ -171,8 +172,8 @@ int nan_dam_resize_schedule(void *dam, unsigned unit, unsigned period)
     PTR(dam, 0x18) = next;
     U16(dam, 0x12) = period;
     publish_growth(nan, &proposal);
-    ((void (*)(void *, void *))0x2020du)(dam, old);
+    ((void (*)(void *, void *))native_0x2020d)(dam, old);
     /* Attribute or scheduler failure retains these actual replacement
      * owners. It must not restore freed storage or hide the real error. */
-    return ((int (*)(void *, unsigned))0x21771u)(dam, 1);
+    return ((int (*)(void *, unsigned))native_0x21771)(dam, 1);
 }

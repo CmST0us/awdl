@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* A2 single-NAN schedule installation. Build reference changes on independent
  * grids, then publish them once. A failed native commit keeps the new owners
  * and a retry record; it must not apply another NDP reference on retry. */
@@ -75,7 +76,7 @@ static void *clone_timeline(void *dam)
 {
     unsigned slots = U16(dam, 0x12) / 16;
     void *old = PTR(dam, 0x18);
-    void *next = ((void *(*)(void *, unsigned, unsigned))0x201bdu)(
+    void *next = ((void *(*)(void *, unsigned, unsigned))native_0x201bd)(
         dam, 16, slots * 16);
     if (next) {
         void *grid = PTR(next, 8);
@@ -89,7 +90,7 @@ static void *clone_timeline(void *dam)
 static void free_timeline(void *dam, void *container)
 {
     if (container)
-        ((void (*)(void *, void *))0x2020du)(dam, container);
+        ((void (*)(void *, void *))native_0x2020d)(dam, container);
 }
 
 /* Native 0x20114 groups by channel only, losing a differing conditional bit
@@ -111,7 +112,7 @@ static int apply_refs(void *dam, void *grid, unsigned count, unsigned operation)
         unsigned committed = U8(container, 16 + 4 * i + 2);
         unsigned conditional = U8(container, 16 + 4 * i);
         if ((U8(local, offset) & 1u) &&
-            !((int (*)(unsigned, unsigned))0xbd71u)(U16(local, offset + 2), channel))
+            !((int (*)(unsigned, unsigned))native_0xbd71)(U16(local, offset + 2), channel))
             return operation == 2 ? -16 : -30;
         if (operation == 2) {
             if (committed + count > 255 || ((flags & 0x10u) && conditional + count > 255))
@@ -147,7 +148,7 @@ static int apply_refs(void *dam, void *grid, unsigned count, unsigned operation)
 static int commit_transition(void *dam)
 {
     struct transition *t = transition(dam);
-    int error = ((int (*)(void *, unsigned))0x21771u)(dam, 1);
+    int error = ((int (*)(void *, unsigned))native_0x21771)(dam, 1);
     if (!error) {
         if (t->state == ACT_PENDING)
             U16(t->peer, 0) |= 2u;
@@ -211,7 +212,7 @@ int nan_dam_activate(void *dam, void *peer)
         return -30;
     void *session = PTR(peer, 0x48);
     unsigned ndl_only = session &&
-        (((int (*)(void *, void *))0x28695u)(nan, session) || U32(session, 0x28) == 5) &&
+        (((int (*)(void *, void *))native_0x28695)(nan, session) || U32(session, 0x28) == 5) &&
         !PTR(session, 0x14);
     unsigned next_usage = usage + !ndl_only;
     if (next_usage > 255)
@@ -219,7 +220,7 @@ int nan_dam_activate(void *dam, void *peer)
     void *next = clone_timeline(dam);
     if (!next)
         return -27;
-    void *grid = ((void *(*)(void *, unsigned, unsigned))0x305f5u)(nan, 16, slots * 16);
+    void *grid = ((void *(*)(void *, unsigned, unsigned))native_0x305f5)(nan, 16, slots * 16);
     if (!grid) {
         free_timeline(dam, next);
         return -27;
@@ -232,7 +233,7 @@ int nan_dam_activate(void *dam, void *peer)
     U8(shadow_dam, 0x25) = 0;
     error = apply_refs(shadow_dam, old_grid, usage, 3);
     if (!error) {
-        ((void (*)(void *, void **, void **, unsigned))0x20981u)(
+        ((void (*)(void *, void **, void **, unsigned))native_0x20981)(
             shadow_dam, &grid, &source, slots);
         PTR(shadow_map, 0x18) = grid;
         PTR(shadow_peer, 0x4c) = shadow_map;
@@ -245,7 +246,7 @@ int nan_dam_activate(void *dam, void *peer)
             error = apply_refs(shadow_dam, grid, next_usage, 2);
     }
     if (error) {
-        ((void (*)(void *, void **))0x30af9u)(nan, &grid);
+        ((void (*)(void *, void **))native_0x30af9)(nan, &grid);
         free_timeline(dam, next);
         return error;
     }
@@ -254,7 +255,7 @@ int nan_dam_activate(void *dam, void *peer)
     PTR(map, 0x18) = grid;
     begin_transition(dam, peer, ACT_PENDING);
     transition(dam)->usage = next_usage;
-    ((void (*)(void *, void **))0x30af9u)(nan, &old_grid);
+    ((void (*)(void *, void **))native_0x30af9)(nan, &old_grid);
     free_timeline(dam, old);
     return commit_transition(dam);
 }
@@ -318,7 +319,7 @@ int nan_dam_deactivate_complete(void *nan, void *peer)
         return -2;
     void *dam = PTR(nan, 0x5c), *map = PTR(peer, 0x4c), *ndc = PTR(peer, 0x5c);
     if (map && (map == PTR(dam, 0x38) || map == PTR(peer, 0x0c) ||
-                map == ((void *(*)(void *))0x3100du)(nan)))
+                map == ((void *(*)(void *))native_0x3100d)(nan)))
         return -16;
     if (U8(peer, 0x68) || U8(peer, 0x69))
         return -16;
@@ -337,21 +338,21 @@ int nan_dam_deactivate_complete(void *nan, void *peer)
     if (map && PTR(map, 0x0c) && PTR(map, 0x0c) != ndc)
         return -30;
     if (ndc) {
-        int error = ((int (*)(void *, void *))0x31cfdu)(nan, ndc);
+        int error = ((int (*)(void *, void *))native_0x31cfd)(nan, ndc);
         if (error)
             return error;
         PTR(peer, 0x5c) = 0;
     }
     if (map) {
         PTR(map, 0x0c) = 0; /* End the known borrow after its owner releases. */
-        ((void (*)(void *, void *))0x30ab9u)(nan, map);
-        ((void (*)(void *, void *))0x30a55u)(nan, map);
+        ((void (*)(void *, void *))native_0x30ab9)(nan, map);
+        ((void (*)(void *, void *))native_0x30a55)(nan, map);
         PTR(peer, 0x4c) = 0;
     }
     U16(peer, 0) &= ~2u;
     if (transition(dam)->peer == peer)
         nan_dam_transition_reset(dam);
-    ((void (*)(void *, unsigned))0x31d6du)(nan, 1);
+    ((void (*)(void *, unsigned))native_0x31d6d)(nan, 1);
     return 0;
 }
 
@@ -384,7 +385,7 @@ int nan_dam_deactivate_ndl(void *ndl, void *peer, unsigned apply)
     void *nan = PTR(ndl, 8), *dam = PTR(nan, 0x5c);
     if (!dam)
         return -2;
-    unsigned index = ((unsigned (*)(void *, void *))0x37481u)(nan, peer);
+    unsigned index = ((unsigned (*)(void *, void *))native_0x37481)(nan, peer);
     if (index != 0xff && index >= 32)
         return -30;
     int error = apply ? nan_dam_deactivate(dam, peer) :

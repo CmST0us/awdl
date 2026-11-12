@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* A2 DAM proposal -> native NDC ownership. The native encoder/lookup at
  * 0x32560 creates one reference for a new table entry, but merely returns
  * an existing entry on a match. A second peer must acquire its own reference.
@@ -49,7 +50,7 @@ int nan_dam_update_ndc_entry(void *dam, void *peer, int copy_peer_attribute)
         return -30;
     if (copy_peer_attribute && PTR(peer, 0x0c))
         PTR(proposal, 8) = PTR(PTR(peer, 0x0c), 8);
-    int error = ((int (*)(void *, void *, unsigned))0x32561u)(
+    int error = ((int (*)(void *, void *, unsigned))native_0x32561)(
         nan, proposal, old ? (unsigned)index : 0xffu);
     PTR(proposal, 8) = 0; /* End the temporary borrow, including on failure. */
     if (error)
@@ -68,7 +69,7 @@ int nan_dam_update_ndc_entry(void *dam, void *peer, int copy_peer_attribute)
         ++U8(entry, 0x0c);
     }
     if (old && old != entry) {
-        error = ((int (*)(void *, void *))0x31cfdu)(nan, old);
+        error = ((int (*)(void *, void *))native_0x31cfd)(nan, old);
         if (error)
             return error; /* Proposal retains the new reference on failure. */
     }

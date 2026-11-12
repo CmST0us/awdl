@@ -194,6 +194,7 @@ pub const OBSOLETE_USERSPACE_FILES: &[&str] = &[
 pub fn build_awdl(root: &Path, cfg: &Settings) -> Result<()> {
     be200::build_awdl(root, cfg)?;
     build_native_awdl(root, cfg, "mt7925")?;
+    bcm43752::build_awdl(root, cfg)?;
     rtl8852be::build_awdl(root, cfg)
 }
 
@@ -205,14 +206,16 @@ pub fn awdl_installation(root: &Path, cfg: &Settings) -> Result<Vec<(PathBuf, Pa
             cfg.user_dir(root).join("aware-awdl/mt7925-awdl"),
             cfg.dest.join("usr/local/libexec/wirelessd/mt7925-awdl"),
         )],
-        Hardware::Bcm43752 => anyhow::bail!("BCM43752 后端未实现 AWDL"),
+        Hardware::Bcm43752 => vec![(
+            cfg.user_dir(root).join("aware-awdl/bcm43752-awdl"),
+            cfg.dest.join("usr/local/libexec/wirelessd/bcm43752-awdl"),
+        )],
     })
 }
 pub fn awdl_service(cfg: &Settings) -> Result<&'static str> {
     Ok(match cfg.hardware()? {
-        Hardware::Be200 | Hardware::Mt7925 => "wirelessd.service",
+        Hardware::Be200 | Hardware::Mt7925 | Hardware::Bcm43752 => "wirelessd.service",
         Hardware::Rtl8852be => "wirelessd-awdl.service",
-        Hardware::Bcm43752 => anyhow::bail!("BCM43752 后端未实现 AWDL"),
     })
 }
 

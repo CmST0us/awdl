@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <linux/genetlink.h>
 #include <linux/nl80211.h>
+#include <linux/tcp_metrics.h>
 #include <net/if.h>
 #include <poll.h>
 #include <stdlib.h>
@@ -127,7 +128,7 @@ static int exchange(struct bcm_link *link, struct message *message, reply_fn rep
 	struct sockaddr_nl kernel = {.nl_family = AF_NETLINK};
 	struct pollfd pollfd = {.fd = link->command, .events = POLLIN};
 	uint8_t buffer[RECEIVE_SIZE];
-	bool acknowledged = false, received = false, dump = request->nlmsg_flags & NLM_F_DUMP;
+	bool acknowledged = false, received = !reply, dump = request->nlmsg_flags & NLM_F_DUMP;
 	int64_t now = milliseconds(), deadline = now + COMMAND_TIMEOUT_MS;
 	int result = now < 0 ? -errno : 0;
 	if (result) goto out;
@@ -175,6 +176,7 @@ static int exchange(struct bcm_link *link, struct message *message, reply_fn rep
 					result = -EPROTO; goto out;
 				}
 				const struct genlmsghdr *g = NLMSG_DATA(n);
+				if (!reply) { result = -EPROTO; goto out; }
 				result = reply(context, g, (const uint8_t *)g + GENL_HDRLEN,
 					n->nlmsg_len - NLMSG_HDRLEN - GENL_HDRLEN);
 				if (result) goto out;
@@ -407,4 +409,33 @@ int bcm_link_country(struct bcm_link *link, char country[3])
 	int result = put(&message, NL80211_ATTR_WIPHY, &link->wiphy, sizeof(link->wiphy));
 	if (!result) result = exchange(link, &message, country_reply, country);
 	return result;
+}
+
+static int metrics_family(void *context, const struct genlmsghdr *g,
+                           const void *data, size_t length)
+{
+	const struct nlattr *a[CTRL_ATTR_MAX + 1];
+	if (g->cmd != CTRL_CMD_NEWFAMILY ||
+	    bcm_nla_parse(data, length, a, CTRL_ATTR_MAX + 1) ||
+	    bcm_nla_size(a[CTRL_ATTR_FAMILY_ID]) != 2)
+		return -EBADMSG;
+	memcpy(context, bcm_nla_value(a[CTRL_ATTR_FAMILY_ID]), 2);
+	return 0;
+}
+int bcm_link_clear_tcp_metrics(struct bcm_link *link, const uint8_t source[16],
+                                const uint8_t destination[16])
+{
+	struct message m;
+	uint16_t family = 0;
+	begin(link, &m, GENL_ID_CTRL, CTRL_CMD_GETFAMILY, false);
+	int error = put(&m, CTRL_ATTR_FAMILY_NAME, TCP_METRICS_GENL_NAME,
+	                sizeof(TCP_METRICS_GENL_NAME));
+	if (!error) error = exchange(link, &m, metrics_family, &family);
+	if (error) return error;
+	if (!family) return -EPROTO;
+	begin(link, &m, family, TCP_METRICS_CMD_DEL, false);
+	error = put(&m, TCP_METRICS_ATTR_ADDR_IPV6, destination, 16);
+	if (!error) error = put(&m, TCP_METRICS_ATTR_SADDR_IPV6, source, 16);
+	if (!error) error = exchange(link, &m, NULL, NULL);
+	return error == -ESRCH ? 0 : error;
 }

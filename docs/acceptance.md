@@ -421,6 +421,22 @@ iPad Pro 12.9 英寸第六代、iPadOS 27.0.1 使用 R4 IE 关闭诊断版完成
 
 验收期间没有新增固件复位、断言、Oops 或内核 WARNING；原有 TX GTK 不支持提示仍存在。正常 hostap 和正式模块保持运行，wirelessd / fileserver active、配对窗口关闭，保留原有 disabled 开机状态。原共享文件摘要不变，既有配对和身份保留，临时探针已卸载。完整来源、摘要及边界见 [MT7925 性能验收](../hardware/mt7925/README.md#5-ghz-性能验收)。长期可靠性、AP 并发与多对端尚未验收。
 
+## BCM43752 原生 AirDrop 候选
+
+2026-11-12，RK3568 / BCM43752 A2 与 iPad Pro 使用 r29 固件，SHA-256 为 `dd06b34be80b301bbd7fa939d312754f5363eb69b5c4616b90a832bf236d9f85`。候选包含缓存 D11 描述符长度与 QoS 标志修复、从实际 TXFRAG 读取 A-MSDU flow ID／ring sequence，以及同一 80 MHz 块切换主信道时保留原生速率历史。编译、链接、固定字节与空间检查通过，代码 54,204 字节，含对齐和 Flashpatch 表使用固定保留区 57,344/57,344 字节；部署核对镜像摘要和服务启动。原生聚合及 DMA 离线执行的模拟依赖和边界见 [固件说明](../hardware/bcm43752/firmware/PATCHING.md#构建)，不替代真实 PCIe 完成验收。
+
+| 固定候选验收 | 结果 |
+| --- | --- |
+| iPad Pro → Linux，500,000,000 字节 | 19.934005 秒，25.083 MB/s；系统 UI 成功、接收响应已发送，内容 SHA-256 一致；各进程正常退出，接收器回到 idle |
+| Linux → iPad Pro，1 GiB 随机文件 | 系统接受和交付响应通过；82.729242 秒，原文件 12.979 MB/s；正文 1,074,868,740 字节，12.993 MB/s |
+| iPad Pro → Linux，回传上述实际接收的 1 GiB 文件 | 19.722034 秒，54.444 MB/s；系统 UI、接收响应、SHA-256 往返一致及各进程退出均通过 |
+| 取消后重新发现并重传 | 发送正文 110,231,552 字节后，0.727385 秒完成取消；重新发现并完整交付 1 GiB，100.001616 秒，10.737 MB/s；各进程正常退出。长期重连稳定性尚未验证 |
+| 接近 BE200 的性能 | 尚未整体达成；1 GiB 回传超过已有 BE200 反向约 34.429 MB/s 参考值，正向仍有明显差距。设备及原文件压缩率不同，不作同条件比较 |
+
+反向文件 SHA-256 为 `71c061ae79f7245f608f15346e8df693c1dfa82687489c1ccf8069a786ef3960`。正向随机文件为 1,073,741,824 字节，SHA-256 为 `961f385c3dada06feb133101058d49aef0cb07afc7800c6c3db603e65e3bd3e8`。正向与回传均使用该随机文件，回传验收没有预先把源文件复制到 iPad。AirDropUI 的窗口坐标不同于 SpringBoard 屏幕坐标，验收使用完整发送方／文件名匹配、按钮可交互检查和 XCTest 原生命中位置；完整屏幕截图与系统录像保留。iPad 重启清除旧横幅状态后，系统接受与文件交付通过。RVI 的接收窗口中位数约 4 MiB；抓包有 1,119 个内核丢包，不能仅凭分析器重传标记推断无线丢包，也不能据此定位正向瓶颈。取消／重传验收中的两份非原子状态快照显示，发送缓冲持续有待发数据、TCP 拥塞窗口充足、fq 无丢包或积压；原生 SCB 最近成功发送使用 HE80 双流，BA 窗口为 64，A-MSDU 全局计数确有成包，参数上限为两子帧。这些快照不能证明全程空口速率、聚合深度分布或最终吞吐上限。
+
+必要私有证据为 `.private/bcm43752-awdl/deploy-r29-rate-preserve.log`、`ratesel-context-audit.json`、`r29-ui-hitpoint-build.log`，以及 `.private/artifacts/airdrop-ui-20261112-164011`、`airdrop-ui-20261112-164325` 、`airdrop-ui-20261112-165407`、`airdrop-roundtrip-r29-20261112-165706`、`airdrop-ui-20261112-170312`、`airdrop-ui-20261112-170526` 和 `airdrop-reverse-r24-20261112-164146` 的结果、双端日志及抓包。反向目录名称保留旧标签，实际固件以记录中的 r29 路径和部署摘要为准。原始证据不随 Git 提交。
+
 ## MT7925 原生 AirDrop
 
 2026-11-07，Dragon Q8B / MT7925 使用 `0030`、`0031` 接入公共 AWDL / AirDrop。固定来源完整重放、七模块构建与暂存安装通过；运行及安装的 `mt7925_common` build-id 为 `06f9bb9d49aba6deb9a4764bcdf86c641afe057a`。公共 ARM64 wirelessd、AirDrop、AWDL 库及 BE200 / MT7925 / RTL 三个控制后端构建通过，三个 C 后端启用 `-Wall -Wextra -Werror`。七模块与用户态安装文件均匹配暂存产物，固定 WM / MCU patch 摘要不变。签名 AwareLab 真机 UI 构建通过。

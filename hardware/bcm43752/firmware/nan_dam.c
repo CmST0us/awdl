@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* A2 DAM state needed to execute host-negotiated availability. The native
  * initializer at 0x21b44 is empty in this image. A2 has one schedule pointer
  * at +0x18; B0 has two and shifts subsequent fields by four bytes. Never copy
@@ -20,13 +21,13 @@
 
 static void *allocate(size_t bytes)
 {
-    return ((void *(*)(size_t))0x7146du)(bytes);
+    return ((void *(*)(size_t))native_0x7146d)(bytes);
 }
 
 static void release_slot(void *owner, size_t offset)
 {
     if (PTR(owner, offset)) {
-        ((void (*)(void *))0x71491u)(PTR(owner, offset));
+        ((void (*)(void *))native_0x71491)(PTR(owner, offset));
         PTR(owner, offset) = 0;
     }
 }
@@ -76,18 +77,18 @@ int nan_dam_deinitialize(void *wlc, void *nan)
                              PTR(dam_entry, 4) != PTR(dam, 0x48) ||
                              U32(dam_entry, 8) != 0x06010004u)))
             return -30;
-        ((void (*)(void *, size_t))0x18660bu)(schedule_entry, 24);
+        ((void (*)(void *, size_t))native_0x18660b)(schedule_entry, 24);
     }
     if (PTR(dam, 0x18)) {
-        ((void (*)(void *, void *))0x2020du)(dam, PTR(dam, 0x18));
+        ((void (*)(void *, void *))native_0x2020d)(dam, PTR(dam, 0x18));
         PTR(dam, 0x18) = 0;
     }
     for (size_t offset = 0x0c; offset <= 0x38; offset += 0x2c) {
         if (PTR(dam, offset)) {
             /* A failed proposal may own a grid before assigning its map ID;
              * native attribute invalidation alone skips that allocation. */
-            ((void (*)(void *, void *))0x30ab9u)(nan, PTR(dam, offset));
-            ((void (*)(void *, void *))0x30a55u)(nan, PTR(dam, offset));
+            ((void (*)(void *, void *))native_0x30ab9)(nan, PTR(dam, offset));
+            ((void (*)(void *, void *))native_0x30a55)(nan, PTR(dam, offset));
             PTR(dam, offset) = 0;
         }
     }
@@ -131,18 +132,18 @@ int nan_dam_initialize(void *wlc, void *nan)
     U8(PTR(dam, 8), 1) = 1;
     U16(PTR(dam, 8), 2) = 0x800; /* Original internal config default. */
     U16(dam, 0x40) = 0x80; /* Original internal fast-discovery default. */
-    error = ((int (*)(void *, unsigned, unsigned, unsigned))0x2128du)(
+    error = ((int (*)(void *, unsigned, unsigned, unsigned))native_0x2128d)(
         dam, 1, BCM_NAN_HOST_SCHEDULE_SLOT_TU, BCM_NAN_HOST_SCHEDULE_PERIOD_TU);
     if (error)
         goto fail;
     error = -27;
-    PTR(dam, 0x0c) = ((void *(*)(void *, unsigned))0x303adu)(nan, 1);
+    PTR(dam, 0x0c) = ((void *(*)(void *, unsigned))native_0x303ad)(nan, 1);
     if (!PTR(dam, 0x0c))
         goto fail;
-    PTR(dam, 0x28) = ((void *(*)(void *, unsigned))0x30645u)(nan, U8(cfg, 0x0e));
+    PTR(dam, 0x28) = ((void *(*)(void *, unsigned))native_0x30645)(nan, U8(cfg, 0x0e));
     if (!PTR(dam, 0x28))
         goto fail;
-    PTR(dam, 0x34) = ((void *(*)(void *, unsigned))0x30645u)(nan, U8(cfg, 0x0d));
+    PTR(dam, 0x34) = ((void *(*)(void *, unsigned))native_0x30645)(nan, U8(cfg, 0x0d));
     if (!PTR(dam, 0x34))
         goto fail;
     PTR(dam, 0x44) = allocate(3);
@@ -184,13 +185,13 @@ int nan_dam_disable(void *wlc, void *nan)
     if (error)
         return error;
     if (PTR(dam, 0x1c)) {
-        ((void (*)(void *, void *))0x30a55u)(nan, PTR(dam, 0x1c));
+        ((void (*)(void *, void *))native_0x30a55)(nan, PTR(dam, 0x1c));
         PTR(dam, 0x1c) = 0;
     }
     /* The host-scheduled mode has no automatic proposal map. The original
      * disable dereferences this field unconditionally. */
     if (PTR(dam, 0x38))
-        ((void (*)(void *, void *, int))0x317bdu)(nan, PTR(dam, 0x38), -1);
+        ((void (*)(void *, void *, int))native_0x317bd)(nan, PTR(dam, 0x38), -1);
     U8(dam, 0x25) = 0;
     return 0;
 }

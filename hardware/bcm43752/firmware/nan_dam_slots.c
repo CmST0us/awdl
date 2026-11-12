@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* Single-radio A2 DAM timeline updates. Native allocation/copy/marking uses
  * four-byte auxiliary cells, not the reference firmware's eight-byte cells.
  * Keep A2 0x206e8/0x210f0 reference flags in byte 1 bits 6/7. The restored
@@ -38,7 +39,7 @@ static int update_slot(struct slot *entry, struct slot_refs *refs,
             return 0;
     } else {
         if ((entry->flags & 1u) &&
-            !((int (*)(unsigned, unsigned))0xbd71u)(entry->channel, channel))
+            !((int (*)(unsigned, unsigned))native_0xbd71)(entry->channel, channel))
             return 0;
         if (operation == 2) {
             if (refs->committed == 255 ||
@@ -84,7 +85,7 @@ static int normalize_channel(void *dam, unsigned *channel, unsigned committed)
     struct slot entry;
     entry.channel = *channel;
     /* Actual entry is 0x21420, including the initial channel-band test. */
-    ((void (*)(void *, void *))0x21421u)(PTR(dam, 4), &entry);
+    ((void (*)(void *, void *))native_0x21421)(PTR(dam, 4), &entry);
     *channel = entry.channel;
     return *channel && *channel != 0xff && (*channel & 0xff00u) != 0xff00u ? 0 : -20;
 }
@@ -118,11 +119,11 @@ int nan_dam_update_schedule(void *dam, unsigned radio, unsigned first,
     void *bss = PTR(PTR(PTR(mac, 8), 0), 0);
     if (!PTR(bss, 0) || !PTR(PTR(bss, 0), 0x2c0))
         return -25;
-    unsigned nss = ((unsigned (*)(void *, unsigned))0x2f00du)(mac, 0);
+    unsigned nss = ((unsigned (*)(void *, unsigned))native_0x2f00d)(mac, 0);
     if (!nss || nss > 2)
         return -2;
-    unsigned reference = ((unsigned (*)(void *, unsigned))0x20ee9u)(dam, 0);
-    unsigned fallback = ((unsigned (*)(void *, unsigned))0x20c95u)(dam, 0);
+    unsigned reference = ((unsigned (*)(void *, unsigned))native_0x20ee9)(dam, 0);
+    unsigned fallback = ((unsigned (*)(void *, unsigned))native_0x20c95)(dam, 0);
     if (reference == 0xff)
         reference = fallback;
     unsigned selected = channel;
@@ -165,12 +166,12 @@ int nan_dam_update_schedule(void *dam, unsigned radio, unsigned first,
     /* Preserve the actual grid/reference state on an attribute/MSCH failure;
      * the native caller still owns the peer and can release its references.
      * Do not manufacture a successful commit or free a live scheduler. */
-    return ((int (*)(void *, unsigned))0x21771u)(dam, commit);
+    return ((int (*)(void *, unsigned))native_0x21771)(dam, commit);
 }
 
 static int coexist(unsigned a, unsigned b)
 {
-    return ((int (*)(unsigned, unsigned))0xbd71u)(a, b);
+    return ((int (*)(unsigned, unsigned))native_0xbd71)(a, b);
 }
 
 static int restore_slot(void *container, const struct slot *local,
@@ -209,7 +210,7 @@ int nan_dam_update_peer_ndl_slot(void *dam, void *peer, unsigned radio,
         return -2;
     void *nan = PTR(dam, 4), *container = PTR(dam, 0x18);
     void *local = PTR(container, 8);
-    void *grid = ((void *(*)(void *, void *, unsigned))0x30bd9u)(
+    void *grid = ((void *(*)(void *, void *, unsigned))native_0x30bd9)(
         nan, PTR(peer, 0x4c), radio);
     if (!grid)
         return 0;
@@ -230,7 +231,7 @@ int nan_dam_update_peer_ndl_slot(void *dam, void *peer, unsigned radio,
     uint8_t native_flags = refs->native_flags;
     unsigned update = 3, done = 0, invalidate = 0;
     if (operation == 2) {
-        if (((int (*)(void *))0x20845u)(dam))
+        if (((int (*)(void *))native_0x20845)(dam))
             return 0; /* An in-use proposal owns the competing update. */
         if (!restore_slot(container, timeline, entry, &native_flags)) {
             refs->native_flags = native_flags;
@@ -261,7 +262,7 @@ int nan_dam_update_peer_ndl_slot(void *dam, void *peer, unsigned radio,
         } else {
             if (!PTR(dam, 0x28))
                 return -25;
-            if (!((int (*)(void *, unsigned, void *))0x3180du)(
+            if (!((int (*)(void *, unsigned, void *))native_0x3180d)(
                     nan, channel, PTR(dam, 0x28)))
                 return 0;
         }
@@ -272,7 +273,7 @@ int nan_dam_update_peer_ndl_slot(void *dam, void *peer, unsigned radio,
     unsigned usage = U8(peer, 0x68) + U8(peer, 0x69);
     if (usage > 255)
         return -30; /* The native uint8_t sum must not wrap. */
-    usage = ((unsigned (*)(void *, void *))0x37555u)(nan, peer);
+    usage = ((unsigned (*)(void *, void *))native_0x37555)(nan, peer);
     /* The native range updater treats a conflicting channel as unchanged
      * success. That is useful when combining a proposal, but cannot prove
      * that this peer acquired/released its references. Never publish a peer
@@ -310,7 +311,7 @@ int nan_dam_update_peer_ndl_slot(void *dam, void *peer, unsigned radio,
     refs->native_flags = native_flags;
     if (invalidate)
         entry->flags &= ~1u;
-    ((void (*)(void *, unsigned, unsigned))0x2111du)(grid, index, done);
+    ((void (*)(void *, unsigned, unsigned))native_0x2111d)(grid, index, done);
     return 1;
 }
 

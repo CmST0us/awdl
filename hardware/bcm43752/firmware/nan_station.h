@@ -18,6 +18,7 @@ int nan_data_station_inactivity(const struct nan_command_digest *, const uint8_t
 int nan_station_stop(void *nan);
 int nan_station_quiesce(void *nan, void *bss, void *scb);
 int nan_station_idle(void *nan);
+int nan_station_bss_busy(void *nan, void *bss);
 int nan_station_tx_crypto(void *nan, const uint8_t *address,
                              unsigned *iv_length, unsigned *icv_length);
 int nan_station_rx_crypto(void *nan, const uint8_t *address);

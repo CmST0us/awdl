@@ -1,0 +1,66 @@
+--- a/Makefile
++++ b/Makefile
+@@ -383,7 +383,7 @@
+ # For NAN
+ ifneq ($(CONFIG_BCMDHD_NAN),)
+ 	DHDCFLAGS += -DWL_NAN -DWL_NAN_DISC_CACHE -DWL_NANP2P -DWL_NAN_ENABLE_MERGE
+-	DHDOFILES += wl_cfgnan.o bcmbloom.o wl_nan_host.o wl_nan_ndi.o
++	DHDOFILES += wl_cfgnan.o bcmbloom.o wl_nan_host.o wl_nan_ndi.o wl_awdl_data.o
+ 	# Native NAN has no infrastructure/P2P scan or AP+STA extension owner.
+ 	DHDCFLAGS := $(filter-out -DWL_EXT_IAPSTA -DWL_ESCAN -DWL_NANP2P -DWL_WIRELESS_EXT -DUSE_IW -DSOFTAP,$(DHDCFLAGS))
+ 	DHDOFILES := $(filter-out wl_iapsta.o wl_escan.o wl_iw.o,$(DHDOFILES))
+--- a/dhd_linux.c
++++ b/dhd_linux.c
+@@ -14184,7 +14184,21 @@
+ 
+ /* Reuse the native PCIe data path; no private STA ioctls, MAC rewrite,
+  * wireless_dev, scan extension, AP/P2P role or firmware power transition. */
++/* AWDL's native firmware adds an Apple MSDU header after host checksum
++ * preparation. Software GSO/checksum retains the native PCIe completion path
++ * and socket ownership; no global offload changes for unrelated interfaces. */
++static netdev_features_t dhd_nan_ndi_features_check(struct sk_buff *skb,
++	struct net_device *net, netdev_features_t features)
++{
++	dhd_info_t *dhd = DHD_DEV_INFO(net);
++	struct bcm_cfg80211 *cfg = wl_get_cfg(dhd_linux_get_primary_netdev(&dhd->pub));
++	if (wl_nan_host_awdl_active(cfg, DHD_DEV_IFIDX(net)))
++		features &= ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK);
++	return features;
++}
++
+ static const struct net_device_ops dhd_nan_ndi_ops = {
++	.ndo_features_check = dhd_nan_ndi_features_check,
+ 	.ndo_open = dhd_nan_ndi_open,
+ 	.ndo_stop = dhd_nan_ndi_stop,
+ 	.ndo_get_stats = dhd_get_stats,
+--- a/dhd_linux_rx.c
++++ b/dhd_linux_rx.c
+@@ -97,6 +97,9 @@
+ #include <dhd_debug.h>
+ #if defined(WL_CFG80211)
+ #include <wl_cfg80211.h>
++#ifdef WL_NAN
++#include "wl_nan_host.h"
++#endif
+ #ifdef WL_BAM
+ #include <wl_bam.h>
+ #endif	/* WL_BAM */
+@@ -472,6 +475,18 @@
+ 			*/
+ 			PKTCFREE(dhdp->osh, pktbuf, FALSE);
+ 			continue;
++		}
++#endif
++#ifdef WL_NAN
++		if (ifp->native_nan) {
++			struct bcm_cfg80211 *cfg = wl_get_cfg(dhd_linux_get_primary_netdev(&dhd->pub));
++			if (wl_nan_host_awdl_rx(cfg, ifidx, PKTTONATIVE(dhdp->osh, pktbuf))) {
++				ifp->stats.rx_dropped++;
++				PKTCFREE(dhdp->osh, pktbuf, FALSE);
++				continue;
++			}
++			/* Pull/cow can relocate data, including on a rejected frame. */
++			eh = (struct ether_header *)PKTDATA(dhdp->osh, pktbuf);
+ 		}
+ #endif
+ #ifdef DHD_L2_FILTER

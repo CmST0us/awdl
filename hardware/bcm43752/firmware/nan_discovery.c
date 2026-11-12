@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* A2 discovery attributes retain the original ROM encoders and Bloom hashes.
  * B0 added Instant Mode parse callbacks and ecounters after the A2 fields;
  * neither is required by the hostap-owned discovery path. */
@@ -32,31 +33,31 @@ int nan_discovery_bloom_create(bloom_alloc allocate, bloom_free release,
     void *bloom = allocate(context, 20);
     if (!bloom)
         return -27;
-    ((void (*)(void *, size_t))0x18660bu)(bloom, 20);
+    ((void (*)(void *, size_t))native_0x18660b)(bloom, 20);
     PTR(bloom, 0) = context;
     U32(bloom, 4) = hashes;
     PTR(bloom, 8) = allocate(context, hashes * 4);
     if (!PTR(bloom, 8))
         goto nomem;
-    ((void (*)(void *, size_t))0x18660bu)(PTR(bloom, 8), hashes * 4);
+    ((void (*)(void *, size_t))native_0x18660b)(PTR(bloom, 8), hashes * 4);
     if (bytes) {
         PTR(bloom, 0x10) = allocate(context, bytes);
         if (!PTR(bloom, 0x10))
             goto nomem;
         U32(bloom, 0x0c) = bytes;
-        ((void (*)(void *, size_t))0x18660bu)(PTR(bloom, 0x10), bytes);
+        ((void (*)(void *, size_t))native_0x18660b)(PTR(bloom, 0x10), bytes);
     }
     *result = bloom;
     return 0;
 nomem:
-    ((void (*)(void **, bloom_free))0x9865u)(&bloom, release);
+    ((void (*)(void **, bloom_free))native_0x9865)(&bloom, release);
     return -27;
 }
 
 static void release_slot(void *owner, size_t offset)
 {
     if (PTR(owner, offset)) {
-        ((void (*)(void *))0x71491u)(PTR(owner, offset));
+        ((void (*)(void *))native_0x71491)(PTR(owner, offset));
         PTR(owner, offset) = 0;
     }
 }
@@ -82,7 +83,7 @@ int nan_discovery_context_attach(void *nan)
         return -16;
     /* A2 heartbeat consumers reach +0x64 (u16); the aligned native extent is
      * 0x68. The final word records this implementation's init ownership. */
-    void *discovery = ((void *(*)(size_t))0x7146du)(0x6c);
+    void *discovery = ((void *(*)(size_t))native_0x7146d)(0x6c);
     if (!discovery)
         return -27;
     U32(discovery, 0) = 0x5afec0de;
@@ -106,7 +107,7 @@ int nan_discovery_deinitialize(void *wlc, void *nan)
         void *handle = PTR(discovery, attributes[i]);
         if (!handle)
             continue;
-        int result = ((int (*)(void *, void *))0x1ffc9u)(nan, handle);
+        int result = ((int (*)(void *, void *))native_0x1ffc9)(nan, handle);
         if (result)
             error = result;
         else
@@ -115,8 +116,8 @@ int nan_discovery_deinitialize(void *wlc, void *nan)
     if (error)
         return error;
     for (size_t offset = 0x34; offset < 0x44; offset += 4)
-        ((void (*)(void **, bloom_free))0x9865u)(
-            &PTR(discovery, offset), (bloom_free)0x22e15u);
+        ((void (*)(void **, bloom_free))native_0x9865)(
+            &PTR(discovery, offset), (bloom_free)native_0x22e15);
     release_slot(discovery, 0x5c);
     release_slot(discovery, 0x48);
     U32(discovery, INITIALIZED) = 0;
@@ -157,21 +158,21 @@ int nan_discovery_initialize(void *wlc, void *nan)
     error = -27;
     for (size_t i = 0; i < sizeof(attributes) / sizeof(attributes[0]); ++i) {
         void *handle = ((void *(*)(void *, unsigned, unsigned, unsigned,
-                                   uintptr_t, uintptr_t, void *, unsigned))0x1ff41u)(
+                                   uintptr_t, uintptr_t, void *, unsigned))native_0x1ff41)(
             nan, attributes[i].id, attributes[i].mask, attributes[i].id,
             attributes[i].length, attributes[i].build, discovery, 0);
         PTR(discovery, attributes[i].offset) = handle;
         if (!handle)
             goto failed;
     }
-    error = ((int (*)(void *))0x25ccdu)(discovery);
+    error = ((int (*)(void *))native_0x25ccd)(discovery);
     if (error)
         goto failed;
     error = -27;
-    PTR(discovery, 0x48) = ((void *(*)(size_t))0x7146du)(0x2b);
+    PTR(discovery, 0x48) = ((void *(*)(size_t))native_0x7146d)(0x2b);
     if (!PTR(discovery, 0x48))
         goto failed;
-    PTR(discovery, 0x5c) = ((void *(*)(size_t))0x7146du)(0x20);
+    PTR(discovery, 0x5c) = ((void *(*)(size_t))native_0x7146d)(0x20);
     if (!PTR(discovery, 0x5c))
         goto failed;
     /* Native reference defaults: service DW awake and unicast SDF permitted

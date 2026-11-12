@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import shutil
 import struct
@@ -16,10 +17,10 @@ from inspect_firmware import (FW_SHA256, RAM_BASE, UNIMPL, TAIL_CALLS, inspect, 
 
 # Fixed addresses for 18.35.387.23.146, not operator configuration.
 ROM_SHA256 = "f2c9e3249ad09f846c58585d08997282ff895b196ef32c60c3a9b9d17baaa1d6"
-# The original low heap starts at 0x170405. Reserve its final 52 KiB;
+# The original low heap starts at 0x170405. Reserve its final 56 KiB;
 # native hnd_image_info and MPU splitting exclude this same checked range.
 # Flashpatch replacement data keeps its separate hardware-fixed 0x180000 base.
-PATCH_BASE = 0x173000
+PATCH_BASE = 0x172000
 PATCH_END = 0x180000
 HEAP_END_LITERAL = 0x1A62B8
 EXEC_START_LITERAL = 0x1A627C
@@ -28,6 +29,10 @@ FP_DATA_END = 0x181000
 # Each replacement fits inside one hardware 8-byte block. The tail hook must
 # preserve LR because it replaces a function entry, rather than a BL caller.
 ROM_HOOKS = (
+    (0x128590, "awdl_group_ring_state", "tail", bytes.fromhex("13b50e4c")),
+    (0x22722, "awdl_nan_channel_close", "tail", bytes.fromhex("d7f87806")),
+    (0x22760, "awdl_nan_channel", "call", 0x1278B4),
+    (0x11B284, "awdl_action_header", "tail", bytes.fromhex("2de9f04f")),
     (0x119300, "nan_station_rx_lookup", "call", 0x123DC0),
     (0x11A26A, "nan_station_rx_lookup", "call", 0x123DC0),
     (0x1277C0, "slotted_bss_start_pre_close_timer", "tail", bytes.fromhex("f8b50568")),
@@ -87,6 +92,12 @@ ROM_HOOKS = (
 # Native RAM entries have direct callers as well as ROM trampolines.
 # nan_group.c preserves their overwritten prologues for non-NAN callers.
 RAM_KEY_HOOKS = (
+    (0x1F06C4, "awdl_data_first_flow", bytes.fromhex("b6f842e0")),
+    (0x1F0706, "awdl_data_next_flow", bytes.fromhex("b1f84230")),
+    (0x1F071C, "awdl_data_first_sequence", bytes.fromhex("b6f85a30")),
+    (0x1F0730, "awdl_data_next_sequence", bytes.fromhex("b1f85a30")),
+    (0x1F8450, "awdl_data_sendpkt", bytes.fromhex("814b2de9f04f")),
+    (0x1F774E, "awdl_data_headroom_gate", bytes.fromhex("5f2b04d9")),
     (0x1F8794, "nan_station_tx_gate", bytes.fromhex("736f052b")),
     (0x1880B0, "nan_station_rx_key", bytes.fromhex("b24b2de9f04f")),
     (0x1A9798, "nan_group_sendmgmt", bytes.fromhex("2de9f04f")),
@@ -94,7 +105,9 @@ RAM_KEY_HOOKS = (
     (0x188FCC, "nan_group_scb_key", bytes.fromhex("2de9f04f")),
     (0x1876F2, "nan_group_tx_id", bytes.fromhex("8b6c10b5")),
 )
-RAM_CALL_HOOKS = ((0x1F51D6, "nan_station_rx_lookup", 0x123DC0),)
+RAM_CALL_HOOKS = ((0x1F51D6, "nan_station_rx_lookup", 0x123DC0),
+                  (0x1F78C2, "awdl_data_encapsulate", 0x1EE06E),
+                  (0x1F1B9A, "awdl_data_dma", 0x1ED804))
 # Verification, diagnostic count, and hardware programming use these bounds.
 # The original table's reclaim/image-info bounds deliberately remain unchanged.
 FP_TABLE_REFERENCES = ((0x21258C, 0x212590), (0x212658, 0x21265C),
@@ -219,7 +232,7 @@ def build(firmware_path, rom_path, output, prefix):
         tools[name] = tool
     output.mkdir(parents=True)
     source_hashes = {}
-    for name in ("frame_contexts.c", "nan_fsm.c", "nan_fsm.h", "nan_commands.c", "nan_commands.h", "nan_initialize.c", "nan_initialize.h",
+    for name in ("native_calls.h", "runtime.c", "frame_contexts.c", "nan_fsm.c", "nan_fsm.h", "nan_commands.c", "nan_commands.h", "nan_initialize.c", "nan_initialize.h",
                  "nan_mac.c", "nan_mac.h", "nan_bss.c", "nan_availability.c", "nan_availability.h",
                  "nan_vendor_attributes.c", "nan_dam.c", "nan_dam.h", "nan_dam_channels.c", "nan_dam_ndc.c", "nan_dam_slots.c", "nan_dam_proposal.c", "nan_dam_resize.c", "nan_dam_negotiation.c", "nan_dam_activation.c", "nan_dam_peer.c",
                  "nan_scheduler.c", "nan_scheduler.h", "nan_schedule.c", "nan_schedule.h", "nan_data.c", "nan_data.h",
@@ -228,10 +241,23 @@ def build(firmware_path, rom_path, output, prefix):
                  "nan_discovery.c", "nan_discovery.h",
                  "nan_attach.c", "nan_active.c", "nan_bss_active.c", "nan_host.c", "nan_host.h",
                  "nan_station.c", "nan_station.h", "nan_group.c", "nan_group.h", "../include/nan_host_abi.h",
-                 "slotted_bss.c"):
+                 "slotted_bss.c", "awdl_session.c", "awdl_session.h",
+                 "awdl_command.c", "awdl_command.h",
+                 "awdl_event.c", "awdl_event.h",
+                 "awdl_tx.c", "awdl_tx.h",
+                 "awdl_schedule.c", "awdl_schedule.h",
+                 "awdl_peer.c", "awdl_peer.h",
+                 "awdl_data.c",
+                 "awdl_native.c", "awdl_native.h", "awdl_timing.c", "awdl_timing.h",
+                 "../include/awdl_host_abi.h", "../include/awdl_frame.h"):
         data = (Path(__file__).parent / name).read_bytes()
         source_hashes[name] = digest(data)
         (output / Path(name).name).write_bytes(data)
+    native_symbols = "\n".join(
+        f".global native_0x{address}\n.type native_0x{address}, %function\n.thumb_set native_0x{address}, 0x{address}"
+        for address in re.findall(r"extern unsigned char native_0x([0-9a-f]+)\[\];",
+                                  (output / "native_calls.h").read_text()))
+    (output / "native_calls.S").write_text(".syntax unified\n.thumb\n" + native_symbols + "\n")
     linker = output / "nan_patch.ld"
     linker.write_text(f"""OUTPUT_FORMAT(elf32-littlearm)
 OUTPUT_ARCH(arm)
@@ -254,13 +280,35 @@ SECTIONS {{
 
     compiler = run("gcc", "--version").stdout.splitlines()[0]
     elf = output / "nan_patch.elf"
-    run("gcc", "-march=armv7-r", "-mthumb", "-mfloat-abi=soft", "-Os",
+    # Firmware enters through patched pointers/branches, which have no ELF
+    # relocation back to their targets. Root every such entry explicitly
+    # before discarding unreachable sections; native callbacks referenced
+    # by our C tables remain reachable through their ordinary relocations.
+    entrypoints = sorted(
+        {"nan_wlc_attach_modules", "nan_host_rx_auth", "nan_station_tx_owner", "awdl_data_headroom", "awdl_data_fragment_field", "awdl_peer_bar_complete", "memcpy", "memset"}
+        | {row[1] for row in ROM_HOOKS}
+        | {row[1] for row in RAM_KEY_HOOKS}
+        | {row[1] for row in RAM_CALL_HOOKS}
+        | {row[0] for row in CALLBACKS.values()}
+    )
+    # Reduce the combined NAN/AWDL image using cross-module optimization;
+    # its actual fit remains enforced by the linker and Flashpatch table
+    # check. The checked native low-heap/execute boundary reserves 56 KiB;
+    # both literals move together, leaving [0x170405,0x172000) for the
+    # original low-heap arena. No other heap or RAM region is repurposed.
+    # Naked native-entry trampolines carry noipa on their definitions so
+    # interprocedural optimization cannot rewrite their register contracts.
+    run("gcc", "-std=c23", "-march=armv7-r", "-mthumb", "-mfloat-abi=soft", "-Oz",
+        "-flto", "-flto-partition=one",
+        "-ffunction-sections", "-fdata-sections",
         "-ffreestanding", "-fno-builtin", "-fno-stack-protector", "-fno-pic",
         "-fno-unwind-tables", "-fno-asynchronous-unwind-tables", "-fno-common",
         "-Wall", "-Wextra", "-Werror", "-nostdlib", "-nostartfiles",
         "-Wl,--build-id=none", "-Wl,--no-undefined", "-Wl,--fatal-warnings",
+        "-Wl,--gc-sections", *["-Wl,--undefined=" + name for name in entrypoints],
         "-Wl,-T," + str(linker), "-Wl,-Map," + str(output / "nan_patch.map"),
-        "frame_contexts.c", "nan_fsm.c", "nan_commands.c", "nan_initialize.c", "nan_mac.c",
+        "awdl_session.c", "awdl_native.c", "awdl_timing.c", "awdl_command.c", "awdl_event.c", "awdl_tx.c", "awdl_schedule.c", "awdl_peer.c", "awdl_data.c",
+        "native_calls.S", "runtime.c", "frame_contexts.c", "nan_fsm.c", "nan_commands.c", "nan_initialize.c", "nan_mac.c",
         "nan_bss.c", "nan_availability.c", "nan_vendor_attributes.c", "nan_dam.c", "nan_dam_channels.c", "nan_dam_ndc.c", "nan_dam_slots.c", "nan_dam_proposal.c", "nan_dam_resize.c", "nan_dam_negotiation.c", "nan_dam_activation.c", "nan_dam_peer.c", "nan_scheduler.c", "nan_data.c",
         "nan_peer.c", "nan_link.c", "nan_discovery.c", "nan_attach.c", "nan_active.c", "nan_bss_active.c", "nan_host.c", "nan_station.c", "nan_group.c", "nan_schedule.c", "slotted_bss.c", "-o", elf)
     if run("nm", "--undefined-only", elf).stdout.strip():
@@ -339,7 +387,35 @@ SECTIONS {{
             "exclude patch code from the initial low-memory heap")
     replace(EXEC_START_LITERAL, struct.pack("<I", PATCH_END), struct.pack("<I", PATCH_BASE),
             "extend the existing executable read-only MPU range over the patch")
+    # A2 allocates two TX fragment pools at boot (116-byte payload plus
+    # 92-byte lbuf). Native 0x1f7718 can additionally allocate a 204-byte
+    # header plus a 60-byte lbuf for each outstanding fragment. Keeping
+    # the stock 225+225 credits after reserving 56 KiB for this image lets
+    # data exhaust the heap used by AWDL control events. Budget three
+    # 64-frame windows: two in the shared pool, one in the reserve pool.
+    # Native pool initialization/refill and credit accounting still own
+    # all packets; do not mutate live freelists or borrow the RX pool.
+    # These are capacity changes, not a proof of a hard control-memory
+    # reserve: management/event allocations also need runtime acceptance.
+    replace(0x211506, bytes.fromhex("e121"), bytes.fromhex("8021"),
+            "budget shared TX fragment pool to 128 native credits")
+    replace(0x211530, bytes.fromhex("e121"), bytes.fromhex("4021"),
+            "budget reserve TX fragment pool to 64 native credits")
+    # sendpkt sets tag bit 30 even when prepare_packet allocated a local
+    # non-TXFRAG head. The slow builder then emits a long D11 header, but
+    # the cache builder used that eligibility bit to select the short size.
+    # Read the copied descriptor's actual short bit, as native crypto does:
+    # ldrh r3,[r0,#2]; lsls r3,r3,#31, replacing tst r2,#0x40000000.
+    # r3 is overwritten by the following IT/MOV pair. Keep r2 intact:
+    # 0x1f80f4 still tests its packet-tag A-MSDU bit before rewriting QoS.
+    # The following IT NE selects 0x28/0x88 for both MAC-header edits and
+    # FrameLen. Preserve packet tags, cache, aggregation and DMA ownership.
+    replace(0x1F80A2, bytes.fromhex("12f0804f"), bytes.fromhex("4388db07"),
+            "derive cached D11 header size from its physical short-header bit")
     replace(PATCH_BASE, bytes(len(payload)), payload, "NAN Thumb implementations and native command table")
+    replace(0x227D64, struct.pack("<I", 0x987F5),
+            struct.pack("<I", symbols["awdl_peer_bar_complete"] | 1),
+            "finish consumed AWDL BAR callbacks while retaining native handling for other peers")
     # The original RAM call sits across an 8-byte hardware Flashpatch boundary;
     # edit its image bytes directly, preserving all neighboring instructions.
     boot_call = 0x226476
@@ -415,6 +491,7 @@ SECTIONS {{
                         "the inspected callback set is not the complete NAN dependency graph"],
         "input_sha256": FW_SHA256, "rom_sha256": ROM_SHA256,
         "source_sha256": source_hashes, "compiler": compiler,
+        "linker_entrypoints": entrypoints,
         "functions": {name: hex(address) for name, address in symbols.items()},
         "payload_address": hex(PATCH_BASE), "payload_bytes": len(payload),
         "flashpatch": {"table_start": hex(fp_table_start), "table_end": hex(fp_table_end),

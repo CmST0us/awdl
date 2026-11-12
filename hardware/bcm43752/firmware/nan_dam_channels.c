@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* A2 DAM channel decisions. Keep the chip's CLM/channel-list consumers and
  * primary-channel decoder; B0's DAM fields after +0x18 are shifted by four
  * bytes and cannot be used as A2 offsets. These callbacks do not create an
@@ -35,7 +36,7 @@ int nan_dam_update_social_channels(void *dam, unsigned dual_band)
     channels[0] = 0x1006;
     unsigned count = 1;
     if (dual_band) {
-        unsigned social = ((unsigned (*)(void *, unsigned))0x2f33du)(nan, 1);
+        unsigned social = ((unsigned (*)(void *, unsigned))native_0x2f33d)(nan, 1);
         if (social != 0xff)
             channels[count++] = social;
         channels[count++] = 0xd095; /* 149 / 20 MHz. */
@@ -47,12 +48,12 @@ int nan_dam_update_social_channels(void *dam, unsigned dual_band)
     if (mode == 0 || mode == 1)
         channels[count++] = 0x100b;
     for (unsigned i = 0; i < count; i++) {
-        int error = ((int (*)(void *, void *, unsigned))0x302b5u)(
+        int error = ((int (*)(void *, void *, unsigned))native_0x302b5)(
             nan, &replacement, channels[i]);
         if (error)
             return error;
     }
-    ((void (*)(void *))0x30849u)(list);
+    ((void (*)(void *))native_0x30849)(list);
     for (unsigned i = 0; i < replacement.count; i++)
         ((uint16_t *)((uint8_t *)list + 4))[i] = replacement.channels[i];
     U8(list, 1) = replacement.count;
@@ -66,7 +67,7 @@ int nan_dam_compatible_with_bt(void *dam, unsigned chanspec)
     /* Native +0x44 is the three-byte BT state, not a BSS owner. The
      * selected half-band is byte 2; zero leaves all primary channels. */
     unsigned mode = U8(PTR(dam, 0x44), 2);
-    unsigned primary = ((unsigned (*)(unsigned))0x183601u)(chanspec);
+    unsigned primary = ((unsigned (*)(unsigned))native_0x183601)(chanspec);
     return mode == 1 ? primary > 5 : mode == 2 ? primary < 7 : 1;
 }
 
@@ -86,20 +87,20 @@ int nan_dam_valid_chanspec(void *dam, void *prohibited, unsigned chanspec,
         unsigned band = chanspec & 0xc000u;
         if (band != 0 && band != 0xc000u)
             return 0; /* A2 NAN exposes only 2.4 and 5 GHz. */
-        void *wlc = ((void *(*)(void *, unsigned))0x20fddu)(nan, band != 0);
+        void *wlc = ((void *(*)(void *, unsigned))native_0x20fdd)(nan, band != 0);
         if (!wlc || !PTR(wlc, 0xac) ||
-            !((int (*)(void *, unsigned))0xc815du)(PTR(wlc, 0xac), chanspec) ||
+            !((int (*)(void *, unsigned))native_0xc815d)(PTR(wlc, 0xac), chanspec) ||
             (!band && !nan_dam_compatible_with_bt(dam, chanspec)))
             return 0;
         if (!(checks & 4u)) {
             if (!PTR(dam, 0x28) ||
-                ((int (*)(void *, unsigned, void *))0x3180du)(
+                ((int (*)(void *, unsigned, void *))native_0x3180d)(
                     nan, chanspec, PTR(dam, 0x28)))
                 return 0;
         }
     }
     if ((checks & 2u) && prohibited &&
-        ((int (*)(void *, unsigned, void *))0x3180du)(nan, chanspec, prohibited))
+        ((int (*)(void *, unsigned, void *))native_0x3180d)(nan, chanspec, prohibited))
         return 0;
     /* 0x21fc4 obtains the channel manager through the prepared NMI BSS.
      * A missing BSS is not evidence that a channel is permitted. */
@@ -110,5 +111,5 @@ int nan_dam_valid_chanspec(void *dam, void *prohibited, unsigned chanspec,
     void *bss = PTR(PTR(PTR(mac, 8), 0), 0);
     if (PTR(bss, 0) != local_wlc)
         return 0;
-    return !((int (*)(void *, unsigned))0x21fc5u)(dam, chanspec);
+    return !((int (*)(void *, unsigned))native_0x21fc5)(dam, chanspec);
 }

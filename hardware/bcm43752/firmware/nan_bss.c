@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* A2 NAN BSSCFG creation and pre-enable unwind. The native 0x2e728 caller
  * dereferences NULL on create failure and ignores callback registration errors.
  * This preserves its 20/28-byte request ABI and its real slotted-BSS allocator.
@@ -36,9 +37,9 @@ static int our_callbacks(void *node, void *mac)
  * responsible for its own partial allocation. */
 int nan_slotted_release_bss(void *manager, uint32_t index)
 {
-    if (!((void *(*)(void *, uint32_t))0x1279d1u)(manager, index))
+    if (!((void *(*)(void *, uint32_t))native_0x1279d1)(manager, index))
         return 0;
-    return ((int (*)(void *, uint32_t))0x1263bdu)(manager, index);
+    return ((int (*)(void *, uint32_t))native_0x1263bd)(manager, index);
 }
 
 int nan_mac_remove_bsscfg(void *mac)
@@ -75,11 +76,11 @@ int nan_mac_remove_bsscfg(void *mac)
     if (PTR(node, 0x0c)) {
         if (!our_callbacks(node, mac))
             return -30;
-        int error = ((int (*)(void *, uint32_t))0x128649u)(manager, index);
+        int error = ((int (*)(void *, uint32_t))native_0x128649)(manager, index);
         if (error || PTR(node, 0x0c))
             return error ? error : -16;
     }
-    int error = ((int (*)(void *, uint32_t))0x1281e5u)(manager, index);
+    int error = ((int (*)(void *, uint32_t))native_0x1281e5)(manager, index);
     if (*slot)
         return error ? error : -16;
     /* Only the observed removal of the native table entry releases ownership.
@@ -123,8 +124,8 @@ int nan_mac_prepare_bsscfg(void *wlc, void *mac, const unsigned char *nmi,
     }
     if (!entry(manager, 0))
         return -2;
-    if (((void *(*)(void *, const uint8_t *))0x1515c1u)(wlc, nmi) ||
-        ((int (*)(void *, const uint8_t *))0x126565u)(manager, nmi) >= 0)
+    if (((void *(*)(void *, const uint8_t *))native_0x1515c1)(wlc, nmi) ||
+        ((int (*)(void *, const uint8_t *))native_0x126565)(manager, nmi) >= 0)
         return -21; /* Never acquire a shared entry for the same NMI. */
 
     uint32_t request[5];
@@ -142,7 +143,7 @@ int nan_mac_prepare_bsscfg(void *wlc, void *mac, const unsigned char *nmi,
     for (size_t i = 0; i < 6; ++i)
         U8(settings, 0x0c + i) = nmi[i];
     int status = 0;
-    bss = ((void *(*)(void *, void *, uint32_t *, int *))0x127821u)(
+    bss = ((void *(*)(void *, void *, uint32_t *, int *))native_0x127821)(
         manager, request, &U32(mac, 0xd4), &status);
     void **slot = entry(manager, U32(mac, 0xd4));
     if (bss || (slot && *slot)) {
@@ -163,7 +164,7 @@ int nan_mac_prepare_bsscfg(void *wlc, void *mac, const unsigned char *nmi,
     zero(callbacks, sizeof(callbacks));
     callbacks[0] = (uintptr_t)PTR(mac, 4);
     callbacks[6] = 0x385a5;
-    status = ((int (*)(void *, const uint32_t *, uint32_t))0x152eb1u)(
+    status = ((int (*)(void *, const uint32_t *, uint32_t))native_0x152eb1)(
         manager, callbacks, U32(mac, 0xd4));
     if (status) {
         int cleanup = nan_mac_remove_bsscfg(mac);

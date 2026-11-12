@@ -3,6 +3,7 @@ import XCTest
 final class AirDropTests: XCTestCase {
     private let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
     private let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+    private let airDropUI = XCUIApplication(bundleIdentifier: "com.apple.Sharing.AirDropUI")
 
     @MainActor func testSendFile() throws {
         continueAfterFailure = false
@@ -31,6 +32,22 @@ final class AirDropTests: XCTestCase {
             XCTAssertTrue(previewClose.waitForNonExistence(timeout: stepTimeout))
         }
         if files.buttons["完成"].exists { files.buttons["完成"].tap() }
+        // Files restores its previous location, including Recently Deleted.
+        // Select local storage before searching for the transfer fixture.
+        let cancelSearch = files.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "取消"])).firstMatch
+        if files.searchFields.firstMatch.exists && cancelSearch.isHittable { cancelSearch.tap() }
+        let browse = files.buttons.matching(NSPredicate(format: "label IN %@", ["Browse", "浏览"])).firstMatch
+        if browse.isHittable { browse.tap() }
+        let localLabels = ["On My iPad", "我的 iPad", "我的iPad"]
+        let local = files.cells.matching(NSPredicate(format: "label IN %@", localLabels)).firstMatch
+        if !local.isHittable {
+            let sidebar = files.buttons["ToggleSideBar"]
+            XCTAssertTrue(sidebar.waitForExistence(timeout: stepTimeout))
+            sidebar.tap()
+        }
+        // Match the sidebar cell, not the identical navigation-bar title.
+        XCTAssertTrue(local.waitForExistence(timeout: stepTimeout))
+        local.tap()
         capture(files, name: "send-files-browser")
         let search = files.searchFields.firstMatch
         if !search.exists {
@@ -99,20 +116,28 @@ final class AirDropTests: XCTestCase {
         XCUIDevice.shared.press(.home)
         event("ready")
 
-        let accept = springboard.buttons.matching(
+        // The system receive sheet belongs to AirDropUI. SpringBoard's
+        // remote accessibility tree can retain a terminated sheet process.
+        let accept = airDropUI.buttons.matching(
             NSPredicate(format: "label IN %@", ["Accept", "接受"])
         ).firstMatch
         guard accept.waitForExistence(timeout: timeout) else {
-            capture(springboard, name: "airdrop-request-missing")
+            capture(airDropUI, name: "airdrop-request-missing")
             XCTFail("没有收到 AirDrop 接收提示")
             return
         }
-        capture(springboard, name: "airdrop-request")
-        let senderText = springboard.staticTexts.matching(
+        capture(airDropUI, name: "airdrop-request")
+        let senderText = airDropUI.staticTexts.matching(
             NSPredicate(format: "label CONTAINS %@", sender)
         ).firstMatch
         XCTAssertTrue(senderText.exists, "AirDrop 提示的发送方不匹配：\(sender)")
         XCTAssertTrue(senderText.label.contains(filename), "AirDrop 提示的文件名不匹配：\(filename)")
+        // AirDropUI reports coordinates relative to its hosted window, not
+        // SpringBoard. Let XCTest resolve the verified button's hit point.
+        let hittable = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true"), object: accept)
+        XCTAssertEqual(XCTWaiter.wait(for: [hittable], timeout: stepTimeout), .completed,
+                       "AirDrop 接收按钮未显示在可交互窗口中")
         accept.tap()
         XCTAssertTrue(accept.waitForNonExistence(timeout: stepTimeout), "接受后系统提示没有关闭")
         event("accepted")
@@ -136,7 +161,7 @@ final class AirDropTests: XCTestCase {
         tree.name = name + "-hierarchy"
         tree.lifetime = .keepAlways
         add(tree)
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         screenshot.name = name
         screenshot.lifetime = .keepAlways
         add(screenshot)

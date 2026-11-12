@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* Boot-only A2 attachment, after the original WLC module dependencies.
  * A WLC attach failure terminates this firmware instance at ROM 0x71514.
  * Published contexts therefore remain owned by WLC until that termination;
@@ -36,7 +37,7 @@ static const struct nan_iovar iovars[] = {{"nan", 0, 0, 0, 8, 0}, {0}};
 
 static void *allocate(size_t bytes)
 {
-    return ((void *(*)(size_t))0x7146du)(bytes);
+    return ((void *(*)(size_t))native_0x7146d)(bytes);
 }
 
 static int attach_core(void *wlc)
@@ -146,30 +147,30 @@ int nan_boot_attach(void *wlc)
      * NAN stop path. The host backend owns protocol negotiation while these
      * callbacks retain native MAC, packet and interface lifetimes. */
     error = ((int (*)(void *, const void *, const char *, void *, uintptr_t,
-                      uintptr_t, uintptr_t, uintptr_t, unsigned, void *))0x225bdfu)(
+                      uintptr_t, uintptr_t, uintptr_t, unsigned, void *))native_0x225bdf)(
         PTR(wlc, 0), iovars, "nan", wrapper, 0x1f5d5u,
         (uintptr_t)nan_watchdog, 0x1eaccu | 1u, (uintptr_t)nan_wlc_down, 0, 0);
     if (error)
         return error;
     /* A2 WLC core attach publishes PCB at +0x2c4 (RAM 0x225038).
      * The packet tag's group 0 / index 12 dispatches native NAN TX status. */
-    error = ((int (*)(void *, unsigned, unsigned, uintptr_t))0x231c41u)(
+    error = ((int (*)(void *, unsigned, unsigned, uintptr_t))native_0x231c41)(
         PTR(wlc, 0x2c4), 0, 12, 0x1e54du);
     if (error)
         return error;
     /* Original WLC interface type 3 maps only to NAN NMI/NDI subtypes.
      * Retain actual create/remove errors and their slotted-BSS ownership. */
-    error = ((int (*)(void *, unsigned, uintptr_t, uintptr_t, unsigned, void *))0x22b2b9u)(
+    error = ((int (*)(void *, unsigned, uintptr_t, uintptr_t, unsigned, void *))native_0x22b2b9)(
         wlc, 3, 0x1ebb1u, 0x1ec75u, 0, wrapper);
     if (error)
         return error;
-    return ((int (*)(void *, uintptr_t, void *))0x22b2a1u)(
+    return ((int (*)(void *, uintptr_t, void *))native_0x22b2a1)(
         wlc, 0x1ead1u, wrapper);
 }
 
 int nan_wlc_attach_modules(void *wlc)
 {
-    int error = ((int (*)(void *))0x2251b5u)(wlc);
+    int error = ((int (*)(void *))native_0x2251b5)(wlc);
     if (error)
         return error;
     return nan_boot_attach(wlc);

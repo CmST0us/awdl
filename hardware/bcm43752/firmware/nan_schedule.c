@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* Install host-negotiated schedules into A2's native availability, DAM and
  * MSCH consumers. No autonomous NDL/NDP negotiation or alternate radio mode. */
 #include "nan_schedule.h"
@@ -21,7 +22,7 @@ struct schedule_peer {
 static int failure(const char *stage, int error)
 {
     if (error)
-        ((int (*)(const char *, ...))0xa815u)("NAN schedule %s: %d\n", stage, error);
+        ((int (*)(const char *, ...))native_0xa815)("NAN schedule %s: %d\n", stage, error);
     return error;
 }
 
@@ -40,18 +41,18 @@ static int zero(const uint8_t *p, unsigned bytes)
 
 static int equal(const void *a, const void *b, size_t bytes)
 {
-    return !((int (*)(const void *, const void *, size_t))0xa7a9u)(a, b, bytes);
+    return !((int (*)(const void *, const void *, size_t))native_0xa7a9)(a, b, bytes);
 }
 
 static void copy(void *to, const void *from, size_t bytes)
 {
-    ((void *(*)(void *, const void *, size_t))0x151a21u)(to, from, bytes);
+    ((void *(*)(void *, const void *, size_t))native_0x151a21)(to, from, bytes);
 }
 
 static void release_map(void *nan, void *map)
 {
     if (map)
-        ((void (*)(void *, void *))0x30a55u)(nan, map);
+        ((void (*)(void *, void *))native_0x30a55)(nan, map);
 }
 
 static int syntax(const uint8_t *input, size_t length, unsigned peer)
@@ -89,8 +90,6 @@ static int syntax(const uint8_t *input, size_t length, unsigned peer)
              * Native CLM validation below checks the complete chanspec. */
             if ((band != 0 && band != 0xc000) ||
                 (width != 0x1000 && width != 0x1800 && width != 0x2000)) {
-                ((int (*)(const char *, ...))0xa815u)(
-                    "NAN schedule committed slot: i=%u channel=%x\n", i, channel);
                 return 0;
             }
             ++used;
@@ -105,16 +104,11 @@ int nan_schedule_validate(const struct nan_command_digest *digest, uint32_t acti
 {
     int error = nan_command_validate(digest, action, input, length, output, output_length);
     if (error)
-        return failure("command validation", error);
+        return failure("command", error);
     const struct nan_command *cmd = ((const struct nan_command *const *)digest)[3];
     if (syntax(input, length, cmd->id == BCM_NAN_HOST_PEER_SCHEDULE_COMMAND))
         return 0;
-    if (length >= 32)
-        ((int (*)(const char *, ...))0xa815u)(
-            "NAN schedule wire: bytes=%u version=%u op=%u total=%u flags=%u slots=%u period=%u unit=%u map=%u reserved=%u\n",
-            (unsigned)length, get16(input), get16(input + 2), get16(input + 4),
-            get16(input + 6), get16(input + 24), get16(input + 26), input[28], input[29], input[31]);
-    return failure("wire validation", -2);
+    return failure("wire", -2);
 }
 
 static int make_map(void *nan, const uint8_t *grid, void **result)
@@ -124,15 +118,15 @@ static int make_map(void *nan, const uint8_t *grid, void **result)
     *result = 0;
     for (unsigned i = 0; i < BCM_NAN_HOST_SCHEDULE_SLOTS; ++i) {
         unsigned channel = get16(grid + 8 + i * 2);
-        if (channel && !((int (*)(void *, unsigned))0xc815du)(PTR(nan, 0x2c), channel))
+        if (channel && !((int (*)(void *, unsigned))native_0xc815d)(PTR(nan, 0x2c), channel))
             return -20;
     }
-    void *map = ((void *(*)(void *, unsigned))0x303adu)(nan, 1);
+    void *map = ((void *(*)(void *, unsigned))native_0x303ad)(nan, 1);
     if (!map)
         return -27;
     U8(map, 0x14) = grid[5]; /* Mark owned before nested allocation/free. */
     U8(map, 1) = grid[6];
-    void *schedule = ((void *(*)(void *, unsigned, unsigned))0x305f5u)(
+    void *schedule = ((void *(*)(void *, unsigned, unsigned))native_0x305f5)(
         nan, BCM_NAN_HOST_SCHEDULE_SLOT_TU, BCM_NAN_HOST_SCHEDULE_PERIOD_TU);
     PTR(map, 0x18) = schedule;
     int error = -27;
@@ -176,7 +170,7 @@ static struct schedule_peer **find(void *nan, const uint8_t *address)
 
 static int peer_present(void *nan, struct schedule_peer *owner)
 {
-    return ((void *(*)(void *, const void *, unsigned))0x37189u)(
+    return ((void *(*)(void *, const void *, unsigned))native_0x37189)(
         nan, owner->address, 0) == owner->peer && U8(owner->peer, 9);
 }
 
@@ -196,7 +190,7 @@ static int remove_peer(void *nan, struct schedule_peer **slot)
         return error;
     }
     *slot = owner->next;
-    ((void (*)(void *))0x71491u)(owner);
+    ((void (*)(void *))native_0x71491)(owner);
     return 0;
 }
 
@@ -206,15 +200,15 @@ static int install_peer(void *nan, const uint8_t *address, void *map)
     if (*slot && !peer_present(nan, *slot))
         return -30;
     if (!*slot) {
-        struct schedule_peer *owner = ((void *(*)(size_t))0x7146du)(sizeof(*owner));
+        struct schedule_peer *owner = ((void *(*)(size_t))native_0x7146d)(sizeof(*owner));
         if (!owner)
             return -27;
-        void *peer = ((void *(*)(void *, const void *, unsigned))0x37189u)(nan, address, 0);
+        void *peer = ((void *(*)(void *, const void *, unsigned))native_0x37189)(nan, address, 0);
         int error = 0;
         if (!peer)
-            error = ((int (*)(void *, const void *, void **))0x36fb1u)(nan, address, &peer);
+            error = ((int (*)(void *, const void *, void **))native_0x36fb1)(nan, address, &peer);
         if (error || !peer || U8(peer, 9) == UINT8_MAX) {
-            ((void (*)(void *))0x71491u)(owner);
+            ((void (*)(void *))native_0x71491)(owner);
             return error ? error : -16;
         }
         owner->peer = peer;
@@ -242,7 +236,7 @@ static int refresh_beacons(void *nan)
         unsigned offset = 0x3c + i * 4;
         uint32_t count = U32(PTR(mac, 0x70), 0x0c);
         PTR(mac, offset) = 0;
-        ((void (*)(void *, unsigned))0x2e57du)(mac, i + 1);
+        ((void (*)(void *, unsigned))native_0x2e57d)(mac, i + 1);
         next[i] = PTR(mac, offset);
         PTR(mac, offset) = old[i];
         if (!next[i] || U32(PTR(mac, 0x70), 0x0c) != count + 1) {
@@ -255,7 +249,7 @@ static int refresh_beacons(void *nan)
         if (!error)
             PTR(mac, 0x3c + i * 4) = next[i];
         if (discard)
-            ((void (*)(void *, void *, unsigned))0x151ae1u)(
+            ((void (*)(void *, void *, unsigned))native_0x151ae1)(
                 PTR(PTR(nan, 8), 4), discard, 1);
     }
     return error;
@@ -315,7 +309,7 @@ int nan_schedule_command(const struct nan_command_digest *digest,
     /* 0x204dc sends a void early template notification before MSCH commits.
      * Defer that notification to the checked two-template rebuild below. */
     U32(common, 0x34) &= ~0x00200000u;
-    error = ((int (*)(void *))0x22081u)(nan);
+    error = ((int (*)(void *))native_0x22081)(nan);
     U32(common, 0x34) |= beacon_flag;
     if (error)
         return failure("DAM commit", error);

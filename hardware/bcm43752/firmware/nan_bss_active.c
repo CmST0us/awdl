@@ -1,9 +1,12 @@
+#include "native_calls.h"
 /* A2 NAN BSS hardware preparation and NMI TBTT callback ownership. The original
  * preparation ignores slotted-BSS errors; the original event lifecycle cannot
  * distinguish a failed registration from an owned callback on STOP/retry. */
 #include <stddef.h>
 #include <stdint.h>
 #include "nan_mac.h"
+#include "awdl_session.h"
+#include "awdl_frame.h"
 
 #define FIELD(type, base, offset) (*(type *)((uint8_t *)(base) + (offset)))
 #define PTR(base, offset) FIELD(void *, base, offset)
@@ -23,7 +26,7 @@ int nan_bss_prepare_enable(void *nan, void *bss, unsigned band, unsigned index)
         !PTR(bss, 0x98) || !PTR(bss, 0xa0) || !PTR(bss, 0x2e0))
         return -25;
     if (U32(bss, 0x74) != 5 || (U32(bss, 0x78) != 10 && U32(bss, 0x78) != 11) ||
-        ((void *(*)(void *, unsigned))0x1279d1u)(PTR(wlc, 0x678), index) != bss ||
+        ((void *(*)(void *, unsigned))native_0x1279d1)(PTR(wlc, 0x678), index) != bss ||
         (U32(bss, 0x78) == 10 && index != U32(mac, 0xd4)))
         return -30;
     void *defaults = PTR(wlc, 0x1f8);
@@ -33,31 +36,33 @@ int nan_bss_prepare_enable(void *nan, void *bss, unsigned band, unsigned index)
     /* Native SSID setter takes (BSS, bytes, length). Even for an empty
      * NAN SSID, r2 must be zero; the ROM copies r2 bytes before clearing
      * the remaining 32-byte field. */
-    ((void (*)(void *, const void *, unsigned))0xbb775u)(bss, 0, 0);
+    ((void (*)(void *, const void *, unsigned))native_0xbb775)(bss, 0, 0);
     U8(bss, 0x10) = 0;
-    unsigned channel = ((unsigned (*)(void *, unsigned))0x2f33du)(nan, band);
+    unsigned channel = ((unsigned (*)(void *, unsigned))native_0x2f33d)(nan, band);
     if (*(const uint8_t *)(uintptr_t)*(const uint32_t *)0x1fee0u)
-        ((void (*)(void *))0x8eafdu)(wlc);
-    if (channel == 0xff || ((int (*)(void *, unsigned))0xc7845u)(PTR(nan, 0x2c), channel)) {
+        ((void (*)(void *))native_0x8eafd)(wlc);
+    if (channel == 0xff || ((int (*)(void *, unsigned))native_0xc7845)(PTR(nan, 0x2c), channel)) {
         channel = old_channel;
-        if (!((int (*)(void *, unsigned))0xc815du)(PTR(nan, 0x2c), channel) ||
-            ((int (*)(void *, unsigned))0xc7845u)(PTR(nan, 0x2c), channel))
+        if (!((int (*)(void *, unsigned))native_0xc815d)(PTR(nan, 0x2c), channel) ||
+            ((int (*)(void *, unsigned))native_0xc7845)(PTR(nan, 0x2c), channel))
             channel = U16(wlc, 0x28e);
     }
     U16(PTR(bss, 0x94), 0x36) = channel;
-    U16(defaults, 0x32) = ((unsigned (*)(void *))0x2f185u)(nan);
+    U16(defaults, 0x32) = ((unsigned (*)(void *))native_0x2f185)(nan);
     U16(defaults, 0x36) = channel;
     uint8_t cluster[6];
-    ((void (*)(void *, unsigned, void *))0x2efd5u)(nan, 1, cluster);
-    ((int (*)(void *, size_t, const void *, size_t))0x151c81u)(
+    if (awdl_session_holds_bss(nan, bss)) {
+        static const uint8_t awdl_bssid[6] = BCM_AWDL_BSSID_BYTES;
+        for (unsigned i = 0; i < sizeof(cluster); ++i)
+            cluster[i] = awdl_bssid[i];
+    } else {
+        ((void (*)(void *, unsigned, void *))native_0x2efd5)(nan, 1, cluster);
+    }
+    ((int (*)(void *, size_t, const void *, size_t))native_0x151c81)(
         (uint8_t *)bss + 0x60, 6, cluster, 6);
-    int error = ((int (*)(void *, unsigned, const void *))0x128415u)(PTR(wlc, 0x678), index, cluster);
-    if (error)
-        ((int (*)(const char *, ...))0xa815u)("NAN BSS address: %d\n", error);
+    int error = ((int (*)(void *, unsigned, const void *))native_0x128415)(PTR(wlc, 0x678), index, cluster);
     if (!error)
-        error = ((int (*)(void *, unsigned))0x127ae1u)(PTR(wlc, 0x678), index);
-    if (error)
-        ((int (*)(const char *, ...))0xa815u)("NAN BSS prepare: %d\n", error);
+        error = ((int (*)(void *, unsigned))native_0x127ae1)(PTR(wlc, 0x678), index);
     /* The native operation temporarily borrows WLC's default BSS settings.
      * Restore them on failure too; any active BSS remains owned for STOP. */
     U16(defaults, 0x32) = old_interval;
@@ -65,20 +70,18 @@ int nan_bss_prepare_enable(void *nan, void *bss, unsigned band, unsigned index)
     if (!error) {
         U8(PTR(bss, 0xa0), 0xc1) = 0;
         U32(PTR(bss, 0x2e0), 0) = 1;
-        if (!((int (*)(void *))0x127acdu)(wlc) && !U8(PTR(wlc, 0x34), 0x10)) {
+        if (!((int (*)(void *))native_0x127acd)(wlc) && !U8(PTR(wlc, 0x34), 0x10)) {
             error = -12;
         } else {
-            void *queue = ((void *(*)(void *, void *))0x8aae5u)(wlc, bss);
-            error = ((int (*)(void *, void *, unsigned, unsigned, void *))0xbc009u)(
+            void *queue = ((void *(*)(void *, void *))native_0x8aae5)(wlc, bss);
+            error = ((int (*)(void *, void *, unsigned, unsigned, void *))native_0xbc009)(
                 wlc, bss, 2, 0x14, queue);
-            if (error)
-                ((int (*)(const char *, ...))0xa815u)("NAN BSS rates: %d\n", error);
             if (!error) {
-                void *rates = ((void *(*)(void *))0x1279cdu)(bss);
+                void *rates = ((void *(*)(void *))native_0x1279cd)(bss);
                 if (rates) {
                     unsigned band_type = (U8(PTR(wlc, 0), 0x57) & 3u) ?
                         ((U32(bss, 0x70) ^ 0x1000u) >> 12) & 1u : 0;
-                    ((void (*)(void *, void *, unsigned, unsigned, unsigned, unsigned))0x10e5c1u)(
+                    ((void (*)(void *, void *, unsigned, unsigned, unsigned, unsigned))native_0x10e5c1)(
                         (uint8_t *)PTR(bss, 0x98) + 0x3c, (uint8_t *)rates + 0x34,
                         0, 2, 0x7f, band_type);
                 }
@@ -86,6 +89,8 @@ int nan_bss_prepare_enable(void *nan, void *bss, unsigned band, unsigned index)
         }
     }
     U16(wlc, 0x28c) = old_channel;
+    if (error)
+        ((int (*)(const char *, ...))native_0xa815)("NAN BSS setup: %d\n", error);
     return error;
 }
 
@@ -97,8 +102,8 @@ int nan_mac_stop_bss(void *mac, void *bss)
     void *manager = PTR(mac, NAN_MAC_BSS_MANAGER);
     void *node = PTR(mac, NAN_MAC_BSS_NODE);
     if (!manager || manager != PTR(wlc, 0x678) || !node ||
-        ((void *(*)(void *, unsigned))0x126641u)(manager, U32(mac, 0xd4)) != node ||
-        ((void *(*)(void *, unsigned))0x1279d1u)(manager, U32(mac, 0xd4)) != bss)
+        ((void *(*)(void *, unsigned))native_0x126641)(manager, U32(mac, 0xd4)) != node ||
+        ((void *(*)(void *, unsigned))native_0x1279d1)(manager, U32(mac, 0xd4)) != bss)
         return -30;
     return nan_bss_stop(PTR(mac, 4), bss, U32(mac, 0xd4));
 }
@@ -109,9 +114,9 @@ int nan_bss_stop(void *nan, void *bss, unsigned index)
         U32(bss, 0x74) != 5 || (U32(bss, 0x78) != 10 && U32(bss, 0x78) != 11))
         return -2;
     void *wlc = PTR(nan, 8), *manager = PTR(wlc, 0x678);
-    if (!manager || ((void *(*)(void *, unsigned))0x1279d1u)(manager, index) != bss)
+    if (!manager || ((void *(*)(void *, unsigned))native_0x1279d1)(manager, index) != bss)
         return -30;
-    void *node = ((void *(*)(void *, unsigned))0x126641u)(manager, index);
+    void *node = ((void *(*)(void *, unsigned))native_0x126641)(manager, index);
     if (!node)
         return -30;
     /* ade8c clears the BSS flag before the remaining stop operations can
@@ -122,12 +127,12 @@ int nan_bss_stop(void *nan, void *bss, unsigned index)
     if (!PTR(bss, 0x9c) || !PTR(manager, 4) || !PTR(PTR(manager, 4), 8))
         return -25;
     U8(node, 1) = 1;
-    ((void (*)(void *, unsigned, unsigned))0xade8du)(bss, 0, 1);
+    ((void (*)(void *, unsigned, unsigned))native_0xade8d)(bss, 0, 1);
     if (*(const uint8_t *)(uintptr_t)*(const uint32_t *)0x1288a8u)
-        ((void (*)(void *))0x8eafdu)(wlc);
-    int error = ((int (*)(void *, unsigned))0xaf015u)(bss, !U8(PTR(bss, 0x9c), 0x4a));
+        ((void (*)(void *))native_0x8eafd)(wlc);
+    int error = ((int (*)(void *, unsigned))native_0xaf015)(bss, !U8(PTR(bss, 0x9c), 0x4a));
     if (!error)
-        error = ((int (*)(void *, void *))0xbbad1u)(wlc, bss);
+        error = ((int (*)(void *, void *))native_0xbbad1)(wlc, bss);
     if (error)
         return error;
     void *table = PTR(PTR(manager, 4), 8);
@@ -141,7 +146,7 @@ int nan_bss_stop(void *nan, void *bss, unsigned index)
     }
     if (!active)
         U32(manager, 0x44) = 0;
-    error = ((int (*)(void *, unsigned))0x12651du)(manager, 0);
+    error = ((int (*)(void *, unsigned))native_0x12651d)(manager, 0);
     if (error || U8(bss, 5))
         return error ? error : -16;
     U8(node, 1) = 0;
@@ -188,7 +193,7 @@ int nan_bss_events(void *nan, unsigned enable)
             return registered(manager, bss, mac) ? 0 : -30;
         if (PTR(mac, NAN_MAC_EVENT_MANAGER) || registered(manager, bss, mac))
             return -30;
-        int error = ((int (*)(void *, void *, uintptr_t, uintptr_t, void *))0x1308e1u)(
+        int error = ((int (*)(void *, void *, uintptr_t, uintptr_t, void *))native_0x1308e1)(
             manager, bss, 0x2f759u, 0, mac);
         if (registered(manager, bss, mac)) {
             PTR(mac, NAN_MAC_EVENT_BSS) = bss;
@@ -196,12 +201,12 @@ int nan_bss_events(void *nan, unsigned enable)
         }
         if (error || !PTR(mac, NAN_MAC_EVENT_BSS))
             return error ? error : -30;
-        U16(PTR(bss, 0x98), 0x32) = ((unsigned (*)(void *))0x2f185u)(nan);
-        ((void (*)(void *, void *))0x130a11u)(manager, bss);
-        ((void (*)(void *, void *, unsigned))0xef5fdu)(PTR(wlc, 0x94), bss, 1);
+        U16(PTR(bss, 0x98), 0x32) = ((unsigned (*)(void *))native_0x2f185)(nan);
+        ((void (*)(void *, void *))native_0x130a11)(manager, bss);
+        ((void (*)(void *, void *, unsigned))native_0xef5fd)(PTR(wlc, 0x94), bss, 1);
         return 0;
     }
-    int error = ((int (*)(void *, void *, uintptr_t, uintptr_t, void *))0x130969u)(
+    int error = ((int (*)(void *, void *, uintptr_t, uintptr_t, void *))native_0x130969)(
         manager, bss, 0x2f759u, 0, mac);
     if (error || registered(manager, bss, mac))
         return error ? error : -16;

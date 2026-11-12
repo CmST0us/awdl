@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* Native A2 NAN data interfaces. Hostap owns the NDP protocol; no autonomous
  * Broadcom NDP command group is registered here. Both NDIs have distinct MACs
  * and subtype 0x0b. Never borrow a STA/AP or the NMI BSSCFG as subtype 0x0c.
@@ -7,6 +8,8 @@
 #include "nan_data.h"
 #include "nan_group.h"
 #include "nan_mac.h"
+#include "awdl_session.h"
+#include "awdl_peer.h"
 
 #define FIELD(type, base, offset) (*(type *)((uint8_t *)(base) + (offset)))
 #define PTR(base, offset) FIELD(void *, base, offset)
@@ -24,7 +27,7 @@ int nan_data_interface_info(void *bss, void *info, const void *request)
 {
     if (!bss || !info || !request)
         return -2;
-    int error = ((int (*)(void *, void *, const void *))0x128461u)(bss, info, request);
+    int error = ((int (*)(void *, void *, const void *))native_0x128461)(bss, info, request);
     if (!error) {
         U16(info, 0) = 2;
         U16(info, 2) = 28;
@@ -34,12 +37,12 @@ int nan_data_interface_info(void *bss, void *info, const void *request)
 
 static void zero(void *p, size_t size)
 {
-    ((void (*)(void *, size_t))0x18660bu)(p, size);
+    ((void (*)(void *, size_t))native_0x18660b)(p, size);
 }
 
 static void *allocate(size_t size)
 {
-    return ((void *(*)(size_t))0x7146du)(size);
+    return ((void *(*)(size_t))native_0x7146d)(size);
 }
 
 static int valid_address(const uint8_t *address)
@@ -122,8 +125,8 @@ int nan_data_context_attach(void *wlc, void *nan)
 fail:
     for (unsigned i = 0; i < sizeof(offsets); ++i)
         if (PTR(dp, offsets[i]))
-            ((void (*)(void *))0x71491u)(PTR(dp, offsets[i]));
-    ((void (*)(void *))0x71491u)(dp);
+            ((void (*)(void *))native_0x71491)(PTR(dp, offsets[i]));
+    ((void (*)(void *))native_0x71491)(dp);
     PTR(nan, 0x30) = 0;
     return error;
 }
@@ -131,9 +134,77 @@ fail:
 static int our_callbacks(void *node, void *nan)
 {
     uint32_t *cb = PTR(node, 0x0c);
-    return cb && cb[0] == (uintptr_t)nan && cb[1] == 0x36f39u &&
-           cb[2] == 0x3779du && cb[3] == 0x229e1u &&
+    return cb && cb[0] == (uintptr_t)nan && cb[1] == (uintptr_t)awdl_peer_available &&
+           cb[2] == (uintptr_t)awdl_peer_reinit && cb[3] == (uintptr_t)awdl_group_ring_owner &&
            !cb[4] && !cb[5] && !cb[6];
+}
+
+void *nan_data_owned_bss(void *nan, const unsigned char *address, unsigned *index)
+{
+    void *dp = nan ? PTR(nan, 0x30) : 0;
+    if (!valid_context(dp) || !address || !valid_address(address))
+        return 0;
+    for (unsigned i = 0; i < NDI_COUNT; ++i) {
+        if (!same_address(address, (uint8_t *)PTR(dp, 0x14) + i * 6))
+            continue;
+        void *owner = OWNER(dp, i), *manager = PTR(owner, 0);
+        unsigned native_index = U32(PTR(dp, 0x1c), i * 4);
+        void **slot = entry(manager, native_index);
+        if (!slot || !*slot || *slot != PTR(owner, 4) ||
+            manager != PTR(PTR(nan, 8), 0x678) || !(U32(owner, 8) & 1u) ||
+            !our_callbacks(*slot, nan))
+            return 0;
+        void *bss = ((void *(*)(void *, unsigned))native_0x1279d1)(manager, native_index);
+        if (!bss || PTR(bss, 0) != PTR(nan, 8) || U32(bss, 0x74) != 5 ||
+            U32(bss, 0x78) != 11 || !same_address(address, (uint8_t *)bss + 0x66))
+            return 0;
+        if (index)
+            *index = i;
+        return bss;
+    }
+    return 0;
+}
+
+int nan_data_owned_slot(void *nan, const unsigned char *address)
+{
+    unsigned index;
+    if (!nan_data_owned_bss(nan, address, &index))
+        return -30;
+    return (int)U32(PTR(PTR(nan, 0x30), 0x1c), index * 4);
+}
+
+int nan_data_unprepare(void *nan, const unsigned char *address)
+{
+    unsigned i;
+    void *bss = nan_data_owned_bss(nan, address, &i);
+    if (!bss)
+        return -30;
+    void *wlc = PTR(nan, 8), *dp = PTR(nan, 0x30);
+    int error = nan_group_idle(nan, bss, 0);
+    if (error)
+        return error;
+    if (!PTR(wlc, 0x5c) || !PTR(bss, 0x304))
+        return -30;
+    uint32_t iterator[3] = {0};
+    ((void (*)(void *, void *, void *))native_0x1239a9)(PTR(wlc, 0x5c), iterator, bss);
+    if (((void *(*)(void *, void *))native_0x1239e9)(PTR(wlc, 0x5c), iterator))
+        return -16;
+    error = nan_bss_stop(nan, bss, U32(PTR(dp, 0x1c), i * 4));
+    if (!error)
+        U32(OWNER(dp, i), 8) &= ~2u;
+    return error;
+}
+
+int nan_data_owned_channel(void *nan, const unsigned char *address,
+                           unsigned channel, unsigned opened)
+{
+    unsigned index;
+    if (opened > 1 || !nan_data_owned_bss(nan, address, &index))
+        return -30;
+    void *dp = PTR(nan, 0x30);
+    return ((int (*)(void *, unsigned, unsigned, unsigned))native_0x1278b5)(
+        PTR(OWNER(dp, index), 0), U32(PTR(dp, 0x1c), index * 4),
+        channel, opened ? 1 : 2);
 }
 
 int nan_data_register_callbacks(void *nan, unsigned index, unsigned subtype)
@@ -152,10 +223,10 @@ int nan_data_register_callbacks(void *nan, unsigned index, unsigned subtype)
     uint32_t callbacks[7];
     zero(callbacks, sizeof(callbacks));
     callbacks[0] = (uintptr_t)nan;
-    callbacks[1] = 0x36f39; /* Native peer availability / current data slot. */
-    callbacks[2] = 0x3779d; /* Native SCB capability/rate reinitialization. */
-    callbacks[3] = 0x229e1; /* Native PCIe flow-ring ownership update. */
-    return ((int (*)(void *, const uint32_t *, unsigned))0x152eb1u)(
+    callbacks[1] = (uintptr_t)awdl_peer_available;
+    callbacks[2] = (uintptr_t)awdl_peer_reinit;
+    callbacks[3] = (uintptr_t)awdl_group_ring_owner;
+    return ((int (*)(void *, const uint32_t *, unsigned))native_0x152eb1)(
         manager, callbacks, U32(PTR(dp, 0x1c), index * 4));
 }
 
@@ -176,8 +247,10 @@ static int remove_index(void *dp, unsigned i)
         return -16;
     if (U32(owner, 8) && !U8(dp, 0x18))
         return -30;
-    void *bss = ((void *(*)(void *, unsigned))0x1279d1u)(manager, index);
+    void *bss = ((void *(*)(void *, unsigned))native_0x1279d1)(manager, index);
     if (bss) {
+        if (awdl_session_holds_bss(nan, bss))
+            return -16;
         if (PTR(bss, 0) != wlc || U32(bss, 0x74) != 5 || U32(bss, 0x78) != 0x0b)
             return -30;
         if (nan_group_idle(nan, bss, 0))
@@ -188,8 +261,8 @@ static int remove_index(void *dp, unsigned i)
             return -30;
         uint32_t iterator[3];
         zero(iterator, sizeof(iterator));
-        ((void (*)(void *, void *, void *))0x1239a9u)(PTR(wlc, 0x5c), iterator, bss);
-        if (((void *(*)(void *, void *))0x1239e9u)(PTR(wlc, 0x5c), iterator))
+        ((void (*)(void *, void *, void *))native_0x1239a9)(PTR(wlc, 0x5c), iterator, bss);
+        if (((void *(*)(void *, void *))native_0x1239e9)(PTR(wlc, 0x5c), iterator))
             return -16;
         int error = nan_bss_stop(nan, bss, index);
         if (error)
@@ -198,7 +271,7 @@ static int remove_index(void *dp, unsigned i)
     if (PTR(node, 0x0c)) {
         if (!our_callbacks(node, nan))
             return -30;
-        int error = ((int (*)(void *, unsigned))0x128649u)(manager, index);
+        int error = ((int (*)(void *, unsigned))native_0x128649)(manager, index);
         if (error || PTR(node, 0x0c))
             return error ? error : -16;
     }
@@ -208,7 +281,7 @@ static int remove_index(void *dp, unsigned i)
      * but that ownership model does not apply to our independent NDI. */
     if (bss && PTR(bss, 0x38) && PTR(PTR(bss, 0x38), 0x0c) != bss)
         return -30;
-    int error = ((int (*)(void *, unsigned))0x1281e5u)(manager, index);
+    int error = ((int (*)(void *, unsigned))native_0x1281e5)(manager, index);
     if (*slot)
         return error ? error : -16;
     if (U32(owner, 8))
@@ -229,7 +302,7 @@ int nan_data_enable(void *nan, void *bss, unsigned i)
     unsigned index = U32(PTR(dp, 0x1c), i * 4);
     void **slot = entry(manager, index);
     if (!slot || !node || *slot != node || manager != PTR(PTR(nan, 8), 0x678) ||
-        ((void *(*)(void *, unsigned))0x1279d1u)(manager, index) != bss ||
+        ((void *(*)(void *, unsigned))native_0x1279d1)(manager, index) != bss ||
         U32(bss, 0x74) != 5 || U32(bss, 0x78) != 11 || !our_callbacks(node, nan) ||
         !(U32(owner, 8) & 1u))
         return -30;
@@ -241,7 +314,7 @@ int nan_data_enable(void *nan, void *bss, unsigned i)
      * host-created NDI's own BCMC SCB instead of borrowing NMI +0x38. */
     int error = nan_bss_prepare_enable(nan, bss, 0, index);
     if (error || !U8(bss, 5) || !U8(node, 1)) {
-        ((int (*)(const char *, ...))0xa815u)(
+        ((int (*)(const char *, ...))native_0xa815)(
             "NAN NDI prepare: error=%d bss=%u node=%u\n",
             error, U8(bss, 5), U8(node, 1));
         return error ? error : -30;
@@ -308,8 +381,8 @@ void *nan_data_create(void *wlc, void *dp, const void *request, int *status)
     void *manager = PTR(wlc, 0x678);
     if (!entry(manager, 0))
         return 0;
-    if (((void *(*)(void *, const uint8_t *))0x1515c1u)(wlc, address) ||
-        ((int (*)(void *, const uint8_t *))0x126565u)(manager, address) >= 0) {
+    if (((void *(*)(void *, const uint8_t *))native_0x1515c1)(wlc, address) ||
+        ((int (*)(void *, const uint8_t *))native_0x126565)(manager, address) >= 0) {
         *status = -21;
         return 0;
     }
@@ -337,7 +410,7 @@ void *nan_data_create(void *wlc, void *dp, const void *request, int *status)
     const uint8_t type[4] = {5, 0x0b, 0, 0};
     local_request[0] = (uintptr_t)type;
     *status = 0;
-    void *bss = ((void *(*)(void *, void *, uint32_t *, int *))0x127821u)(
+    void *bss = ((void *(*)(void *, void *, uint32_t *, int *))native_0x127821)(
         manager, local_request, &U32(PTR(dp, 0x1c), i * 4), status);
     void **slot = entry(manager, U32(PTR(dp, 0x1c), i * 4));
     if (!bss && (!slot || !*slot)) {
@@ -354,7 +427,7 @@ void *nan_data_create(void *wlc, void *dp, const void *request, int *status)
                      U32(bss, 0x74) != 5 || U32(bss, 0x78) != 0x0b))
         *status = -30;
     if (!*status)
-        *status = ((int (*)(void *, unsigned, unsigned))0x152061u)(PTR(dp, 8), i, 0x0b);
+        *status = ((int (*)(void *, unsigned, unsigned))native_0x152061)(PTR(dp, 8), i, 0x0b);
     if (*status) {
         int cleanup = remove_index(dp, i);
         if (cleanup)

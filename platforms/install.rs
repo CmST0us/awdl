@@ -24,6 +24,14 @@ pub fn install(root: &Path, cfg: &Settings) -> Result<()> {
         ],
         "pro-rk3568" => &[
             (
+                "wifi-aware-bluetooth.service",
+                "etc/systemd/system/wifi-aware-bluetooth.service",
+            ),
+            (
+                "airdrop-bluetooth.conf",
+                "etc/systemd/system/airdrop.service.d/rk3568-bluetooth.conf",
+            ),
+            (
                 "wifi-aware-performance.service",
                 "etc/systemd/system/wifi-aware-performance.service",
             ),
@@ -43,6 +51,13 @@ pub fn install(root: &Path, cfg: &Settings) -> Result<()> {
             &root.join("platforms").join(name).join(source),
             &cfg.dest.join(target),
             0o644,
+        )?;
+    }
+    if name == "pro-rk3568" {
+        copy(
+            &root.join("platforms/pro-rk3568/rk3568-bluetooth-power"),
+            &cfg.dest.join("usr/local/libexec/wifi-aware/rk3568-bluetooth-power"),
+            0o755,
         )?;
     }
     if cfg.dest == Path::new("/") {

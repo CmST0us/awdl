@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* Active A2 NAN lifecycle. Keep allocation and scheduling failures observable,
  * retain ownership until actual cancellation, and publish completed state. */
 #include <stddef.h>
@@ -44,8 +45,8 @@ void nan_watchdog(void *wrapper)
      * expired peer with a station, TX or NDP owner remains allocated.
      * Autonomous DAM/NDP/ranging/security watchdogs are deliberately absent:
      * their negotiation/termination policy belongs to the host backend. */
-    ((void (*)(void *, void *))0x30069u)(mac, wlc);
-    ((void (*)(void *, void *))0x37a5du)(nan, wlc);
+    ((void (*)(void *, void *))native_0x30069)(mac, wlc);
+    ((void (*)(void *, void *))native_0x37a5d)(nan, wlc);
 }
 
 int nan_mac_enable_active(void *wlc, void *nan)
@@ -62,8 +63,6 @@ int nan_mac_enable_active(void *wlc, void *nan)
         !U8(PTR(nan, 0x10), 0x20))
         return -25;
     if (U8(runtime, 0x4a)) {
-        ((int (*)(const char *, ...))0xa815u)("NAN MAC already active: pub=%u\n",
-            U8(PTR(PTR(wlc, 0), 4), 0x30));
         return U8(PTR(PTR(wlc, 0), 4), 0x30) ? 0 : -16;
     }
     /* A failed cancellation retains timers, schedules and in-flight TX for
@@ -71,33 +70,29 @@ int nan_mac_enable_active(void *wlc, void *nan)
      * NMI emits native BSS notification 0x80, whose 0x2a6f4 callback builds
      * both templates. The cluster builder updates those owned templates. */
     if (PTR(mac, 0xe4) || PTR(mac, 0x10c) || U32(mac, 0xb4)) {
-        ((int (*)(const char *, ...))0xa815u)("NAN MAC pending owners: %p %p %u\n",
-            PTR(mac, 0xe4), PTR(mac, 0x10c), U32(mac, 0xb4));
         return -16;
     }
     for (unsigned band = 0; band < 2; ++band) {
         void *context = ((void **)bands)[band];
         if (PTR(context, 0x0c) || PTR(context, 0x10) || PTR(context, 0x14)) {
-            ((int (*)(const char *, ...))0xa815u)("NAN MAC band %u pending: %p %p %p\n",
-                band, PTR(context, 0x0c), PTR(context, 0x10), PTR(context, 0x14));
             return -16;
         }
     }
     void *bss = PTR(PTR(bands, 0), 0);
     int error = -27;
     const char *stage = "timers";
-    PTR(mac, 0x10c) = ((void *(*)(void *))0x1f41du)(nan);
+    PTR(mac, 0x10c) = ((void *(*)(void *))native_0x1f41d)(nan);
     if (!PTR(mac, 0x10c))
         return error;
     /* Native callback/name literals: A2 0x2efd0/0x2efcc. Allocate both
      * timers before cluster, packet or schedule work can become active. */
-    PTR(mac, 0xe4) = ((void *(*)(void *, uintptr_t, void *, uintptr_t))0x1f445u)(
+    PTR(mac, 0xe4) = ((void *(*)(void *, uintptr_t, void *, uintptr_t))native_0x1f445)(
         nan, 0x29909u, mac, 0x15764au);
     if (!PTR(mac, 0xe4))
         goto failed;
     U8(PTR(mac, 0x34), 0x30) = 0;
     stage = "cluster";
-    error = ((int (*)(void *, void *, void *, void *))0x2aa9du)(
+    error = ((int (*)(void *, void *, void *, void *))native_0x2aa9d)(
         mac, bss, runtime, config);
     U32(runtime, 0x4c) = error;
     if (error)
@@ -109,7 +104,7 @@ int nan_mac_enable_active(void *wlc, void *nan)
         goto failed;
     }
     U32(runtime, 4) = 2;
-    ((void (*)(void *))0x2abb9u)(mac);
+    ((void (*)(void *))native_0x2abb9)(mac);
     U8(runtime, 0x4a) = 1;
     /* 0x2c388 returns its logger's result on DW registration failure.
      * Its band=2 loop also overwrites a first-band failure with the second
@@ -117,14 +112,14 @@ int nan_mac_enable_active(void *wlc, void *nan)
     unsigned bands_used = U8(config, 0x50) ? 2 : 1;
     stage = "DW";
     for (unsigned band = 0; band < bands_used; ++band) {
-        error = ((int (*)(void *, unsigned))0x2e08du)(mac, band);
+        error = ((int (*)(void *, unsigned))native_0x2e08d)(mac, band);
         if (error)
             break;
     }
     if (!error && U32(runtime, 0x10) - 3u < 2u) {
         stage = "scan";
         for (unsigned band = 0; band < bands_used; ++band) {
-            error = ((int (*)(void *, unsigned))0x2e039u)(mac, band);
+            error = ((int (*)(void *, unsigned))native_0x2e039)(mac, band);
             if (error)
                 break;
         }
@@ -134,23 +129,21 @@ int nan_mac_enable_active(void *wlc, void *nan)
         ++U32(PTR(mac, 0x70), 0x50);
         goto failed;
     }
-    ((void (*)(void *, uint32_t, uint32_t, void *, void *, unsigned))0x30261u)(
+    ((void (*)(void *, uint32_t, uint32_t, void *, void *, unsigned))native_0x30261)(
         mac, U32(mac, 0x5c), U32(mac, 0x58), (uint8_t *)mac + 0xbc,
         (uint8_t *)mac + 0xb8, U16(runtime, 0x54));
-    ((void (*)(void *, unsigned))0xbefe9u)(PTR(wlc, 0x100), 0);
-    ((void (*)(void *, unsigned))0x22559u)(nan, 1);
+    ((void (*)(void *, unsigned))native_0xbefe9)(PTR(wlc, 0x100), 0);
+    ((void (*)(void *, unsigned))native_0x22559)(nan, 1);
     stage = "band enable";
-    error = ((int (*)(void *, unsigned))0x2fc5du)(mac, 0);
+    error = ((int (*)(void *, unsigned))native_0x2fc5d)(mac, 0);
     if (!error && U8(config, 0x50))
-        error = ((int (*)(void *, unsigned))0x2fc5du)(mac, 1);
+        error = ((int (*)(void *, unsigned))native_0x2fc5d)(mac, 1);
     if (error)
         goto failed;
     return 0;
 failed: {
-    ((int (*)(const char *, ...))0xa815u)("NAN MAC %s: %d\n", stage, error);
     int cleanup = nan_mac_disable_active(wlc, nan);
-    if (cleanup)
-        ((int (*)(const char *, ...))0xa815u)("NAN MAC cleanup: %d\n", cleanup);
+    ((int (*)(const char *, ...))native_0xa815)("NAN MAC %s: %d/%d\n", stage, error, cleanup);
     return cleanup ? cleanup : error;
 }
 }
@@ -177,7 +170,7 @@ int nan_modules_disable(void *wlc, void *nan)
     if (!error)
         error = nan_dam_disable(wlc, nan);
     if (!error)
-        error = ((int (*)(void *, void *))0x26079u)(wlc, nan);
+        error = ((int (*)(void *, void *))native_0x26079)(wlc, nan);
     if (!error)
         error = nan_mac_disable_active(wlc, nan);
     return error;
@@ -188,9 +181,8 @@ int nan_modules_enable(void *wlc, void *nan)
     int error = nan_mac_enable_active(wlc, nan);
     if (error)
         return error;
-    error = ((int (*)(void *, void *))0x21bb9u)(wlc, nan);
+    error = ((int (*)(void *, void *))native_0x21bb9)(wlc, nan);
     if (error) {
-        ((int (*)(const char *, ...))0xa815u)("NAN DAM enable: %d\n", error);
         int cleanup = nan_modules_disable(wlc, nan);
         return cleanup ? cleanup : error;
     }
@@ -218,33 +210,30 @@ int nan_common_enable(void *nan, unsigned band)
         return -26;
     uint8_t power = U8(wlc, 0x133);
     U8(wlc, 0x133) = 1;
-    ((void (*)(void *))0x8c3bdu)(wlc);
+    ((void (*)(void *))native_0x8c3bd)(wlc);
     int error = -4;
     if (U8(PTR(wlc, 0), 0x1c)) {
-        error = ((int (*)(void *, void *, unsigned, unsigned))0x1fd59u)(
+        error = ((int (*)(void *, void *, unsigned, unsigned))native_0x1fd59)(
             nan, bss, band, U32(mac, 0xd4));
         if (!error)
             error = nan_modules_enable(wlc, nan);
-        if (!error) {
+        if (!error)
             error = nan_bss_events(nan, 1);
-            if (error)
-                ((int (*)(const char *, ...))0xa815u)("NAN BSS events: %d\n", error);
-        }
         if (!error) {
             U32(mac, NAN_MAC_HOST_STOPPING) = 0;
             U8(PTR(PTR(wlc, 0), 4), 0x30) = 1;
-            ((void (*)(void *, unsigned))0x1e53du)(nan, band);
-            ((void (*)(void *, uint32_t))0x1d821u)(nan, U32(PTR(nan, 0x10), 0x34));
-            ((void (*)(void *, void *, unsigned, unsigned))0x2bd6du)(mac, bss, 0x9e, 1);
+            ((void (*)(void *, unsigned))native_0x1e53d)(nan, band);
+            ((void (*)(void *, uint32_t))native_0x1d821)(nan, U32(PTR(nan, 0x10), 0x34));
+            ((void (*)(void *, void *, unsigned, unsigned))native_0x2bd6d)(mac, bss, 0x9e, 1);
         } else {
-            ((int (*)(const char *, ...))0xa815u)("NAN enable failed: %d\n", error);
+            ((int (*)(const char *, ...))native_0xa815)("NAN enable failed: %d\n", error);
             int cleanup = nan_common_disable(nan, band);
             if (cleanup)
                 error = cleanup;
         }
     }
     U8(wlc, 0x133) = power;
-    ((void (*)(void *))0x8c3bdu)(wlc);
+    ((void (*)(void *))native_0x8c3bd)(wlc);
     return error;
 }
 
@@ -281,9 +270,9 @@ int nan_common_disable(void *nan, unsigned band)
     if (!error)
         error = nan_modules_disable(wlc, nan);
     if (!error)
-        error = ((int (*)(void *, void *))0x22769u)(PTR(nan, 0x30), wlc);
+        error = ((int (*)(void *, void *))native_0x22769)(PTR(nan, 0x30), wlc);
     if (!error)
-        error = ((int (*)(void *, void *))0x2e87du)(mac, bss);
+        error = ((int (*)(void *, void *))native_0x2e87d)(mac, bss);
     if (!error)
         error = nan_bss_events(nan, 0);
     if (error)
@@ -291,11 +280,11 @@ int nan_common_disable(void *nan, unsigned band)
     /* Native code clears PUBCMN before these fallible BSS operations, making
      * the next STOP look complete. Commit only after actual BSS stop. */
     if (PTR(nan, 0x84))
-        ((void (*)(void *))0x1f779u)(nan);
+        ((void (*)(void *))native_0x1f779)(nan);
     U8(PTR(PTR(wlc, 0), 4), 0x30) = 0;
-    ((void (*)(void *, unsigned))0x1e53du)(nan, band);
+    ((void (*)(void *, unsigned))native_0x1e53d)(nan, band);
     if (active)
-        ((void (*)(void *, void *, unsigned, unsigned))0x2bd6du)(mac, bss, 0x9e, 0x0b);
+        ((void (*)(void *, void *, unsigned, unsigned))native_0x2bd6d)(mac, bss, 0x9e, 0x0b);
     return 0;
 }
 
@@ -339,11 +328,11 @@ int nan_mac_disable_active(void *wlc, void *nan)
                 return -30;
             continue;
         }
-        error = ((int (*)(void *, unsigned))0x2e115u)(mac, band);
+        error = ((int (*)(void *, unsigned))native_0x2e115)(mac, band);
         if (!error)
-            error = ((int (*)(void *, unsigned))0x2e085u)(mac, band);
+            error = ((int (*)(void *, unsigned))native_0x2e085)(mac, band);
         if (!error)
-            error = ((int (*)(void *, unsigned))0x2e1c9u)(mac, band);
+            error = ((int (*)(void *, unsigned))native_0x2e1c9)(mac, band);
         if (error)
             return error;
         if (PTR(context, 0x0c) || PTR(context, 0x10) || PTR(context, 0x14))
@@ -354,16 +343,16 @@ int nan_mac_disable_active(void *wlc, void *nan)
          * wl_free_timer subsequently frees the timer object, not just a tag. */
         if (!PTR(PTR(mac, 0xe4), 0x44))
             return -30;
-        if (!((int (*)(void *, void *))0x1ef85u)(nan, PTR(mac, 0xe4)))
+        if (!((int (*)(void *, void *))native_0x1ef85)(nan, PTR(mac, 0xe4)))
             return -16;
-        ((void (*)(void *, void *))0x1f1c5u)(nan, PTR(mac, 0xe4));
+        ((void (*)(void *, void *))native_0x1f1c5)(nan, PTR(mac, 0xe4));
         PTR(mac, 0xe4) = 0;
     }
     if (PTR(mac, 0x10c)) {
         /* 0x1f434 only cancels HRT. 0x1f43c cancels and frees the allocation. */
         if (!PTR(PTR(mac, 0x10c), 4))
             return -30;
-        ((void (*)(void *, void *))0x1f43du)(nan, PTR(mac, 0x10c));
+        ((void (*)(void *, void *))native_0x1f43d)(nan, PTR(mac, 0x10c));
         PTR(mac, 0x10c) = 0;
     }
     U8(mac, 0x94) = 0;

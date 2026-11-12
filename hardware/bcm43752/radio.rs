@@ -15,7 +15,10 @@ pub fn check(
     require_data: bool,
     owns_awdl: bool,
 ) -> Result<()> {
-    ensure!(!owns_awdl, "BCM43752 当前只允许原生 NAN");
+    ensure!(
+        owns_awdl || !aware_common::unix::interface_exists("awdl0")?,
+        "BCM43752 awdl0 缺少公共 AWDL 管理器所有权"
+    );
     ensure!(
         entries.len() == 1 && entries[0].0 == control && entries[0].1 == "managed",
         "BCM43752 的物理命令节点或单一 NAN 约束已改变"
@@ -36,6 +39,6 @@ pub fn validate(profile: &Profile) -> Result<()> {
             && (50..=200).contains(&profile.nan.discovery_beacon_interval_tu),
         "BCM43752 master_preference 必须为 1–254，发现信标间隔为 50–200 TU"
     );
-    ensure!(profile.awdl.is_none(), "BCM43752 无线策略不能包含 AWDL");
+    ensure!(profile.awdl.is_some(), "BCM43752 缺少原生 AWDL 传输策略");
     Ok(())
 }

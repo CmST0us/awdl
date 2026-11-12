@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* A2 schedule response ownership. Keep native peer-NDC validation and NA
  * encoding; do not turn their allocation/parse failures into generic success.
  * These callbacks do not enable a second protocol owner alongside hostap.
@@ -73,7 +74,7 @@ static int response_arrays(void *dam, void *peer, void **maps, void **out,
     }
     /* Actual A2 helper obtains the current maximum period and two arrays.
      * Do not import B0 stack/layout assumptions or silently truncate a peer. */
-    ((void (*)(void *, void **, void **, void *, uint16_t *))0x21081u)(
+    ((void (*)(void *, void **, void **, void *, uint16_t *))native_0x21081)(
         dam, maps, out, peer, slots);
     if (*slots != count || out[0] != PTR(proposal, 0x18) || out[1])
         return -2;
@@ -85,8 +86,8 @@ static void free_map(void *nan, void *map)
     if (map) {
         /* Native invalidation skips entries whose map ID is still 0xff.
          * A prepared, not-yet-encoded grid nevertheless has a real owner. */
-        ((void (*)(void *, void *))0x30ab9u)(nan, map);
-        ((void (*)(void *, void *))0x30a55u)(nan, map);
+        ((void (*)(void *, void *))native_0x30ab9)(nan, map);
+        ((void (*)(void *, void *))native_0x30a55)(nan, map);
     }
 }
 
@@ -97,7 +98,7 @@ static int prepare_request(void *dam, void *peer, void **maps, void **out,
 {
     void *nan = PTR(dam, 4), *container = PTR(dam, 0x18);
     void *source = PTR(peer, 0x0c), *old = PTR(dam, 0x38);
-    void *local = ((void *(*)(void *))0x3100du)(nan);
+    void *local = ((void *(*)(void *))native_0x3100d)(nan);
     if (!local || !source || !container || U8(dam, 0x10) != 1 ||
         !U8(source, 0) || U8(source, 0) > 2 || !PTR(dam, 0x28) ||
         U16(dam, 0x14) != 16 || U8(container, 4) != 16)
@@ -112,7 +113,7 @@ static int prepare_request(void *dam, void *peer, void **maps, void **out,
     if (old && (U8(old, 0) != 1 || old == source || old == local ||
                 old == PTR(peer, 0x4c) || PTR(old, 8) || PTR(old, 0x0c) ||
                 PTR(old, 0x18) == PTR(container, 8) ||
-                ((int (*)(void *))0x20845u)(dam)))
+                ((int (*)(void *))native_0x20845)(dam)))
         return -16;
     void *negotiated = PTR(peer, 0x4c);
     if (negotiated && (U8(negotiated, 0) != 1 || negotiated == source ||
@@ -129,21 +130,21 @@ static int prepare_request(void *dam, void *peer, void **maps, void **out,
     }
     /* Receive parsing supplies actual peer grids. An OOB peer with no
      * advertised map must not be turned into an invented channel offer. */
-    if (!((unsigned (*)(void *, void *))0x31339u)(nan, source))
+    if (!((unsigned (*)(void *, void *))native_0x31339)(nan, source))
         return -25;
     uint16_t period = 0;
-    int error = ((int (*)(void *, void *, uint16_t *))0x32155u)(nan, peer, &period);
+    int error = ((int (*)(void *, void *, uint16_t *))native_0x32155)(nan, peer, &period);
     if (error)
         return error; /* Earlier successful growth still owns its replacements. */
     if (period < 512 || period > 8192 || (period & (period - 1)))
         return -2;
-    void *proposal = ((void *(*)(void *, unsigned))0x303adu)(nan, 1);
+    void *proposal = ((void *(*)(void *, unsigned))native_0x303ad)(nan, 1);
     if (!proposal)
         return -27;
-    error = ((int (*)(void *, void *, unsigned, unsigned))0x304f9u)(
+    error = ((int (*)(void *, void *, unsigned, unsigned))native_0x304f9)(
         nan, proposal, 16, period);
     if (!error && !negotiated) {
-        negotiated = ((void *(*)(void *, unsigned))0x303adu)(nan, 1);
+        negotiated = ((void *(*)(void *, unsigned))native_0x303ad)(nan, 1);
         if (!negotiated)
             error = -27;
         else
@@ -163,8 +164,8 @@ static int prepare_request(void *dam, void *peer, void **maps, void **out,
 static int host_result(void *dam, void *result, unsigned request)
 {
     void *nan = PTR(dam, 4);
-    void *map = ((void *(*)(void *))0x3100du)(nan);
-    void *table = ((void *(*)(void *))0x33a5du)(PTR(nan, 0x4c));
+    void *map = ((void *(*)(void *))native_0x3100d)(nan);
+    void *table = ((void *(*)(void *))native_0x33a5d)(PTR(nan, 0x4c));
     unsigned bitmap = U16(dam, 0x22), index = U8(dam, 0x24);
     if (!map || !table || !bitmap ||
         (request && (index >= 16 || !(bitmap & (1u << index)))))
@@ -206,11 +207,11 @@ static int negotiate(void *dam, unsigned type, void *peer, void *result,
     }
     if (request) {
         error = ((int (*)(void *, unsigned, void *, void **, void **, void **,
-                          unsigned, unsigned))0x20b61u)(
+                          unsigned, unsigned))native_0x20b61)(
             dam, type, peer, &local, maps, out, committed, slots);
         if (error == -1) { /* Negotiation conflict; malformed state is fatal. */
             error = ((int (*)(void *, unsigned, void *, void **, void **,
-                              void **, unsigned))0x209f5u)(
+                              void **, unsigned))native_0x209f5)(
                 dam, type, peer, &local, maps, out, slots);
             counter = 1;
         }
@@ -220,9 +221,9 @@ static int negotiate(void *dam, unsigned type, void *peer, void *result,
     if (error)
         return reject(result, 1, error);
     void *nan = PTR(dam, 4), *proposal = PTR(dam, 0x38);
-    ((void (*)(void *, void *))0x30871u)(nan, PTR(dam, 0x28));
+    ((void (*)(void *, void *))native_0x30871)(nan, PTR(dam, 0x28));
     error = ((int (*)(void *, void *, void **, unsigned, unsigned,
-                      unsigned, unsigned))0x31ea5u)(
+                      unsigned, unsigned))native_0x31ea5)(
         nan, proposal, out, 1, !request || counter ? 0x23 : 0x21, 0, 1);
     if (error)
         return reject(result, 1, error);
@@ -230,16 +231,16 @@ static int negotiate(void *dam, unsigned type, void *peer, void *result,
         error = nan_dam_update_ndc_entry(dam, peer, committed && !counter);
     if (error)
         return reject(result, 0x101, error);
-    int index = ((int (*)(void *, void *))0x31a41u)(nan, PTR(peer, 0x5c));
+    int index = ((int (*)(void *, void *))native_0x31a41)(nan, PTR(peer, 0x5c));
     if (index < 0 || index >= 16)
         return reject(result, 0x101, -30);
     PTR(result, 8) = proposal;
-    PTR(result, 0x0c) = ((void *(*)(void *))0x33a5du)(PTR(nan, 0x4c));
+    PTR(result, 0x0c) = ((void *(*)(void *))native_0x33a5d)(PTR(nan, 0x4c));
     U16(result, 0x10) = 1u << index;
     U8(result, 0x12) = request ? (unsigned)index : 0xff;
     U32(result, 0) = request && !counter;
     U16(result, 4) = 0;
-    ((void (*)(void *, unsigned))0x31d6du)(nan, 0x10);
+    ((void (*)(void *, unsigned))native_0x31d6d)(nan, 0x10);
     return 0;
 }
 
@@ -267,28 +268,28 @@ int nan_dam_process_counter(void *dam, unsigned type, void *peer, void *result)
         return reject(result, 1, error);
     void *local = PTR(PTR(dam, 0x18), 8);
     error = ((int (*)(void *, unsigned, void *, void **, void **, void **,
-                      unsigned))0x209f5u)(dam, type, peer, &local, maps, out, slots);
+                      unsigned))native_0x209f5)(dam, type, peer, &local, maps, out, slots);
     if (error)
         return reject(result, 1, error);
     void *nan = PTR(dam, 4), *proposal = PTR(dam, 0x38);
-    ((void (*)(void *, void *))0x30871u)(nan, PTR(dam, 0x28));
+    ((void (*)(void *, void *))native_0x30871)(nan, PTR(dam, 0x28));
     error = ((int (*)(void *, void *, void **, unsigned, unsigned,
-                      unsigned, unsigned))0x31ea5u)(nan, proposal, out, 1, 0x21, 0, 1);
+                      unsigned, unsigned))native_0x31ea5)(nan, proposal, out, 1, 0x21, 0, 1);
     if (error)
         return reject(result, 1, error);
     error = nan_dam_update_ndc_entry(dam, peer, 1);
     if (error)
         return reject(result, 0x101, error);
-    int index = ((int (*)(void *, void *))0x31a41u)(nan, PTR(peer, 0x5c));
+    int index = ((int (*)(void *, void *))native_0x31a41)(nan, PTR(peer, 0x5c));
     if (index < 0 || index >= 16)
         return reject(result, 0x101, -30);
     PTR(result, 8) = proposal;
-    PTR(result, 0x0c) = ((void *(*)(void *))0x33a5du)(PTR(nan, 0x4c));
+    PTR(result, 0x0c) = ((void *(*)(void *))native_0x33a5d)(PTR(nan, 0x4c));
     U16(result, 0x10) = 1u << index;
     U8(result, 0x12) = index;
     U32(result, 0) = 1;
     U16(result, 4) = 0;
-    ((void (*)(void *, unsigned))0x31d6du)(nan, 0x10);
+    ((void (*)(void *, unsigned))native_0x31d6d)(nan, 0x10);
     return 0;
 }
 
@@ -310,13 +311,13 @@ int nan_dam_process_response(void *dam, unsigned type, void *peer, void *result,
             U16(result, 4) = 0;
             return 0;
         }
-        void *local = ((void *(*)(void *))0x3100du)(nan);
+        void *local = ((void *(*)(void *))native_0x3100d)(nan);
         if (!local)
             return reject(result, 0x100, -1);
         if (type == 3 && !U16(dam, 0x22))
             return reject(result, 0x101, -1);
         PTR(result, 8) = local;
-        PTR(result, 0x0c) = ((void *(*)(void *))0x33a5du)(PTR(nan, 0x4c));
+        PTR(result, 0x0c) = ((void *(*)(void *))native_0x33a5d)(PTR(nan, 0x4c));
         U16(result, 0x10) = U16(dam, 0x22);
         U8(result, 0x12) = U8(dam, 0x24);
         U32(result, 0) = 1;
@@ -334,7 +335,7 @@ int nan_dam_process_response(void *dam, unsigned type, void *peer, void *result,
     uint16_t slots;
     error = response_arrays(dam, peer, maps, out, &slots);
     if (!error)
-        error = ((int (*)(void *, unsigned, void **, void **, unsigned))0x2187du)(
+        error = ((int (*)(void *, unsigned, void **, void **, unsigned))native_0x2187d)(
             dam, type, maps, out, slots);
     if (!error)
         error = nan_dam_update_ndc_entry(dam, peer, 1);

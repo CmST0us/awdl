@@ -1,0 +1,19 @@
+[Unit]
+# 本板 AP6275P 蓝牙通过 UART8 提供 AirDrop 专用 HCI，不启动 BlueZ 管理守护进程。
+Description=RK3568 AP6275P AirDrop Bluetooth UART
+After=dev-ttyS8.device
+Requires=dev-ttyS8.device
+Conflicts=bluetooth.service
+Before=airdrop.service
+
+[Service]
+# hciattach 在固件下载和 HCI line discipline 安装成功后才 fork；父进程完成表示就绪。
+Type=forking
+ExecStartPre=/usr/local/libexec/wifi-aware/rk3568-bluetooth-power
+# 初始与运行 UART 速率单位 bit/s；与本板 UART8、RTS/CTS 及 AP6275P 固件对应。
+# -t 为初始化失败期限，单位秒；flow 启用硬件流控，nosleep 不启用 UART 休眠协议。
+ExecStart=/usr/bin/hciattach -t 30 -s 115200 /dev/ttyS8 bcm43xx 1500000 flow nosleep
+# 覆盖 hciattach 内部初始化期限；正常退出由信号中断 ppoll 并恢复 TTY line discipline。
+TimeoutStartSec=35
+TimeoutStopSec=10
+Restart=no

@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* Native A2 batch-command registration. The handler addresses below belong
  * only to the hash-locked 18.35.387.23.146 ROM/RAM pair. See PATCHING.md.
  * Handlers keep their actual validation, state changes, events and errors.
@@ -11,6 +12,8 @@
 #include "nan_group.h"
 #include "nan_schedule.h"
 #include "nan_host_abi.h"
+#include "awdl_command.h"
+#include "awdl_host_abi.h"
 
 typedef void *(*parse_alloc_fn)(void *, size_t);
 typedef void (*parse_free_fn)(void *, void *, size_t);
@@ -80,7 +83,7 @@ int nan_statistics(void *nan, const uint8_t *request,
                                    output + used, capacity - used, &bytes);
         else if (entries[i].data)
             error = ((int (*)(void *, unsigned, uint8_t *, size_t,
-                               size_t *, unsigned))0x1e35du)(
+                               size_t *, unsigned))native_0x1e35d)(
                 nan, request[4], output + used, capacity - used, &bytes, i);
         if (error)
             return error;
@@ -121,7 +124,7 @@ int nan_command_validate(const struct nan_command_digest *digest, uint32_t actio
     if ((command->id == 0x101 || command->id == 0x116) &&
         length == 1 && input[0] > 1)
         return -2; /* Reject the entire batch before any earlier command mutates. */
-    return ((nan_command_validator)0x29069u)(
+    return ((nan_command_validator)native_0x29069)(
         digest, action, input, length, output, output_length);
 }
 
@@ -137,7 +140,7 @@ static int initialize_command(const struct nan_command_digest *digest,
     uint8_t *common = *(uint8_t **)((uint8_t *)nan + 0x10);
     uint8_t power = wlc[0x131];
     wlc[0x131] = 1;
-    ((void (*)(void *))0x8c3bdu)(wlc);
+    ((void (*)(void *))native_0x8c3bd)(wlc);
     int error;
     if (!input[0])
         error = nan_deinitialize(wlc, nan);
@@ -150,7 +153,7 @@ static int initialize_command(const struct nan_command_digest *digest,
     /* Single NAN does not enable the reference's scan/STA coexistence hook.
      * Preserve native power bracketing and report deinit errors to the host. */
     wlc[0x131] = power;
-    ((void (*)(void *))0x8c3bdu)(wlc);
+    ((void (*)(void *))native_0x8c3bd)(wlc);
     *output_length = 0;
     return error;
 }
@@ -181,8 +184,8 @@ static int enable_command(const struct nan_command_digest *digest,
      * the prepared NMI BSS exists, including after a failed cancellation. */
     if (!input[0] && !*(void **)(mac + NAN_MAC_BSS_MANAGER))
         return 0;
-    unsigned band = ((int (*)(void *))0x2f5b9u)(mac) ? 2 : 0;
-    return ((int (*)(void *, void *, unsigned, unsigned))0x1e05du)(
+    unsigned band = ((int (*)(void *))native_0x2f5b9)(mac) ? 2 : 0;
+    return ((int (*)(void *, void *, unsigned, unsigned))native_0x1e05d)(
         wlc, nan, input[0], band);
 }
 
@@ -253,6 +256,11 @@ static int validate_host_control2(const struct nan_command_digest *digest,
  * native core/module behavior while retaining failures and cleanup ownership.
  * Host frames, stations and pairwise keys share the same batch validation. */
 static const struct nan_command core_commands[] = {
+    { .id = BCM_AWDL_COMMAND, .validate = awdl_command_validate,
+      .get = awdl_command_query, .set = awdl_command_set,
+      .min_set = BCM_AWDL_HEADER_SIZE,
+      .max_set = BCM_AWDL_TX_HEADER_SIZE + BCM_AWDL_TX_FRAME_MAX,
+      .min_get = BCM_AWDL_HEADER_SIZE, .max_get = BCM_AWDL_HEADER_SIZE },
     { .id = BCM_NAN_HOST_GROUP_KEY_COMMAND, .validate = nan_group_validate,
       .set = nan_group_command, .get = nan_group_sequence,
       .min_set = BCM_NAN_HOST_GROUP_KEY_SIZE, .max_set = BCM_NAN_HOST_GROUP_KEY_SIZE,
@@ -330,7 +338,7 @@ int nan_commands_detach(void *nan_context)
         (int (*)(void **, parse_free_fn))0x20c0e5u;
     if (!nan_context)
         return -2;
-    return free_parse_context(parser_slot(nan_context), (parse_free_fn)0x29105u);
+    return free_parse_context(parser_slot(nan_context), (parse_free_fn)native_0x29105);
 }
 
 int nan_commands_register(void *nan_context, void *command_context,

@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* A2 host-owned NAN runtime lifecycle. The ROM common deinitializer skips
  * partial initialization and discards module/unregister errors. Keep those
  * errors and their resources until a real retry can finish cleanup. */
@@ -101,7 +102,7 @@ int nan_modules_deinitialize(void *wlc, void *nan)
 static void release_slot(void *owner, size_t offset)
 {
     if (PTR(owner, offset)) {
-        ((void (*)(void *))0x71491u)(PTR(owner, offset));
+        ((void (*)(void *))native_0x71491)(PTR(owner, offset));
         PTR(owner, offset) = 0;
     }
 }
@@ -121,7 +122,7 @@ int nan_deinitialize(void *wlc, void *nan)
     if (error)
         return error;
     if (PTR(common, 0x3c)) {
-        error = ((int (*)(void *, void *))0x1ffc9u)(nan, PTR(common, 0x3c));
+        error = ((int (*)(void *, void *))native_0x1ffc9)(nan, PTR(common, 0x3c));
         if (error)
             return error;
         PTR(common, 0x3c) = 0;
@@ -130,7 +131,7 @@ int nan_deinitialize(void *wlc, void *nan)
         return -16;
     release_slot(common, 8);
     release_slot(common, 0x1c);
-    ((void (*)(void *))0x1e3b5u)(nan); /* Actual vendor-payload owner. */
+    ((void (*)(void *))native_0x1e3b5)(nan); /* Actual vendor-payload owner. */
     U32(common, 0x34) &= ~0x80000000u;
     U8(common, 0x20) = 0;
     U8(common, 0x30) = 0;
@@ -148,25 +149,25 @@ int nan_initialize(void *wlc, void *nan)
         return -16;
     uint32_t flags = U32(common, 0x34), flags2 = U32(common, 0x44);
     int error = -27;
-    PTR(common, 8) = ((void *(*)(size_t))0x7146du)(U16(PTR(nan, 0x6c), 0));
+    PTR(common, 8) = ((void *(*)(size_t))native_0x7146d)(U16(PTR(nan, 0x6c), 0));
     if (!PTR(common, 8))
         goto failed;
     PTR(nan, 0x2c) = PTR(wlc, 0xac);
     U16(common, 0x14) = 1;
     U32(common, 0x0c) = 0xd2;
     U32(common, 0x10) = 0x50;
-    PTR(common, 0x1c) = ((void *(*)(size_t))0x7146du)(16);
+    PTR(common, 0x1c) = ((void *(*)(size_t))native_0x7146d)(16);
     if (!PTR(common, 0x1c))
         goto failed;
     /* The same six-byte native constant used by ROM 0x1e764. */
     for (size_t i = 0; i < 6; ++i)
         U8(PTR(common, 0x1c), i) = ((const uint8_t *)0x1530bau)[i];
-    ((void (*)(void *))0x1e84du)(nan);
+    ((void (*)(void *))native_0x1e84d)(nan);
     error = nan_modules_initialize(wlc, nan);
     if (error)
         goto failed;
     PTR(common, 0x3c) = ((void *(*)(void *, unsigned, unsigned, unsigned,
-                                   uintptr_t, uintptr_t, void *, unsigned))0x1ff41u)(
+                                   uintptr_t, uintptr_t, void *, unsigned))native_0x1ff41)(
         nan, 0xdd, 0x1e3f, 1, 0x1e649u, 0x1e5a5u, nan, 0);
     if (!PTR(common, 0x3c)) {
         error = -27;

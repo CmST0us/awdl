@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* A2 proposal/response selection. The caller supplies a separate proposal
  * grid; selecting a channel does not install a timeline or acquire a peer.
  * One physical NAN radio may consume both advertised peer availability maps.
@@ -65,25 +66,25 @@ static int prepare(void *dam, void *peer, void **out, void **maps,
         return -30;
     /* 0x20da8 hides a parser failure behind NULL. Preserve the actual
      * 0x30e04 result while using its same native scratch-list owner. */
-    *prohibited = ((void *(*)(void *))0x316d9u)(nan);
-    return ((int (*)(void *, void *, void *))0x30e05u)(
+    *prohibited = ((void *(*)(void *))native_0x316d9)(nan);
+    return ((int (*)(void *, void *, void *))native_0x30e05)(
         nan, PTR(peer, 0x0c), *prohibited);
 }
 
 static int get(void *grid, unsigned index, unsigned type, uint16_t *channel)
 {
-    return ((int (*)(void *, unsigned, unsigned, uint16_t *))0x20f2du)(
+    return ((int (*)(void *, unsigned, unsigned, uint16_t *))native_0x20f2d)(
         grid, index, type, channel);
 }
 
 static int free_slot(void *grid, unsigned index)
 {
-    return ((int (*)(void *, unsigned))0x20715u)(grid, index);
+    return ((int (*)(void *, unsigned))native_0x20715)(grid, index);
 }
 
 static void done(void *grid, unsigned index, unsigned committed)
 {
-    ((void (*)(void *, unsigned, unsigned))0x2111du)(grid, index, committed);
+    ((void (*)(void *, unsigned, unsigned))native_0x2111d)(grid, index, committed);
 }
 
 static int skip_for_5g_potential(void *dam, void *peer, void **maps, unsigned index)
@@ -97,7 +98,7 @@ static int skip_for_5g_potential(void *dam, void *peer, void **maps, unsigned in
     void *nan = PTR(dam, 4), *availability = PTR(nan, 0x4c), *list = 0;
     if (!PTR(availability, 0x30))
         return -25;
-    int error = ((int (*)(void *, void *, unsigned, void **))0x20d79u)(
+    int error = ((int (*)(void *, void *, unsigned, void **))native_0x20d79)(
         dam, peer, index, &list);
     if (error == -30)
         return 0; /* No potential entry for this slot. */
@@ -105,8 +106,8 @@ static int skip_for_5g_potential(void *dam, void *peer, void **maps, unsigned in
         return error;
     if (!list || U8(list, 1) > U8(list, 0))
         return -30;
-    unsigned reference = ((unsigned (*)(void *, unsigned))0x20ee9u)(dam, 0);
-    channel = ((unsigned (*)(void *, void *, unsigned, unsigned))0x20de9u)(
+    unsigned reference = ((unsigned (*)(void *, unsigned))native_0x20ee9)(dam, 0);
+    channel = ((unsigned (*)(void *, void *, unsigned, unsigned))native_0x20de9)(
         nan, list, 1, reference);
     if (channel == 0xff01 || channel == 0xff03)
         return 1;
@@ -123,8 +124,8 @@ int nan_dam_proposal_from_committed(void *dam, void *peer, void **maps,
         return error;
     void *nan = PTR(dam, 4), *grid = *out;
     int prefer_potential = maps[0] && maps[1] && type != 5 &&
-        ((int (*)(void *))0x21a81u)(dam) &&
-        ((unsigned (*)(void *, void *, unsigned))0x20f49u)(nan, 0, 1) != 0xff;
+        ((int (*)(void *))native_0x21a81)(dam) &&
+        ((unsigned (*)(void *, void *, unsigned))native_0x20f49)(nan, 0, 1) != 0xff;
     for (unsigned index = 0; index < slots; index++) {
         if (prefer_potential) {
             int skip = skip_for_5g_potential(dam, peer, maps, index);
@@ -140,26 +141,26 @@ int nan_dam_proposal_from_committed(void *dam, void *peer, void **maps,
                 !nan_dam_valid_chanspec(dam, prohibited, channel, 3) ||
                 !free_slot(grid, index))
                 continue;
-            unsigned reference = ((unsigned (*)(void *, unsigned))0x20ee9u)(dam, 0);
+            unsigned reference = ((unsigned (*)(void *, unsigned))native_0x20ee9)(dam, 0);
             if ((reference & 0xff00u) == 0xff00u ||
-                !((int (*)(void *, unsigned, unsigned, unsigned))0x206e9u)(
+                !((int (*)(void *, unsigned, unsigned, unsigned))native_0x206e9)(
                     dam, 0, index, 3)) {
                 selected = channel;
                 if ((channel & 0xc000u) == 0xc000u)
                     break;
             } else {
-                if (((int (*)(void *, unsigned, unsigned, unsigned))0x206e9u)(
+                if (((int (*)(void *, unsigned, unsigned, unsigned))native_0x206e9)(
                         dam, 0, index, 2))
                     reference = U16(grid, 8 + index * 4 + 2);
                 if (physical(reference) &&
                     nan_dam_valid_chanspec(dam, prohibited, reference, 2))
-                    ((void (*)(void *, unsigned, unsigned, unsigned))0x21415u)(
+                    ((void (*)(void *, unsigned, unsigned, unsigned))native_0x21415)(
                         grid, index, 2, reference);
                 done(grid, index, 0);
             }
         }
         if (selected != 0xff) {
-            ((void (*)(void *, unsigned, unsigned, unsigned))0x21415u)(
+            ((void (*)(void *, unsigned, unsigned, unsigned))native_0x21415)(
                 grid, index, 2, selected);
             done(grid, index, 0);
         }
@@ -170,12 +171,12 @@ int nan_dam_proposal_from_committed(void *dam, void *peer, void **maps,
 static int peer_available(void *dam, void *peer, unsigned index, unsigned channel)
 {
     void *nan = PTR(dam, 4), *list = 0;
-    if (((int (*)(void *, void *, unsigned, unsigned, unsigned, void *))0x3189du)(
+    if (((int (*)(void *, void *, unsigned, unsigned, unsigned, void *))native_0x3189d)(
             nan, PTR(peer, 0x0c), index, 1, channel, 0) == 1)
         return 1;
     if (!PTR(PTR(nan, 0x4c), 0x30))
         return -25;
-    int error = ((int (*)(void *, void *, unsigned, void **))0x20d79u)(
+    int error = ((int (*)(void *, void *, unsigned, void **))native_0x20d79)(
         dam, peer, index, &list);
     if (error == -30)
         return 0;
@@ -183,17 +184,17 @@ static int peer_available(void *dam, void *peer, unsigned index, unsigned channe
         return error;
     if (!list || U8(list, 1) > U8(list, 0))
         return -30;
-    unsigned offered = ((unsigned (*)(void *, void *, unsigned, unsigned))0x20de9u)(
+    unsigned offered = ((unsigned (*)(void *, void *, unsigned, unsigned))native_0x20de9)(
         nan, list, (channel & 0xc000u) != 0, channel);
     return offered != 0xff && ((offered & 0xff00u) == 0xff00u ||
-        ((int (*)(unsigned, unsigned))0xbd71u)(offered, channel));
+        ((int (*)(unsigned, unsigned))native_0xbd71)(offered, channel));
 }
 
 static int select_ndc(void *dam, void *peer, void **out, unsigned slots,
                        unsigned target, unsigned first_phase, void *prohibited)
 {
     uint8_t selected[64];
-    ((void (*)(void *, unsigned))0x150891u)(selected, sizeof(selected));
+    ((void (*)(void *, unsigned))native_0x150891)(selected, sizeof(selected));
     unsigned count = 0;
     void *grid = *out;
     /* Prefer the usual discovery-interval positions, then remaining slots.
@@ -232,7 +233,7 @@ static int select_ndc(void *dam, void *peer, void **out, unsigned slots,
     for (unsigned index = 0; index < slots; index++) {
         U8(grid, 8 + index * 4) &= ~4u;
         if (selected[index / 8] & (1u << (index & 7u)))
-            ((void (*)(void *, unsigned))0x21405u)(grid, index);
+            ((void (*)(void *, unsigned))native_0x21405)(grid, index);
     }
     return 0;
 }
@@ -246,7 +247,7 @@ int nan_dam_proposal_ndc_slots(void *dam, void *peer, void **out, unsigned slots
     if (!count || count > 2)
         return -2;
     for (unsigned i = 0; i < count; i++)
-        maps[i] = ((void *(*)(void *, void *, unsigned))0x30bd9u)(
+        maps[i] = ((void *(*)(void *, void *, unsigned))native_0x30bd9)(
             nan, PTR(peer, 0x0c), i);
     void *prohibited;
     int error = prepare(dam, peer, out, maps, slots, &prohibited);
@@ -277,13 +278,13 @@ int nan_dam_generate_proposal(void *dam, unsigned type, void *peer,
         return error;
     if (!local || !shape(*local, slots) || *local == *out)
         return -2;
-    error = ((int (*)(void *, unsigned, const void *, unsigned))0x151c81u)(
+    error = ((int (*)(void *, unsigned, const void *, unsigned))native_0x151c81)(
         (uint8_t *)*out + 8, slots * 4, (uint8_t *)*local + 8, slots * 4);
     if (error)
         return error;
     for (unsigned i = 0; i < slots; i++)
         U8(*out, 9 + i * 4) &= ~0x80u;
-    ((void (*)(void *, void **, void **, unsigned))0x2137du)(dam, local, out, slots);
+    ((void (*)(void *, void **, void **, unsigned))native_0x2137d)(dam, local, out, slots);
     error = nan_dam_proposal_from_committed(dam, peer, maps, out, slots, type);
     if (!error)
         error = nan_dam_proposal_from_potential(dam, peer, maps, out, slots);
@@ -299,11 +300,11 @@ static unsigned potential_choice(void *dam, void *prohibited, void **out,
     if (!physical(channel) || ((channel & 0xc000u) != 0) != band ||
         !nan_dam_valid_chanspec(dam, prohibited, channel, 3))
         return 0xff;
-    if (((int (*)(void *, unsigned, unsigned, unsigned))0x206e9u)(dam, 0, index, 1) &&
+    if (((int (*)(void *, unsigned, unsigned, unsigned))native_0x206e9)(dam, 0, index, 1) &&
         (!physical(reference) ||
-         !((int (*)(unsigned, unsigned))0xbd71u)(reference, channel)))
+         !((int (*)(unsigned, unsigned))native_0xbd71)(reference, channel)))
         return 0xff;
-    return ((int (*)(void *, void **, unsigned, unsigned, unsigned))0x21145u)(
+    return ((int (*)(void *, void **, unsigned, unsigned, unsigned))native_0x21145)(
         dam, out, 0, index, channel) ? channel : 0xff;
 }
 
@@ -321,12 +322,12 @@ static unsigned expand_potential(void *dam, void *prohibited, void **out,
      * an explicit peer chanspec retains its advertised width. */
     void *nan = PTR(dam, 4);
     unsigned choices[3] = {reference, U16(*out, 8 + index * 4 + 2),
-        ((unsigned (*)(void *, void *, unsigned))0x20f49u)(nan, prohibited, band)};
+        ((unsigned (*)(void *, void *, unsigned))native_0x20f49)(nan, prohibited, band)};
     for (unsigned i = 0; i < 3; i++) {
         struct { uint8_t flags, nss; uint16_t channel; } slot = {0, 0, choices[i]};
         if (!physical(slot.channel) || ((slot.channel & 0xc000u) != 0) != band)
             continue;
-        ((void (*)(void *, void *))0x21421u)(nan, &slot);
+        ((void (*)(void *, void *))native_0x21421)(nan, &slot);
         unsigned result = potential_choice(dam, prohibited, out, index, band,
                                             slot.channel, reference);
         if (result != 0xff)
@@ -345,13 +346,13 @@ int nan_dam_proposal_from_potential(void *dam, void *peer, void **maps,
     void *nan = PTR(dam, 4), *availability = PTR(nan, 0x4c);
     if (!PTR(availability, 0x30))
         return -25;
-    unsigned dual = !!((int (*)(void *))0x21a81u)(dam);
-    unsigned reference = ((unsigned (*)(void *, unsigned))0x20ee9u)(dam, 0);
+    unsigned dual = !!((int (*)(void *))native_0x21a81)(dam);
+    unsigned reference = ((unsigned (*)(void *, unsigned))native_0x20ee9)(dam, 0);
     for (unsigned index = 0; index < slots; index++) {
         if (!free_slot(*out, index) || !(U8(*out, 8 + index * 4) & 0x21u))
             continue;
         void *list = 0;
-        error = ((int (*)(void *, void *, unsigned, void **))0x20d79u)(
+        error = ((int (*)(void *, void *, unsigned, void **))native_0x20d79)(
             dam, peer, index, &list);
         if (error == -30)
             continue;
@@ -361,7 +362,7 @@ int nan_dam_proposal_from_potential(void *dam, void *peer, void **maps,
             return -30;
         unsigned selected = 0xff;
         for (int band = (int)dual; band >= 0 && selected == 0xff; band--) {
-            unsigned preferred = ((unsigned (*)(void *, void *, unsigned, unsigned))0x20de9u)(
+            unsigned preferred = ((unsigned (*)(void *, void *, unsigned, unsigned))native_0x20de9)(
                 nan, list, (unsigned)band, reference);
             selected = expand_potential(dam, prohibited, out, index, (unsigned)band,
                                          preferred, reference);
@@ -375,7 +376,7 @@ int nan_dam_proposal_from_potential(void *dam, void *peer, void **maps,
             }
         }
         if (selected != 0xff) {
-            ((void (*)(void *, unsigned, unsigned, unsigned))0x21415u)(
+            ((void (*)(void *, unsigned, unsigned, unsigned))native_0x21415)(
                 *out, index, 2, selected);
             done(*out, index, 0);
         }
@@ -412,7 +413,7 @@ int nan_dam_response_from_type(void *dam, void *peer, void **out,
             }
             if (get(grid, index, type, &local))
                 continue;
-            int compatible = ((int (*)(void *, void **, unsigned, unsigned, unsigned))0x21145u)(
+            int compatible = ((int (*)(void *, void **, unsigned, unsigned, unsigned))native_0x21145)(
                 dam, out, 0, index, channel);
             if (!compatible) {
                 if (flags & 8u)
@@ -439,7 +440,7 @@ int nan_dam_response_from_type(void *dam, void *peer, void **out,
             }
         }
         if (selected >= 0) {
-            ((void (*)(void *, void *, unsigned))0x20959u)(maps[selected], grid, index);
+            ((void (*)(void *, void *, unsigned))native_0x20959)(maps[selected], grid, index);
             done(grid, index, 1);
         }
     }

@@ -1,0 +1,13 @@
+#!/bin/sh
+# 本板蓝牙的启动准备。内核 rfkill 驱动完成上电时序；HCI 命令完成推进后续初始化。
+set -eu
+test -c /dev/ttyS8
+# 公共 AirDrop 使用专用 hci0；已有控制器时不得重置其硬件。
+test ! -e /sys/class/bluetooth/hci0
+printf '%s\n' '3a0a926fa800c121f850ed4f961a1e058a993666d9ee565c1e46dfd596e25567  /lib/firmware/BCM4362A2.hcd' | sha256sum -c -
+set -- /sys/bus/platform/devices/wireless-bluetooth/rfkill/rfkill*
+test "$#" -eq 1
+test "$(cat "$1/type")" = bluetooth
+printf '0\n' > "$1/state"
+printf '1\n' > "$1/state"
+printf '1\n' > /proc/bluetooth/sleep/btwrite

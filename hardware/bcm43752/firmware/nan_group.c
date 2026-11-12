@@ -1,3 +1,4 @@
+#include "native_calls.h"
 /* A2 group-key ownership. Native key objects/ciphers remain authoritative;
  * private selectors extend the missing peer GTK and BIGTK ID namespaces. */
 #include "nan_group.h"
@@ -32,11 +33,11 @@ static int zero(const uint8_t *p, unsigned n)
 }
 static int equal(const void *a, const void *b, unsigned n)
 {
-    return !((int (*)(const void *, const void *, unsigned))0xa7a9u)(a, b, n);
+    return !((int (*)(const void *, const void *, unsigned))native_0xa7a9)(a, b, n);
 }
 static void copy(void *a, const void *b, unsigned n)
 {
-    ((void *(*)(void *, const void *, unsigned))0x151a21u)(a, b, n);
+    ((void *(*)(void *, const void *, unsigned))native_0x151a21)(a, b, n);
 }
 static struct group_key **head(void *nan)
 {
@@ -53,7 +54,7 @@ static void *context(void *km, void *bss)
 static void *lookup_bss(void *nan, const uint8_t *local, unsigned id)
 {
     void *bss = id < 4 && PTR(nan, 0x30)
-                    ? ((void *(*)(void *, const void *))0x22a1du)(PTR(nan, 0x30), local)
+                    ? ((void *(*)(void *, const void *))native_0x22a1d)(PTR(nan, 0x30), local)
                     : nan_host_nmi(nan);
     return bss && equal((uint8_t *)bss + 0x66, local, 6) ? bss : 0;
 }
@@ -87,12 +88,12 @@ static int usable(void *km, struct group_key *g)
 static void *result(void *km, struct group_key *g, void *info)
 {
     void *key = g && usable(km, g) ? g->key : PTR(km, 0x24);
-    ((void (*)(void *, void *))0x151e71u)(key, info);
+    ((void (*)(void *, void *))native_0x151e71)(key, info);
     return key;
 }
 /* Checked RAM-entry patches also cover direct calls which bypass the ROM
  * trampolines. These continuations reproduce only the overwritten prologue. */
-__attribute__((naked)) static void *original_bss(void *km __attribute__((unused)),
+NATIVE_ENTRY static void *original_bss(void *km __attribute__((unused)),
                                                  void *bss __attribute__((unused)),
                                                  unsigned id __attribute__((unused)),
                                                  void *info __attribute__((unused)))
@@ -100,7 +101,7 @@ __attribute__((naked)) static void *original_bss(void *km __attribute__((unused)
     __asm__ volatile("push {r3-r7,lr}\ncbnz r0,1f\nldr pc,=0x1876d7\n1: cbnz r1,2f\nldr "
                      "pc,=0x1876d7\n2: ldr r5,[r0,#0x14]\nldr pc,=0x187691");
 }
-__attribute__((naked)) static void *original_scb(void *km __attribute__((unused)),
+NATIVE_ENTRY static void *original_scb(void *km __attribute__((unused)),
                                                  void *scb __attribute__((unused)),
                                                  unsigned id __attribute__((unused)),
                                                  unsigned flags __attribute__((unused)),
@@ -108,7 +109,7 @@ __attribute__((naked)) static void *original_scb(void *km __attribute__((unused)
 {
     __asm__ volatile("push {r4-r11,lr}\nldr pc,=0x188fd1");
 }
-__attribute__((naked)) static unsigned original_tx(void *km __attribute__((unused)),
+NATIVE_ENTRY static unsigned original_tx(void *km __attribute__((unused)),
                                                    void *bss __attribute__((unused)),
                                                    unsigned management __attribute__((unused)))
 {
@@ -178,17 +179,17 @@ static int release(void *nan, struct group_key **slot)
         return error;
     g->ready = 0;
     if (g->key) {
-        error = ((int (*)(void *))0x19119u)(g->key);
+        error = ((int (*)(void *))native_0x19119)(g->key);
         if (error || U8(g->key, 16))
             return error ? error : -16;
     }
     unsigned index = g->index;
-    ((void (*)(void *, unsigned, void *, unsigned))0x158a1u)(km, 0, &g->index, 1);
+    ((void (*)(void *, unsigned, void *, unsigned))native_0x158a1)(km, 0, &g->index, 1);
     void *record = (uint8_t *)PTR(km, 0x10) + index * 16;
     if (g->index != 0xffff || PTR(record, 0) || U16(record, 4))
         return -30;
     *slot = g->next;
-    ((void (*)(void *))0x71491u)(g);
+    ((void (*)(void *))native_0x71491)(g);
     return 0;
 }
 static int resolve(void *nan, const uint8_t *p, void **bss, void **scb)
@@ -215,7 +216,7 @@ int nan_group_sequence(const struct nan_command_digest *d, const uint8_t *p, siz
     if (!g || !usable(km, g))
         return -30;
     error =
-        ((int (*)(void *, void *, unsigned, unsigned, unsigned))0x1901du)(g->key, out, 6, 0, g->tx);
+        ((int (*)(void *, void *, unsigned, unsigned, unsigned))native_0x1901d)(g->key, out, 6, 0, g->tx);
     if (error != 6)
         return error < 0 ? error : -30;
     *len = 6;
@@ -254,13 +255,13 @@ int nan_group_command(const struct nan_command_digest *d, const uint8_t *p, size
     void *km = PTR(PTR(nan, 8), 0x420);
     if (!km)
         return -30;
-    struct group_key *g = ((void *(*)(size_t))0x7146du)(sizeof(*g));
+    struct group_key *g = ((void *(*)(size_t))native_0x7146d)(sizeof(*g));
     if (!g)
         return -27;
     g->index = 0xffff;
-    error = ((int (*)(void *, unsigned, void *, unsigned))0x15815u)(km, 0, &g->index, 1);
+    error = ((int (*)(void *, unsigned, void *, unsigned))native_0x15815)(km, 0, &g->index, 1);
     if (error) {
-        ((void (*)(void *))0x71491u)(g);
+        ((void (*)(void *))native_0x71491)(g);
         return error;
     }
     g->bss = bss;
@@ -274,18 +275,18 @@ int nan_group_command(const struct nan_command_digest *d, const uint8_t *p, size
     *slot = g;
     uint32_t words[5];
     uint8_t *info = (uint8_t *)words;
-    ((void (*)(void *, unsigned))0x150891u)(words, sizeof(words));
+    ((void (*)(void *, unsigned))native_0x150891)(words, sizeof(words));
     U16(info, 0) = g->index;
     copy(info + 2, g->peer, 6);
     words[2] = (g->id >= 4 ? 0x40 : 0x20) | (g->tx ? 2 : 4);
     info[13] = g->id;
-    error = ((int (*)(void *, void *, void *))0x18da9u)(km, info, &g->key);
+    error = ((int (*)(void *, void *, void *))native_0x18da9)(km, info, &g->key);
     if (error)
         return error;
     unsigned flags = (scb ? 0x20 : 2) | (g->id >= 4 ? 0x80 : 0) | (g->tx ? 4 : 0);
-    ((void (*)(void *, void *, unsigned, void *, unsigned, void *, void *))0x1cbe9u)(
+    ((void (*)(void *, void *, unsigned, void *, unsigned, void *, void *))native_0x1cbe9)(
         km, (uint8_t *)PTR(km, 0x10) + g->index * 16, 0, g->key, flags, bss, scb);
-    error = ((int (*)(void *, unsigned, const void *, unsigned))0x1925du)(g->key, g->algo, p + 32,
+    error = ((int (*)(void *, unsigned, const void *, unsigned))native_0x1925d)(g->key, g->algo, p + 32,
                                                                           g->bytes);
     if (error) {
         /* A2 changes algo/callbacks before allocating AES context. On this
@@ -296,11 +297,11 @@ int nan_group_command(const struct nan_command_digest *d, const uint8_t *p, size
         if (error == -27 && U8(g->key, 16) == g->algo && !PTR(g->key, 0x24) &&
             U16(g->key, 0x1c) == 0xffff) {
             U8(g->key, 16) = 0;
-            ((int (*)(void *))0x19df5u)(g->key);
+            ((int (*)(void *))native_0x19df5)(g->key);
         }
         return error;
     }
-    error = ((int (*)(void *, const void *, unsigned, unsigned, unsigned))0x193d9u)(
+    error = ((int (*)(void *, const void *, unsigned, unsigned, unsigned))native_0x193d9)(
         g->key, p + 16, 6, g->id >= 4 ? 0 : 0x7f, g->tx);
     if (error)
         return error;
@@ -351,7 +352,7 @@ int nan_group_stop(void *nan)
 static int transmit_sequence(void *key)
 {
     uint8_t pn[6];
-    int bytes = ((int (*)(void *, void *, unsigned, unsigned, unsigned))0x1901du)(key, pn, 6, 0, 1);
+    int bytes = ((int (*)(void *, void *, unsigned, unsigned, unsigned))native_0x1901d)(key, pn, 6, 0, 1);
     if (bytes != 6)
         return -30;
     for (unsigned i = 0; i < 6; ++i)
@@ -375,7 +376,7 @@ int nan_group_tx_crypto(void *nan, unsigned *iv, unsigned *icv)
     return 0;
 }
 
-__attribute__((naked)) static int
+NATIVE_ENTRY static int
 original_bip_tx(void *key __attribute__((unused)), void *packet __attribute__((unused)),
                 const void *header __attribute__((unused)), void *body __attribute__((unused)),
                 unsigned length __attribute__((unused)), void *descriptor __attribute__((unused)))
@@ -403,7 +404,7 @@ int nan_group_bip_tx(void *key, void *packet, const uint8_t *header, void *body,
     return original_bip_tx(key, packet, header, body, length, descriptor);
 }
 
-__attribute__((naked)) static int
+NATIVE_ENTRY static int
 original_bip_mic(void *key __attribute__((unused)), void *packet __attribute__((unused)),
                  const void *header __attribute__((unused)), void *body __attribute__((unused)),
                  unsigned length __attribute__((unused)), void *mmie __attribute__((unused)))
@@ -438,18 +439,18 @@ static void beacon_complete(void *wlc, uint32_t status, struct group_key *g)
     if (!g->beacon_refs && g->draining) {
         void *nan = context(PTR(wlc, 0x420), g->bss);
         uint8_t words[BCM_NAN_HOST_HEADER_SIZE] __attribute__((aligned(4)));
-        ((void (*)(void *, unsigned))0x150891u)(words, sizeof(words));
+        ((void (*)(void *, unsigned))native_0x150891)(words, sizeof(words));
         U16(words, 0) = BCM_NAN_HOST_VERSION;
         U16(words, 2) = BCM_NAN_HOST_KEY_DRAINED;
         U16(words, 4) = sizeof(words);
         U32(words, 8) = (unsigned)g->index + 1;
         U16(words, 16) = U16(PTR(g->bss, 0x98), 0x36);
-        ((void (*)(void *, unsigned, unsigned, const void *, unsigned, unsigned))0x1fcb5u)(
+        ((void (*)(void *, unsigned, unsigned, const void *, unsigned, unsigned))native_0x1fcb5)(
             nan, BCM_NAN_HOST_EVENT, BCM_NAN_HOST_REASON, words, sizeof(words), 0);
     }
 }
 
-__attribute__((naked)) static void *
+NATIVE_ENTRY static void *
 original_beacon_copy(void *mac __attribute__((unused)), void *bss __attribute__((unused)),
                       void *template __attribute__((unused)))
 {
@@ -469,34 +470,34 @@ void *nan_group_beacon_copy(void *mac, void *bss, void *template)
     if (!template || !nan_host_active(nan) || !usable(km, g) || transmit_sequence(g->key))
         return 0;
     void *osh = PTR(wlc, 4);
-    unsigned length = ((unsigned (*)(void *, void *))0x150da1u)(osh, template);
+    unsigned length = ((unsigned (*)(void *, void *))native_0x150da1)(osh, template);
     if (length < 36 || length > BCM_NAN_HOST_MAX_FRAME)
         return 0;
     /* Original A2 copy has headroom but no MMIE tailroom. Allocate a fresh
      * native packet for every send; the cached beacon remains unsigned. */
-    void *packet = ((void *(*)(void *, unsigned))0x11ea5u)(
+    void *packet = ((void *(*)(void *, unsigned))native_0x11ea5)(
         osh, length + 0xcc + 10 + U8(g->key, 21));
     if (!packet)
         return 0;
     uint8_t *header = (uint8_t *)PTR(packet, 8) + 0xcc;
     PTR(packet, 8) = header;
-    ((void (*)(void *, void *, unsigned, unsigned, void *))0xb979u)(
+    ((void (*)(void *, void *, unsigned, unsigned, void *))native_0xb979)(
         osh, template, 0, length, header);
-    ((void (*)(void *, void *, void *))0x8bcf9u)(wlc, template, packet);
+    ((void (*)(void *, void *, void *))native_0x8bcf9)(wlc, template, packet);
     U16(packet, 12) = length;
     U32(packet, 0x10) = (U32(packet, 0x10) & ~7u) | (U32(template, 0x10) & 7u);
     if ((get16(header) & ~0x0800u) != 0x80 ||
         nan_group_bip_tx(g->key, packet, header, header + 24, length - 24, 0) ||
-        ((int (*)(void *, uintptr_t, void *, void *))0x102161u)(
+        ((int (*)(void *, uintptr_t, void *, void *))native_0x102161)(
             PTR(wlc, 0x2c4), (uintptr_t)beacon_complete, g, packet)) {
-        ((void (*)(void *, void *, unsigned))0x151ae1u)(osh, packet, 1);
+        ((void (*)(void *, void *, unsigned))native_0x151ae1)(osh, packet, 1);
         return 0;
     }
     ++g->beacon_refs;
     return packet;
 }
 
-__attribute__((naked)) static unsigned
+NATIVE_ENTRY static unsigned
 original_beacon_rx(void *mac __attribute__((unused)), void *bss __attribute__((unused)),
                     void *rx __attribute__((unused)), void *plcp __attribute__((unused)),
                     const void *header __attribute__((unused)), void *body __attribute__((unused)),
@@ -535,7 +536,7 @@ unsigned nan_group_beacon_rx(void *mac, void *bss, void *rx, void *plcp, const u
         uint32_t status[2] = {0, 0};
         /* A2 software BIP RX does not dereference its packet argument. The
          * native beacon route supplies the complete header/body directly. */
-        if (((int (*)(void *, void *, const void *, void *, unsigned, void *))0x19c45u)(
+        if (((int (*)(void *, void *, const void *, void *, unsigned, void *))native_0x19c45)(
                 g->key, 0, header, body, length, status))
             return 1;
         return original_beacon_rx(mac, bss, rx, plcp, header, body, length - trailer, band);
@@ -543,7 +544,7 @@ unsigned nan_group_beacon_rx(void *mac, void *bss, void *rx, void *plcp, const u
     return 1;
 }
 
-__attribute__((naked)) static int
+NATIVE_ENTRY static int
 original_mfp_rx(void *mfp __attribute__((unused)), void *bss __attribute__((unused)),
                 void *scb __attribute__((unused)), void *rx __attribute__((unused)),
                 const uint8_t *header __attribute__((unused)), void *packet __attribute__((unused)))
@@ -585,7 +586,7 @@ int nan_group_mfp_rx(void *mfp, void *bss, void *scb, void *rx, const uint8_t *h
             continue;
         uint32_t status[2];
         status[0] = status[1] = 0; /* Force actual software integrity/replay. */
-        int error = ((int (*)(void *, void *, const void *, void *, unsigned, void *))0x19c45u)(
+        int error = ((int (*)(void *, void *, const void *, void *, unsigned, void *))native_0x19c45)(
             g->key, packet, header, body, length, status);
         if (!error)
             nan_host_group_received(nan, header, body, length - trailer, (const uint8_t *)rx - 12);
@@ -594,7 +595,7 @@ int nan_group_mfp_rx(void *mfp, void *bss, void *scb, void *rx, const uint8_t *h
     return 0;
 }
 
-__attribute__((naked)) static unsigned
+NATIVE_ENTRY static unsigned
 original_sendmgmt(void *wlc __attribute__((unused)), void *packet __attribute__((unused)),
                   void *queue __attribute__((unused)), void *scb __attribute__((unused)),
                   void *bss __attribute__((unused)), unsigned short_header __attribute__((unused)),
@@ -615,7 +616,7 @@ unsigned nan_group_sendmgmt(void *wlc, void *packet, void *queue, void *scb, voi
         if (!g || !usable(km, g) || (key && key != g->key) || transmit_sequence(g->key)) {
             /* Match sendmgmt's rejection ownership: actual packet free invokes
              * its PCB, then the caller can finish its submission transaction. */
-            ((void (*)(void *, void *, unsigned))0x151ae1u)(PTR(wlc, 4), packet, 1);
+            ((void (*)(void *, void *, unsigned))native_0x151ae1)(PTR(wlc, 4), packet, 1);
             return 0;
         }
         key = g->key;

@@ -177,7 +177,7 @@ async fn send(
                 Ok::<_, anyhow::Error>((peer, service.flags))
             }.await;
             match attempt {
-                Ok(peer) => return Ok::<_, anyhow::Error>(peer),
+                Ok((peer, flags)) => return Ok::<_, anyhow::Error>((peer, flags, signals)),
                 Err(error) => emit(
                     events,
                     json!({"event":"candidate-unavailable","mac":mac,"error":error.to_string()}),
@@ -186,7 +186,7 @@ async fn send(
             let _: () = radio.call("Release", &()).await?;
         }
     };
-    let (peer, flags) = tokio::time::timeout(Duration::from_secs(cfg.discovery_seconds), discovery)
+    let (peer, flags, mut signals) = tokio::time::timeout(Duration::from_secs(cfg.discovery_seconds), discovery)
         .await
         .context("设备发现超时")??;
     emit(
@@ -210,8 +210,11 @@ async fn send(
                 std::future::pending::<()>().await;
             }
         };
+        // Drain progress before completion, but poll the upload before
+        // consuming another radio update so schedule traffic cannot starve it.
         tokio::select! {
             biased;
+            _ = expires => bail!("文件上传超过配置的失败期限"),
             event = rx.recv(), if channel_open => match event {
                 Some(Event::Accepted) => { accepted=Some(Instant::now()); emit(events, json!({"event":"accepted"})); },
                 Some(Event::Progress(progress)) => {
@@ -224,13 +227,22 @@ async fn send(
                 None => channel_open=false,
             },
             result = &mut transfer => {
-                ensure!(result? == Outcome::Delivered, "AirDrop 未交付文件");
+                match result? {
+                    Outcome::Delivered => {},
+                    Outcome::Declined => bail!("AirDrop 对端拒绝或未接受文件"),
+                    Outcome::Failed(reason) => bail!("AirDrop 未交付文件：{reason}"),
+                }
                 let seconds = accepted.context("缺少接受事件")?.elapsed().as_secs_f64();
                 emit(events, json!({"event":"delivered","file_bytes":bytes,"compressed_bytes":compressed,"upload_seconds":seconds,
                     "file_MBps":bytes as f64/seconds/1e6,"compressed_MBps":compressed as f64/seconds/1e6}));
                 return Ok(());
             },
-            _ = expires => bail!("文件上传超过配置的失败期限"),
+            event = next(&mut signals) => {
+                let event = event?;
+                if matches!(event["event"].as_str(), Some("released" | "stopped")) {
+                    bail!("文件未交付，AWDL 链路已停止：{event}");
+                }
+            },
         }
     }
 }
