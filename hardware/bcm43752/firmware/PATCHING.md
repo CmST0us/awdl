@@ -324,17 +324,9 @@ AWDL 内存预算候选将原生初始化 `0x211506`、`0x211530` 的两个 TX �
 
 AWDL 缓存发送的描述符长度修复位于原生 `0x1f80a2`：由已复制的 D11 描述符 `+2` 的 short 位选择 `0x28`／`0x88`，不再使用包 tag 的 `0x40000000` 资格位。原生 sendpkt 会设置该资格位，但头部空间不足后分配的本地非 TXFRAG 包仍可能生成长描述符。误选短尺寸会同时错写 MAC 头并使 FrameLen 多计 96 字节。四字节指令替换保留原生缓存、聚合、包 tag 和 DMA 所有权，不增加 56 KiB 保留区。
 
-替换指令使用紧接着会被 IT／MOV 覆盖的 `r3`；必须保留 `r2` 中的原始包 tag，因为 `0x1f80f4` 还要读取它的 A-MSDU 位并更新 QoS。原生缓存构建函数的 12 组离线 ARM 执行覆盖原装、旧候选与修正版的长短描述符及 A-MSDU 有无组合：修正版长度均为 1546 字节，QoS 聚合位与包 tag 一致。缓存复制和长度等依赖由夹具提供，该检查不代表双向真机验收已通过。
+替换指令使用紧接着会被 IT／MOV 覆盖的 `r3`；必须保留 `r2` 中的原始包 tag，因为 `0x1f80f4` 还要读取它的 A-MSDU 位并更新 QoS。
 
-AWDL 的本地替换包头还存在 A-MSDU 元数据限制：原生 `0x1f06b8` 直接读取包头 `+0x42` 的 PCIe flow ID 和 `+0x5a` 的 ring sequence；已有 r25 RAM 快照中，本地头两项均为零，后继 TXFRAG 则保留 flow 41、连续序号 930–934。原生聚合计数为零，序号不连续拒绝计数由 284 增至 339。这说明不能以 SCB 已声明 A-MSDU 能力推断实际成包，也不能只修复 D11 长度就宣称聚合路径完整。候选在 `0x1f06c4`、`0x1f0706`、`0x1f071c`、`0x1f0730` 四个原生读取点，为自有 AWDL BSS 从实际 TXFRAG 取得元数据；其他包保持原读取。尾跳转保留原生活跃寄存器、仍需使用的 APSR 条件码及 AAPCS 栈对齐，不修改本地头／DMA fragment 的释放所有权，也不把本地分配伪装成 TXFRAG。候选 SHA-256 为 `8b9d970371671ebc76ae436a2b70f7458b80718670ce8b7430422a58a7af4713`，编译、链接及固定字节检查通过，代码 54,208 字节，含 Flashpatch 表使用 57,344/57,344 字节。通过复用现有原生复制／比较函数收敛空间，未扩大保留区。16 组原生 ARM 比较函数执行覆盖原装与候选的连续序号、跳号、不同 flow、显式／默认 ring 深度回绕、自身、非 AWDL 和不同优先级；候选允许连续序号与回绕，拒绝错误组合，包元数据及栈指针保持不变。准入上下文和 ring 深度由夹具提供，包所有者来自历史 RAM 快照。完整聚合路径另执行原生 `0x1f08bc` 成包、缓存头构建、候选 DMA 分发、原生 descriptor writer 和链回收遍历：两个真实本地头／TXFRAG 链形成含两个 AWDL 子帧的 A-MSDU，FrameLen 为 3092，QoS 聚合位有效；四个 DMA 描述符跨 ring 尾部，保留两个主机地址范围，只有末描述符登记整链所有者；回收遍历按顺序访问四个节点且不重复。队列、协商上下文、缓存头复制、TOE／加密依赖和末端分配器由夹具提供，硬件寄存器为模拟内存，未实际读取主机 payload；不证明真实 PCIe 完成或硬件回收。证据为 `.private/bcm43752-awdl/amsdu-native-formation.json`。此候选已按哈希部署，服务启动成功；部署证据为 `.private/bcm43752-awdl/deploy-r28-amsdu-fragments.log`，旧固件和配置保存在板端 `/var/tmp/bcm-awdl-r28-amsdu-fragments`。固定候选真机验收中，iPad Pro 反向 500 MB 接收用时 28.419 秒、17.594 MB/s，SHA-256 与源文件一致，UI 和收发进程正常退出；正向 1 GiB 在第二条 TCP 连接超时，尚未进入 Ask／上传。不能据反向通过推断正向聚合或真实 PCIe 完成全部正确，双向完整性、取消／重连稳定性和接近 BE200 的性能均未达成。证据为 `.private/artifacts/airdrop-ui-20261112-160936/result.json`、对应 `board/board.pcap0` 与 `.private/artifacts/airdrop-reverse-r24-20261112-161131/result.json`。必要证据为 `.private/bcm43752-awdl/r25-live-queue/amsdu-packet-fragments.json`、`amsdu-native-statistics.json`、对应 RAM、`native-tx-amsdu-members.c` 及 `.private/bcm43752-awdl/amsdu-fragment-admission-execution.json`。
-
-同一 PHY 的 AWDL 信道切换保留速率状态：`awdl_peer_reinit` 在前后 chanspec 仅 sideband 不同时，保留原生信道上下文更新、slotted cubby 的信道写入及 `0x11de54` 模块更新，避免重新调用会清空速率状态的 `0x1247c8 → 0x110228`。首次建站及能力更新仍由 `awdl_peer_set → 0x127e1c` 完整协商；其他 PHY 变化保留完整重初始化。四份历史 r25 RAM 中，自有 SCB 的速率 cubby 保存区为空，因此不能假定原生信道缓存会恢复学习状态；证据为 `.private/bcm43752-awdl/ratesel-context-audit.json`，不代表 r29 的性能已验证。对端地址／IE 语法统一在唯一命令入口检查，资源状态检查仍由 peer 持有；ABI 的字节复制限定 A2 little-endian，保留未对齐访问安全性。候选 SHA-256 `dd06b34be80b301bbd7fa939d312754f5363eb69b5c4616b90a832bf236d9f85` 编译、链接、原始字节及空间检查通过，代码 54,204 字节，含对齐及 Flashpatch 表仍占 57,344 字节；未改变编译选项或保留区。部署哈希与服务启动见 `.private/bcm43752-awdl/deploy-r29-rate-preserve.log`。该候选已完成 iPad Pro 双向 1 GiB 随机文件与往返 SHA-256 校验：正向 12.979 MB/s，实际接收文件回传 54.444 MB/s；500 MB 反向另为 25.083 MB/s。发送约 110 MB 后取消用时 0.727 秒，重新发现并完整重传为 10.737 MB/s。正向性能仍未接近 BE200，长期稳定性未验证，见 [验收结论](../../../docs/acceptance.md#bcm43752-原生-airdrop-候选)。
-
-r30 将发送侧的批次与聚合约束一并接入。自有 AWDL 的 `PKTLINK` 批次仍逐 MSDU 完成独立封装，但使用原生 `0x1f7e6c` 的调度重入协议，在整批入队后统一排空；已有排空调用保留所有权及待执行标志，原生准入、背压和回收不变。自有 SCB 的 A-MSDU 策略采用 BE200 的 7,935 字节上限，并按各 TID 的原生 FIFO 容量收窄；子帧数量取原生描述符预算的一半与 16 的较小值。原生 HT／VHT 协商上限和每次发送的速率／时长限制继续参与取小，NAN 及全局默认值不改。初次协商、能力更新及信道重初始化后应用同一策略。
-
-超过两子帧时，已接纳聚合链的序号必须取末尾 TXFRAG，flow ID 仍取首个主机所有者；不更改任何原始 DMA 元数据。原生五子帧离线执行形成 7,688 字节帧，十个 DMA 描述符跨 ring 尾部，保留五个主机地址范围及序号，仅末描述符登记整链所有者；原生回收遍历十个节点，均只释放一次。另有 16 组准入执行覆盖连续、跳号、不同 flow、显式／默认 ring 深度回绕、自身、非 AWDL 和优先级不匹配。实际编译的 SCB 策略执行确认全局默认及协商上限未修改。队列输入、缓存头复制、加密依赖、DMA 寄存器及末端分配器仍为模拟，不代表真实空口或 PCIe 完成验收。证据为 `.private/bcm43752-awdl/r30-amsdu-native-formation.json` 和 `r30-fragment-admission-execution.json`。
-
-事件和状态以完整 little-endian ABI 结构编码并按字节复制，保留未对齐输出及保留字段，用于收敛代码空间。候选 SHA-256 `d76be6aa5118b2459eae65fcef51e546198abf41ae9a12e1c15f6e86c7c7d40f` 的代码为 54,140 字节，含对齐和 Flashpatch 表为 57,280/57,344 字节；固定地址、来源字节、未解析符号、重定位及空间检查通过。部署镜像哈希与服务启动见 `.private/bcm43752-awdl/deploy-r30-batch-aggregation.log`。r30 的真实传输与性能结论须以固定候选验收结果为准，不能沿用 r29 的结果。
+AWDL 自有 BSS 的 A-MSDU 元数据从实际 TXFRAG 读取 PCIe flow ID 与 ring sequence，保留原生活跃寄存器、条件码、栈对齐及分片释放所有权。同一 PHY 内仅 sideband 变化时，保留信道上下文更新并避免清空速率状态；首次建站、能力更新及其他 PHY 变化仍完整协商。对端地址与 IE 语法在唯一命令入口校验，资源状态检查由 peer 持有。
 
 AWDL 调度候选保留协议 16×64 TU 日程，将每个槽展开为四个 16 TU 原生 MSCH 子槽；周期、信道、缺席及优先级不变。原生 BOTH_FIXED 准入按完整请求时长及切换预算寻找空档（A2 `0xf45fc`），细分减少 DW 相交时被舍弃的整槽范围。等价旋转允许相对实际安装 epoch 不超过 1 TU 的误差，与公共控制器容差一致；不以每次主机刷新重置比较原点，累积漂移超限或信道变化仍重新注册。发送继续受实际信道完成事件、对端窗口和排空余量限制。
 
@@ -349,10 +341,6 @@ r38 保留原生 TXFRAG 的 96 字节准备门槛，已有 102 字节头部空�
 原生缓存准入 `0x1f9c94` 新增容量检查：缓存长度不得超过当前头部空间加即将移除的 14 字节 Ethernet 头。`0x1f8374` 的批次密钥缓存快捷跳转改为 NOP，使每个 MSDU 都经过该准入；缓存命中仍使用原生缓存构建。两个已定位的直接复制调用点 `0x1f83cc` 和 `0x1f978e` 均经过检查。原有 `0x1f80a2` 物理描述符格式修复继续生效。这样可以保留短缓冲区 TXFRAG，同时阻止前一个本地头留下的长缓存越界复制。
 
 r38 镜像 SHA-256 为 `fe451b8c7e3818bf95ee8804e245798eccafb191d053d5658bc0c84dab7b88df`，代码 54,204 字节，含对齐与 Flashpatch 表仍占 57,344/57,344 字节。通过复用原生不重叠影子对象复制及直接 Thumb 跳转容纳新增检查；固定来源、恢复原装镜像、指令字节、符号、重定位和空间检查通过。静态边界结论仅适用于自有开放 AWDL；真实传输结论见[验收记录](../../../docs/acceptance.md#bcm43752-原生-airdrop-候选)。
-
-r37 已验收镜像 SHA-256 为 `0850d97887cd0f30a9da4973914b1bc41b175ddc03a6751a919f0b4415eeb00a`，代码 54,204 字节，含对齐和 Flashpatch 表占 57,344/57,344 字节；固定字节、恢复原装镜像、符号、重定位和空间检查通过。配合 r35 主机的固定配置双向 AirDrop、往返哈希、取消及重连验收通过；正向性能仍未达到 BE200 参考目标，详见 [验收记录](../../../docs/acceptance.md#bcm43752-原生-airdrop-候选)。
-
-r31 调度候选 SHA-256 为 `71d3119947ef51b061ef66b3b5b99e6ef23b1673be82090094cd37b7f903f00b`，代码 54,192 字节，含对齐和 Flashpatch 表使用 57,328/57,344 字节，未扩大固定保留区。完整构建及来源／地址／空间检查通过，构建和暂存部署证据分别为 `.private/bcm43752-awdl/build-schedule-r31-compact.log`、`deploy-r31-schedule.log`。这些检查不证明性能收益，真实传输结论须绑定此镜像。
 
 依赖 Python 3.12+ 和提供 `gcc/nm/readelf/objcopy/objdump` 的 ARM bare-metal 工具链。本次验证为 `arm-none-eabi-gcc 16.2.0`。先检查磁盘空间；完整输出不到 2 MiB。
 

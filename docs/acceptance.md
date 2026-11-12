@@ -429,11 +429,11 @@ iPad Pro 12.9 英寸第六代、iPadOS 27.0.1 使用 R4 IE 关闭诊断版完成
 
 BCM 后端将对端不可用槽安排为本机主信道接收驻留，保留原始对端窗口限制发送。公共接收公告采用 16×16 TU，保守交集原生 1024 TU 日程的四个重复区间；真实缺席按公告周期与缺席周期的最大公约数投影。其他后端未提供接收驻留时保留原公告行为。排空期限读取原生当前／后继物理时隙，原生 SLOT_END／OFF_CHAN 仍推进实际所有权，立即抢占没有提前排空保证。
 
-当本地全部槽为同一非零信道时，使用可抢占的原生 BOTH_FLEX 请求；16 TU 重调度周期保留抢占后的请求存续，最短驻留 16 TU、离开预算 32 TU。多信道计划继续使用 BOTH_FIXED。此前 r36 正向整段会话记录的完整开窗中位时长为 93.240 ms，包含发现与归档准备，不能据此推算正文空口占用率。该 r36 正文区间主机各核平均忙碌约 14%–23%；非原子快照确认双流 HE、A-MSDU 成包与 BA 窗口 64，未证明发送短板的具体根因。对应证据为 `r36-forward-residency.json`、`r36-forward-host-cpu.json`、`r36-runtime-audit.json` 和 `r36-macstat-audit.json`，位于 `.private/bcm43752-awdl/`。
+当本地全部槽为同一非零信道时，使用可抢占的原生 BOTH_FLEX 请求；16 TU 重调度周期保留抢占后的请求存续，最短驻留 16 TU、离开预算 32 TU。多信道计划继续使用 BOTH_FIXED。
 
 r38 使用原生发送批次并保留 TXFRAG：首包与后续 MSDU 的准备均保留头部替换后的批次链接，主机 DMA 分片仍由 PKTNEXT 持有。每包独立封装、长度和 AWDL 序号不从前包复制；后续包分配失败时释放实际失败包并继续保留尾部。TXFRAG 恢复原生 96 字节准备门槛，本地替换头仍要求 104 字节；自有开放 AWDL 的聚合首包空间要求由 88 改为 86 字节，适配封装后剩余空间。缓存复制前验证容量，批次快捷分支也经过完整准入。7,935 字节聚合上限、原生复制／引用计数检查和分片所有权不变。本轮没有注入分配失败，清理失败分支只有静态所有权审查证据。 r38 正向保留快照中缓存头为 70 字节、物理 short 位为 1，TSO 前缀为 4 字节；同组非原子快照的 A-MSDU 成包／成员计数从 0／0 增至 13,652／65,550，首包空间策略为 86 字节，确认短描述符与聚合均实际生效。该计数不能换算每个 PPDU 的空口效率。证据为 `.private/bcm43752-awdl/r38-cache-format-audit.json`、`r38-runtime-audit.json`；静态边界与缓存入口覆盖见 `r38-header-bound-audit.json`、`r38-direct-cache-calls.json`。
 
-独立信道序列 TLV 18 为 41 字节，嵌入序列所在 TLV 4 为 73 字节。本机 macOS 原生长度检查中的十个 TLV、独立／嵌入序列解析均通过；使用合成对象与输入的离线执行不等同于 iPad 完整动作帧解析。同一主机配合 r32 固件的正向实测区间中，185 次本机接收公告均为非全零的 16 项序列，iPad 日志未记录本对端动作帧解析错误。证据为 `.private/bcm43752-awdl/r35-apple-tlv-lengths.json`、`r35-apple-channel-sequence-execution.json`、`r35-apple-sync-sequence-execution.json` 和 `r35-announcement-evidence.json`。
+独立信道序列 TLV 18 为 41 字节，嵌入序列所在 TLV 4 为 73 字节。本机 macOS 原生长度检查中的十个 TLV、独立／嵌入序列解析均通过；使用合成对象与输入的离线执行不等同于 iPad 完整动作帧解析。离线解析证据保留在 `.private/bcm43752-awdl/r35-apple-tlv-lengths.json`、`r35-apple-channel-sequence-execution.json` 和 `r35-apple-sync-sequence-execution.json`。
 
 | 固定配置验收 | 结果 |
 | --- | --- |
@@ -444,7 +444,7 @@ r38 使用原生发送批次并保留 TXFRAG：首包与后续 MSDU 的准备均
 
 原文件为 1,073,741,824 字节随机内容，SHA-256 为 `961f385c3dada06feb133101058d49aef0cb07afc7800c6c3db603e65e3bd3e8`。回传通过 iPad Files 选择实际收到的文件，没有预先注入副本。两次正向合计字节／合计正文时间为 48.495 MB/s；全部场景使用同一固件、主机与无线配置，期间未调参。均速使用十进制 MB/s，按正文传输阶段计时；发现、归档准备与完成后的内容哈希不计入正文吞吐。不同硬件与文件压缩率的 BE200 样本不构成同条件性能对照，结果不证明芯片上限。
 
-四项结果及各自双端日志、抓包位于 `.private/artifacts/airdrop-ui-20261112-222206/`、`airdrop-roundtrip-r38-20261112-222407/`、`airdrop-ui-20261112-222542/`、`airdrop-ui-20261112-222722/`。构建、部署和最终状态证据为 `.private/bcm43752-awdl/build-r35-host.log`、`r38-complete-build.log`、`deploy-r38-txfrag.log`、`r38-final-state.log`；精确输入和失败候选索引保留在 `implementation-state.json`，原始证据不进入 Git。
+四项结果及各自双端日志、UI 结果包位于 `.private/artifacts/airdrop-ui-20261112-222206/`、`airdrop-roundtrip-r38-20261112-222407/`、`airdrop-ui-20261112-222542/`、`airdrop-ui-20261112-222722/`。构建、部署和最终状态证据为 `.private/bcm43752-awdl/build-r35-host.log`、`r38-complete-build.log`、`deploy-r38-txfrag.log`、`r38-final-state.log`；最终输入由保留构建的 `manifest.json` 记录，验收证据文件及 SHA-256 清单见 `.private/bcm43752-awdl/retained-evidence.json`。保留正向传输的关键 RAM 快照和静态审查输出；整机系统日志无损压缩为 `syslog.log.gz`。旧候选、重复载荷抓包及分析中间材料已清理，不再保留逐轮操作历史。`.private/` 与 `.build/` 均被 Git 忽略，原始证据不进入 Git。
 
 验收后 AirDrop 为 idle，wirelessd / AirDrop / 蓝牙服务 active，后端 `cleanup=0`、`rc=0`，AWDL 接口和发送环实际删除。驱动删除接口后仍记录过期事件与统计读取提示；所检查内核区间没有 Oops、panic、assert 或 WARNING。没有使用 monitor，既有配对和完成文件保留。多对端、并行文件传输及长期重连尚未验收；本轮未修改公共主机代码，也未重新进行 BE200／RTL 真机验收。
 
