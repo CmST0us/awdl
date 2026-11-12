@@ -137,8 +137,9 @@ int awdl_tx_stamp(struct awdl_session *s, void *packet)
             return s->error;
         }
         uint32_t physical = (uint32_t)(now - tx->origin + 1);
+        uint8_t *body = tx->body;
         for (unsigned i = 0; i < 4; ++i)
-            tx->body[8 + i] = (uint8_t)(physical >> (8 * i));
+            body[8 + i] = (uint8_t)(physical >> (8 * i));
         break;
     }
     return 0;

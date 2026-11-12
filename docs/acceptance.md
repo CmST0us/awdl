@@ -425,26 +425,28 @@ iPad Pro 12.9 英寸第六代、iPadOS 27.0.1 使用 R4 IE 关闭诊断版完成
 
 2026-11-12，RK3568 / BCM43752 A2 与 iPad Pro 在固定配置下通过双向系统 AirDrop、往返内容完整性、传输中取消及取消后重连。**正向性能仍未达到 BE200 参考目标，不能作为最终性能验收通过。**
 
-本轮主机为 r35，SHA-256 为 `f6ed355bda31b1a2f6e210985fcdaf4e96f03987ac0e7d6a834dde9ece10d6d8`；固件为 r36，SHA-256 为 `a3a84d06421f04480a2a0dc7fad145458981a0c43224e10cc072c48db3644e4f`。Rust/C 交叉构建、暂存安装与设备摘要核对通过。固件代码 54,200 字节，含对齐和 Flashpatch 表占 57,336/57,344 字节，保留区保持 `[0x172000,0x180000)`。
+本轮主机为 r35，SHA-256 为 `f6ed355bda31b1a2f6e210985fcdaf4e96f03987ac0e7d6a834dde9ece10d6d8`；固件为 r37，SHA-256 为 `0850d97887cd0f30a9da4973914b1bc41b175ddc03a6751a919f0b4415eeb00a`。主机沿用已通过 Rust/C 交叉构建与暂存安装的 r35；本轮固件构建、恢复原装镜像、地址／重定位／空间检查及部署摘要核对通过。固件代码 54,204 字节，含对齐和 Flashpatch 表占 57,344/57,344 字节，保留区保持 `[0x172000,0x180000)`。
 
 BCM 后端将对端不可用槽安排为本机主信道接收驻留，保留原始对端窗口限制发送。公共接收公告采用 16×16 TU，保守交集原生 1024 TU 日程的四个重复区间；真实缺席按公告周期与缺席周期的最大公约数投影。其他后端未提供接收驻留时保留原公告行为。排空期限读取原生当前／后继物理时隙，原生 SLOT_END／OFF_CHAN 仍推进实际所有权，立即抢占没有提前排空保证。
 
-当本地全部槽为同一非零信道时，使用可抢占的原生 BOTH_FLEX 请求；16 TU 重调度周期保留抢占后的请求存续，最短驻留 16 TU、离开预算 32 TU。多信道计划继续使用 BOTH_FIXED。正向整段会话记录的完整开窗中位时长为 93.240 ms，包含发现与归档准备，不能据此推算正文空口占用率。正文区间主机各核平均忙碌约 14%–23%；非原子快照确认双流 HE、A-MSDU 成包与 BA 窗口 64，未证明发送短板的具体根因。对应证据为 `r36-forward-residency.json`、`r36-forward-host-cpu.json`、`r36-runtime-audit.json` 和 `r36-macstat-audit.json`，位于 `.private/bcm43752-awdl/`。
+当本地全部槽为同一非零信道时，使用可抢占的原生 BOTH_FLEX 请求；16 TU 重调度周期保留抢占后的请求存续，最短驻留 16 TU、离开预算 32 TU。多信道计划继续使用 BOTH_FIXED。此前 r36 正向整段会话记录的完整开窗中位时长为 93.240 ms，包含发现与归档准备，不能据此推算正文空口占用率。该 r36 正文区间主机各核平均忙碌约 14%–23%；非原子快照确认双流 HE、A-MSDU 成包与 BA 窗口 64，未证明发送短板的具体根因。对应证据为 `r36-forward-residency.json`、`r36-forward-host-cpu.json`、`r36-runtime-audit.json` 和 `r36-macstat-audit.json`，位于 `.private/bcm43752-awdl/`。
+
+r37 使用原生发送批次：首包与后续 MSDU 的准备均保留头部替换后的批次链接，主机 DMA 分片仍由 PKTNEXT 持有。每包独立封装、长度和 AWDL 序号不从前包复制；后续包分配失败时释放实际失败包并继续保留尾部。104 字节头部空间门槛、7,935 字节聚合上限及原生队列准入保持不变。本轮没有注入分配失败，清理失败分支只有静态所有权审查证据。
 
 独立信道序列 TLV 18 为 41 字节，嵌入序列所在 TLV 4 为 73 字节。本机 macOS 原生长度检查中的十个 TLV、独立／嵌入序列解析均通过；使用合成对象与输入的离线执行不等同于 iPad 完整动作帧解析。同一主机配合 r32 固件的正向实测区间中，185 次本机接收公告均为非全零的 16 项序列，iPad 日志未记录本对端动作帧解析错误。证据为 `.private/bcm43752-awdl/r35-apple-tlv-lengths.json`、`r35-apple-channel-sequence-execution.json`、`r35-apple-sync-sequence-execution.json` 和 `r35-announcement-evidence.json`。
 
 | 固定配置验收 | 结果 |
 | --- | --- |
-| Linux → iPad Pro，1 GiB | 系统接受及交付通过；正文 51.217158 秒，原文件 20.964 MB/s，压缩载荷 20.986 MB/s |
-| iPad Pro → Linux，实际收到的同一文件 | 系统发送、成功响应及 SHA-256 一致；16.899536 秒，63.537 MB/s |
-| 传输中取消 | 已发送 113,049,600 字节，1.363036 秒完成取消；UI 和发送器均正常退出 |
-| 取消后重新发现并完整发送 1 GiB | 无服务或驱动重启；系统交付通过，51.663420 秒，原文件 20.783 MB/s |
+| Linux → iPad Pro，1 GiB | 系统接受及交付通过；正文 43.135971 秒，原文件 24.892 MB/s，压缩载荷 24.918 MB/s |
+| iPad Pro → Linux，实际收到的同一文件 | 系统发送、成功响应及 SHA-256 一致；20.992205 秒，51.150 MB/s |
+| 传输中取消 | 已发送 110,362,624 字节，4.561294 秒完成取消；UI 和发送器均正常退出 |
+| 取消后重新发现并完整发送 1 GiB | 无服务或驱动重启；系统交付通过，43.209292 秒，原文件 24.850 MB/s |
 
 原文件为 1,073,741,824 字节随机内容，SHA-256 为 `961f385c3dada06feb133101058d49aef0cb07afc7800c6c3db603e65e3bd3e8`。回传通过 iPad Files 选择实际收到的文件，没有预先注入副本。均速使用十进制 MB/s，按正文传输阶段计时；发现、归档准备与完成后的内容哈希不计入正文吞吐。不同硬件与文件压缩率的 BE200 样本不构成同条件性能对照，结果不证明芯片上限。
 
-四项结果及各自双端日志、抓包位于 `.private/artifacts/airdrop-ui-20261112-211903/`、`airdrop-roundtrip-r36-20261112-212224/`、`airdrop-ui-20261112-212411/`、`airdrop-ui-20261112-212545/`。构建、部署和最终状态证据为 `.private/bcm43752-awdl/build-r35-host.log`、`build-r36-recurring.log`、`deploy-r36-residency.log`、`r36-final-state.log`；精确输入和失败候选索引保留在 `implementation-state.json`，原始证据不进入 Git。
+四项结果及各自双端日志、抓包位于 `.private/artifacts/airdrop-ui-20261112-215303/`、`airdrop-roundtrip-r37-20261112-215511/`、`airdrop-ui-20261112-215630/`、`airdrop-ui-20261112-215805/`。构建、部署和最终状态证据为 `.private/bcm43752-awdl/build-r35-host.log`、`build-r37-direct.log`、`deploy-r37.log`、`r37-final-state.log`；精确输入和失败候选索引保留在 `implementation-state.json`，原始证据不进入 Git。
 
-验收后 AirDrop 为 idle，wirelessd / AirDrop / 蓝牙服务 active，后端 `cleanup=0`、`rc=0`，AWDL 接口和发送环实际删除。驱动删除接口后仍记录过期事件与统计读取提示；所检查内核区间没有 Oops、panic、assert 或 WARNING。没有使用 monitor，既有配对和完成文件保留。多对端、并行文件传输及长期重连尚未验收；本轮公共代码变化未重新进行 BE200／RTL 真机验收。
+验收后 AirDrop 为 idle，wirelessd / AirDrop / 蓝牙服务 active，后端 `cleanup=0`、`rc=0`，AWDL 接口和发送环实际删除。驱动删除接口后仍记录过期事件与统计读取提示；所检查内核区间没有 Oops、panic、assert 或 WARNING。没有使用 monitor，既有配对和完成文件保留。多对端、并行文件传输及长期重连尚未验收；本轮未修改公共主机代码，也未重新进行 BE200／RTL 真机验收。
 
 ## MT7925 原生 AirDrop
 

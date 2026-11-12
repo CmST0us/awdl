@@ -57,12 +57,12 @@ NATIVE_ENTRY void name(void) \
         "mov r0," packet_reg "\nmovs r1,#" offset "\n" \
         "bl awdl_data_fragment_field\n" \
         "str r0,[sp,#" result_slot "]\n" \
-        "pop {r0-r3,lr}\nldr pc,=" resume "\n"); \
+        "pop {r0-r3,lr}\nb.w " resume "\n"); \
 }
 
-FRAGMENT_FIELD_GATE(awdl_data_first_flow, "r6", "66", "16", "0x1f06c9")
-FRAGMENT_FIELD_GATE(awdl_data_next_flow, "r1", "66", "12", "0x1f070b")
-FRAGMENT_FIELD_GATE(awdl_data_next_sequence, "r1", "90", "12", "0x1f0735")
+FRAGMENT_FIELD_GATE(awdl_data_first_flow, "r6", "66", "16", "native_0x1f06c9")
+FRAGMENT_FIELD_GATE(awdl_data_next_flow, "r1", "66", "12", "native_0x1f070b")
+FRAGMENT_FIELD_GATE(awdl_data_next_sequence, "r1", "90", "12", "native_0x1f0735")
 #undef FRAGMENT_FIELD_GATE
 
 NATIVE_ENTRY void awdl_data_first_sequence(void)
@@ -74,7 +74,7 @@ NATIVE_ENTRY void awdl_data_first_sequence(void)
         "mrs r12,apsr\npush {r12}\n"
         "mov r0,r6\nmovs r1,#90\nbl awdl_data_fragment_field\n"
         "str r0,[sp,#16]\npop {r12}\nmsr APSR_nzcvq,r12\n"
-        "pop {r0-r3,r12,lr}\nldr pc,=0x1f0721\n");
+        "pop {r0-r3,r12,lr}\nb.w native_0x1f0721\n");
 }
 
 int awdl_data_dma(void *dma, void *packet, unsigned commit)
@@ -82,21 +82,21 @@ int awdl_data_dma(void *dma, void *packet, unsigned commit)
     void *scb = PTR(packet, 0x2c);
     void *bss = scb ? PTR(scb, 0x0c) : 0;
     struct awdl_session *s = bss ? session(PTR(bss, 0)) : 0;
-    if (s && s->bss == bss) {
-        int error = awdl_tx_stamp(s, packet);
-        if (error)
-            return error; /* Native caller retains and requeues the packet. */
-    }
+    if (!s || s->bss != bss)
+        return ((int (*)(void *, void *, unsigned))native_0x1ed805)(dma, packet, commit);
+    int error = awdl_tx_stamp(s, packet);
+    if (error)
+        return error; /* Native caller retains and requeues the packet. */
     /* Native 0x1ed804 selects its DMA walker from the head's flags only.
      * A replacement local header can precede the PCIe TX fragment without
      * carrying TXFRAG (0x200); the local-only walker then omits the payload.
      * Select the native fragment walker for our owned chain. Do not mark
      * a local allocation TXFRAG: that flag also controls native freeing.
      * Header-split chains (0x200000) retain their original DMA callback.
-     * DHD submits one host DMA range per MSDU; PKTLINK batches were already
-     * detached by awdl_data_sendpkt, independently of this PKTNEXT chain.
+     * DHD submits one host DMA range per MSDU; PKTLINK batches are detached by native sendpkt before admission,
+     * independently of this PKTNEXT fragment chain.
      */
-    if (s && s->bss == bss && !(U32(packet, 0x10) & 0x200200u)) {
+    if (!(U32(packet, 0x10) & 0x200200u)) {
         void **ids = *(void ***)0x1701d0;
         for (void *part = packet; part; part = ids[U16(part, 0x18)]) {
             if (U32(part, 0x10) & 0x200u) {
@@ -111,48 +111,73 @@ int awdl_data_dma(void *dma, void *packet, unsigned commit)
     return ((int (*)(void *, void *, unsigned))native_0x1ed805)(dma, packet, commit);
 }
 
-NATIVE_ENTRY static unsigned original_sendpkt(void *, void *, void *)
+unsigned awdl_data_headroom(void *wlc, void *scb);
+
+/* Native preparation may replace a TXFRAG with a writable local header.
+ * PKTNEXT then owns the old host fragment; PKTLINK must move to the new
+ * head, never remain attached to that fragment. On allocation failure
+ * native sendpkt still owns the original packet and its complete tail. */
+void *awdl_data_prepare(void *wlc, void *packet, void *scb)
 {
-    __asm__ volatile(
-        "ldr r3,=0x181ae4\n"
-        "push {r4-r11,lr}\n"
-        "ldr pc,=0x1f8457\n");
+    if (awdl_data_headroom(wlc, scb) != 104)
+        return ((void *(*)(void *, void *, void *))native_0x1f7719)(wlc, packet, scb);
+    unsigned link = U16(packet, 0x1a);
+    U16(packet, 0x1a) = 0;
+    U32(packet, 0x10) &= ~0x1000u;
+    void *head = ((void *(*)(void *, void *, void *))native_0x1f7719)(
+        wlc, packet, scb);
+    void *owner = head ? head : packet;
+    U16(owner, 0x1a) = link;
+    if (link)
+        U32(owner, 0x10) |= 0x1000u;
+    return head;
 }
 
-unsigned awdl_data_sendpkt(void *wlc, void *packet, void *wlcif)
+/* The native next-MSDU helper assumes an unchanged head and copies the
+ * previous eight-byte LLC. Prepare each owned MSDU instead, so allocation,
+ * its Ethernet type/length and AWDL sequence remain per packet. Keep the
+ * native metadata/lifetime copy, suppressing only its obsolete LLC copy. */
+void *awdl_data_prepare_next(void *wlc, void *scb, void *previous,
+                             void *packet, unsigned lifetime)
 {
-    struct awdl_session *s = session(wlc);
-    if (!s || ((void *(*)(void *, void *))native_0x1bd385)(wlc, wlcif) != s->bss)
-        return original_sendpkt(wlc, packet, wlcif);
-    /* The native chained fast path copies an eight-byte LLC from the
-     * previous packet (0x1f26f2), without running encapsulation again.
-     * Submit each AWDL MSDU through preparation for its own sequence and
-     * 16-byte header. D11/SCB aggregation and native completion stay intact.
-     * Detach PKTLINK before preparation can replace the head; otherwise
-     * the original fragment retains a second MSDU link when it is freed. */
-    /* Keep the PCIe batch queued until every member has its own AWDL
-     * header. Native send_queue (0x1f7e6c) uses scheduler+0x58 as its
-     * reentrancy guard and records a pending pass at txq+0x14. Reuse that
-     * protocol instead of kicking DMA once per detached MSDU. If called
-     * during an existing drain, that owner keeps both the guard and the
-     * pending pass. Packet admission, backpressure and freeing remain in
-     * original_sendpkt; no packet pointers survive its return. */
-    uint8_t *draining = (uint8_t *)PTR(PTR(wlc, 0x44), 0) + 0x58;
-    unsigned was_draining = *draining;
-    *draining = 1;
-    unsigned result = 0;
-    while (packet) {
+    if (awdl_data_headroom(wlc, scb) != 104) {
+        ((void (*)(void *, void *, void *, void *, unsigned))native_0x1f276d)(
+            wlc, scb, previous, packet, lifetime);
+        return packet;
+    }
+    do { /* Native caller has already checked the initial next pointer. */
+        void *head = awdl_data_prepare(wlc, packet, scb);
+        if (head) {
+            unsigned tags = U32(previous, 0x1c);
+            U32(previous, 0x1c) = tags & ~8u;
+            ((void (*)(void *, void *, void *, void *, unsigned))native_0x1f26f3)(
+                wlc, scb, previous, head, lifetime);
+            U32(previous, 0x1c) = tags;
+            U32(head, 0x1c) = tags;
+            return head;
+        }
+        /* Preparation failed without consuming this packet. Detach and
+         * release exactly this owner, then retain the rest of the batch.
+         * The native allocator already accounts for the allocation error. */
         void **ids = *(void ***)0x1701d0;
         void *next = ids[U16(packet, 0x1a)];
         U16(packet, 0x1a) = 0;
         U32(packet, 0x10) &= ~0x1000u;
-        result |= original_sendpkt(wlc, packet, wlcif);
+        ((void (*)(void *, void *, unsigned))native_0x1869f1)(
+            PTR(wlc, 4), packet, 1);
         packet = next;
-    }
-    *draining = was_draining;
-    if (!was_draining)
-        ((void (*)(void *, void *))native_0x1f7e6d)(wlc, PTR(wlc, 0x370));
-    return result;
+    } while (packet);
+    return 0;
+}
+
+NATIVE_ENTRY void awdl_data_prepare_next_gate(void)
+{
+    /* Only caller 0x1f8a34: r4 is the next head used by the native loop.
+     * Return the replacement there; other callee-saved registers remain
+     * unchanged. Recreate the fifth argument at an aligned call stack. */
+    __asm__ volatile(
+        "push {r4,lr}\nldr r4,[sp,#8]\nstr r4,[sp]\n"
+        "bl awdl_data_prepare_next\nmov r4,r0\npop {r3,pc}\n");
 }
 
 unsigned awdl_data_headroom(void *wlc, void *scb)
@@ -191,17 +216,16 @@ void awdl_data_encapsulate(void *wlc, void *osh, const uint8_t *ethernet, void *
             wlc, osh, ethernet, packet);
         return;
     }
-    /* The old header may alias the packet being prepended. Save its
-     * addresses and EtherType before replacing any bytes. Payload and
-     * fragment-chain ownership stay with the original native packet. */
-    uint8_t ethernet_copy[14];
-    copy(ethernet_copy, ethernet, sizeof(ethernet_copy));
+    /* The new addresses/length end before the old Ethernet header.
+     * The encoder captures EtherType before its writes can overwrite it,
+     * so neither the addresses nor EtherType need an intermediate copy.
+     * Payload and fragment ownership stay with the native packet. */
     uint8_t *data = (uint8_t *)PTR(packet, 8) - BCM_AWDL_MSDU_HEADER_SIZE;
     PTR(packet, 8) = data;
     U16(packet, 12) += BCM_AWDL_MSDU_HEADER_SIZE;
-    copy(data, ethernet_copy, 12);
+    copy(data, ethernet, 12);
     unsigned bytes = ((unsigned (*)(void *, void *))native_0x1ec101)(osh, packet) - 14;
     data[12] = (uint8_t)(bytes >> 8);
     data[13] = (uint8_t)bytes;
-    bcm_awdl_msdu_encode(data + 14, s->data_sequence++, ethernet_copy + 12);
+    bcm_awdl_msdu_encode(data + 14, s->data_sequence++, ethernet + 12);
 }

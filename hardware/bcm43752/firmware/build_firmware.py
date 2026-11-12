@@ -96,7 +96,6 @@ RAM_KEY_HOOKS = (
     (0x1F0706, "awdl_data_next_flow", bytes.fromhex("b1f84230")),
     (0x1F071C, "awdl_data_first_sequence", bytes.fromhex("b6f85a30")),
     (0x1F0730, "awdl_data_next_sequence", bytes.fromhex("b1f85a30")),
-    (0x1F8450, "awdl_data_sendpkt", bytes.fromhex("814b2de9f04f")),
     (0x1F774E, "awdl_data_headroom_gate", bytes.fromhex("5f2b04d9")),
     (0x1F8794, "nan_station_tx_gate", bytes.fromhex("736f052b")),
     (0x1880B0, "nan_station_rx_key", bytes.fromhex("b24b2de9f04f")),
@@ -105,7 +104,9 @@ RAM_KEY_HOOKS = (
     (0x188FCC, "nan_group_scb_key", bytes.fromhex("2de9f04f")),
     (0x1876F2, "nan_group_tx_id", bytes.fromhex("8b6c10b5")),
 )
-RAM_CALL_HOOKS = ((0x1F51D6, "nan_station_rx_lookup", 0x123DC0),
+RAM_CALL_HOOKS = ((0x1F8880, "awdl_data_prepare", 0x1F7718),
+                  (0x1F8A34, "awdl_data_prepare_next_gate", 0x1F276C),
+                  (0x1F51D6, "nan_station_rx_lookup", 0x123DC0),
                   (0x1F78C2, "awdl_data_encapsulate", 0x1EE06E),
                   (0x1F1B9A, "awdl_data_dma", 0x1ED804))
 # Verification, diagnostic count, and hardware programming use these bounds.
@@ -285,7 +286,7 @@ SECTIONS {{
     # before discarding unreachable sections; native callbacks referenced
     # by our C tables remain reachable through their ordinary relocations.
     entrypoints = sorted(
-        {"nan_wlc_attach_modules", "nan_host_rx_auth", "nan_station_tx_owner", "awdl_data_headroom", "awdl_data_fragment_field", "awdl_peer_bar_complete", "memcpy", "memset"}
+        {"nan_wlc_attach_modules", "nan_host_rx_auth", "nan_station_tx_owner", "awdl_data_headroom", "awdl_data_fragment_field", "awdl_data_prepare_next", "awdl_peer_bar_complete", "memcpy", "memset"}
         | {row[1] for row in ROM_HOOKS}
         | {row[1] for row in RAM_KEY_HOOKS}
         | {row[1] for row in RAM_CALL_HOOKS}
