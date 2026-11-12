@@ -94,6 +94,27 @@ void awdl_peer_recover(struct awdl_session *s)
     }
 }
 
+/* Apply the BE200 byte policy only to our SCB. 0x9c0ec validates the
+ * native subframe limit against the descriptor budget and limits bytes
+ * by the per-AC FIFO. Retain the negotiated HT/VHT byte ceilings at
+ * +0x27c/+0x280: 0x1b08e0 intersects them with this policy at each send.
+ * Native global defaults (two subframes/3835 bytes) stay untouched. */
+static void aggregation(void *wlc, void *scb)
+{
+    void *manager = PTR(wlc, 0x6c);
+    uint8_t *cubby = ((void *(*)(void *, unsigned))PTR(manager, 8))(
+        scb, U32(manager, 12));
+    unsigned count = U32(PTR(PTR(wlc, 0), 0x20), 0) / 2;
+    if (count > 16)
+        count = 16;
+    const uint8_t *fifo = (const uint8_t *)0x14b1be;
+    for (unsigned tid = 0; tid < 8; ++tid) {
+        unsigned bytes = U16(wlc, (fifo[tid] + 0x8c) * 2) * 512u;
+        U32(cubby, 0x274 + tid * 28) = count;
+        U32(cubby, 0x278 + tid * 28) = bytes < 7935 ? bytes : 7935;
+    }
+}
+
 int awdl_peer_available(void *nan, void *scb, unsigned mode, uint16_t *channel)
 {
     struct awdl_session *s = awdl_session_get(nan);
@@ -140,14 +161,15 @@ void awdl_peer_reinit(void *nan, void *bss, void *scb)
         U16(*slot, 4) = channel;
         ((void (*)(void *, void *, void *, unsigned))native_0x11de55)(
             PTR(wlc, 0x714), bss, scb, 0);
-        return;
+    } else {
+        /* Native PHY negotiation masks capability bytes in place. Retain
+         * original IEs for subsequent channel/rate reinitialization. */
+        uint8_t ies[BCM_AWDL_PEER_IE_MAX];
+        copy(ies, s->peer_ies, s->peer_ie_length);
+        ((void (*)(void *, void *, unsigned, unsigned, unsigned))native_0x127cd5)(
+            scb, ies, s->peer_ie_length, channel & 0x3800u, 0);
     }
-    /* Native PHY negotiation masks capability bytes in place. Retain the
-     * original peer IEs for subsequent channel/rate reinitialization. */
-    uint8_t ies[BCM_AWDL_PEER_IE_MAX];
-    copy(ies, s->peer_ies, s->peer_ie_length);
-    ((void (*)(void *, void *, unsigned, unsigned, unsigned))native_0x127cd5)(
-        scb, ies, s->peer_ie_length, channel & 0x3800u, 0);
+    aggregation(wlc, scb);
 }
 
 int awdl_peer_set(struct awdl_session *s, const uint8_t *address,
@@ -184,6 +206,7 @@ int awdl_peer_set(struct awdl_session *s, const uint8_t *address,
     copy(scratch, ies, length);
     ((void (*)(void *, void *, void *, unsigned, void *, unsigned, unsigned))native_0x127e1d)(
         PTR(wlc, 0x678), s->bss, s->scb, 1, scratch, length, 0);
+    aggregation(wlc, s->scb);
     /* This port belongs to AWDL's unencrypted MAC transport. NAN peer
      * keys and its station authorization path are not modified. */
     ((void (*)(void *, void *, unsigned))native_0x123a7d)(wlc, s->scb, 0x13);

@@ -13,13 +13,6 @@ static void copy(void *to, const void *from, unsigned bytes)
     ((void *(*)(void *, const void *, unsigned))native_0x151a21)(to, from, bytes);
 }
 
-static void put(uint8_t *p, uint64_t value, unsigned bytes)
-{
-    /* A2 is little-endian; all callers write at most sizeof(value) bytes. */
-    for (unsigned i = 0; i < bytes; ++i)
-        p[i] = ((const uint8_t *)&value)[i];
-}
-
 static int equal(const uint8_t *a, const uint8_t *b, unsigned size)
 {
     return !((int (*)(const void *, const void *, unsigned))native_0xa7a9)(a, b, size);
@@ -77,16 +70,18 @@ int awdl_event_emit(struct awdl_session *s, unsigned kind, uint64_t timestamp,
     uint8_t *event = ((void *(*)(unsigned))native_0x7146d)(bytes);
     if (!event)
         return -27;
-    put(event, BCM_AWDL_ABI_VERSION, 2);
-    put(event + 2, kind, 2);
-    put(event + 4, bytes, 2);
-    put(event + 6, flags, 2);
-    put(event + 8, s->generation, 8);
-    put(event + 16, timestamp, 8);
-    put(event + 24, cookie, 8);
-    put(event + 32, (uint32_t)result, 4);
-    put(event + 36, channel, 2);
-    put(event + 38, frame_bytes, 2);
+    /* A2's native endian is the wire ABI endian. Encode one complete
+     * aligned header, then copy bytes so the event allocation need not
+     * satisfy uint64_t alignment. The size assertion excludes padding. */
+    const struct {
+        uint16_t version, kind, bytes, flags;
+        uint64_t generation, timestamp, cookie;
+        int32_t result;
+        uint16_t channel, frame_bytes;
+    } encoded = {BCM_AWDL_ABI_VERSION, kind, bytes, flags,
+                 s->generation, timestamp, cookie, result, channel, frame_bytes};
+    _Static_assert(sizeof(encoded) == BCM_AWDL_EVENT_HEADER_SIZE);
+    copy(event, &encoded, sizeof(encoded));
     if (frame_bytes) {
         copy(event + BCM_AWDL_EVENT_HEADER_SIZE, header, header_bytes);
         if (body_bytes)

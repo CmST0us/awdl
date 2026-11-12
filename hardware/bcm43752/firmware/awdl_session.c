@@ -108,13 +108,6 @@ int awdl_session_release(struct awdl_session *s)
 }
 
 
-static void put(uint8_t *p, uint64_t value, unsigned bytes)
-{
-    /* A2 is little-endian; all callers write at most sizeof(value) bytes. */
-    for (unsigned i = 0; i < bytes; ++i)
-        p[i] = ((const uint8_t *)&value)[i];
-}
-
 int awdl_session_status(void *nan, uint64_t generation, uint8_t *out, unsigned size)
 {
     if (!out || size < BCM_AWDL_STATUS_SIZE)
@@ -126,29 +119,37 @@ int awdl_session_status(void *nan, uint64_t generation, uint8_t *out, unsigned s
     int error = awdl_native_clock(nan, &now);
     if (error)
         return error;
-    for (unsigned i = 0; i < BCM_AWDL_STATUS_SIZE; ++i)
-        out[i] = 0;
-    put(out, BCM_AWDL_ABI_VERSION, 2);
-    put(out + 2, BCM_AWDL_QUERY, 2);
-    put(out + 4, BCM_AWDL_STATUS_SIZE, 2);
-    put(out + 16, now, 8);
-    if (!s)
-        return 0;
-    unsigned flags = (s->bss ? BCM_AWDL_OWNS_BSS : 0) |
-        (s->scb ? BCM_AWDL_OWNS_PEER : 0) | (s->msch ? BCM_AWDL_OWNS_MSCH : 0) |
-        (s->stopping ? BCM_AWDL_STOPPING : 0) |
-        (s->timing.on_channel ? BCM_AWDL_ON_CHANNEL : 0) |
-        (awdl_timing_can_send(&s->timing, now) ? BCM_AWDL_WINDOW_OPEN : 0);
-    put(out + 8, s->generation, 8);
-    put(out + 24, flags, 4);
-    put(out + 28, (uint32_t)s->error, 4);
-    put(out + 32, s->queued, 4);
-    put(out + 36, s->submitted, 4);
-    _Static_assert(offsetof(struct awdl_session, peer) ==
-                   offsetof(struct awdl_session, local) + 6);
-    copy(out + 40, s->local, 12);
-    put(out + 52, s->timing.active, 2);
-    put(out + 56, s->completed, 4);
-    put(out + 60, s->received, 4);
+    /* Encode the complete little-endian ABI before copying to a possibly
+     * unaligned destination. Explicit reserved fields keep all bytes owned. */
+    struct {
+        uint16_t version, operation, bytes, reserved;
+        uint64_t generation, timestamp;
+        uint32_t flags;
+        int32_t error;
+        uint32_t queued, submitted;
+        uint8_t local[6], peer[6];
+        uint16_t channel, reserved2;
+        uint32_t completed, received;
+    } status = {.version = BCM_AWDL_ABI_VERSION, .operation = BCM_AWDL_QUERY,
+                .bytes = BCM_AWDL_STATUS_SIZE, .timestamp = now};
+    _Static_assert(sizeof(status) == BCM_AWDL_STATUS_SIZE);
+    if (s) {
+        status.generation = s->generation;
+        status.flags = (s->bss ? BCM_AWDL_OWNS_BSS : 0) |
+            (s->scb ? BCM_AWDL_OWNS_PEER : 0) | (s->msch ? BCM_AWDL_OWNS_MSCH : 0) |
+            (s->stopping ? BCM_AWDL_STOPPING : 0) |
+            (s->timing.on_channel ? BCM_AWDL_ON_CHANNEL : 0) |
+            (awdl_timing_can_send(&s->timing, now) ? BCM_AWDL_WINDOW_OPEN : 0);
+        status.error = s->error;
+        status.queued = s->queued;
+        status.submitted = s->submitted;
+        _Static_assert(offsetof(struct awdl_session, peer) ==
+                       offsetof(struct awdl_session, local) + 6);
+        copy(status.local, s->local, 12);
+        status.channel = s->timing.active;
+        status.completed = s->completed;
+        status.received = s->received;
+    }
+    copy(out, &status, sizeof(status));
     return 0;
 }

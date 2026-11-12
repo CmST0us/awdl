@@ -330,6 +330,16 @@ AWDL 的本地替换包头还存在 A-MSDU 元数据限制：原生 `0x1f06b8` �
 
 同一 PHY 的 AWDL 信道切换保留速率状态：`awdl_peer_reinit` 在前后 chanspec 仅 sideband 不同时，保留原生信道上下文更新、slotted cubby 的信道写入及 `0x11de54` 模块更新，避免重新调用会清空速率状态的 `0x1247c8 → 0x110228`。首次建站及能力更新仍由 `awdl_peer_set → 0x127e1c` 完整协商；其他 PHY 变化保留完整重初始化。四份历史 r25 RAM 中，自有 SCB 的速率 cubby 保存区为空，因此不能假定原生信道缓存会恢复学习状态；证据为 `.private/bcm43752-awdl/ratesel-context-audit.json`，不代表 r29 的性能已验证。对端地址／IE 语法统一在唯一命令入口检查，资源状态检查仍由 peer 持有；ABI 的字节复制限定 A2 little-endian，保留未对齐访问安全性。候选 SHA-256 `dd06b34be80b301bbd7fa939d312754f5363eb69b5c4616b90a832bf236d9f85` 编译、链接、原始字节及空间检查通过，代码 54,204 字节，含对齐及 Flashpatch 表仍占 57,344 字节；未改变编译选项或保留区。部署哈希与服务启动见 `.private/bcm43752-awdl/deploy-r29-rate-preserve.log`。该候选已完成 iPad Pro 双向 1 GiB 随机文件与往返 SHA-256 校验：正向 12.979 MB/s，实际接收文件回传 54.444 MB/s；500 MB 反向另为 25.083 MB/s。发送约 110 MB 后取消用时 0.727 秒，重新发现并完整重传为 10.737 MB/s。正向性能仍未接近 BE200，长期稳定性未验证，见 [验收结论](../../../docs/acceptance.md#bcm43752-原生-airdrop-候选)。
 
+r30 将发送侧的批次与聚合约束一并接入。自有 AWDL 的 `PKTLINK` 批次仍逐 MSDU 完成独立封装，但使用原生 `0x1f7e6c` 的调度重入协议，在整批入队后统一排空；已有排空调用保留所有权及待执行标志，原生准入、背压和回收不变。自有 SCB 的 A-MSDU 策略采用 BE200 的 7,935 字节上限，并按各 TID 的原生 FIFO 容量收窄；子帧数量取原生描述符预算的一半与 16 的较小值。原生 HT／VHT 协商上限和每次发送的速率／时长限制继续参与取小，NAN 及全局默认值不改。初次协商、能力更新及信道重初始化后应用同一策略。
+
+超过两子帧时，已接纳聚合链的序号必须取末尾 TXFRAG，flow ID 仍取首个主机所有者；不更改任何原始 DMA 元数据。原生五子帧离线执行形成 7,688 字节帧，十个 DMA 描述符跨 ring 尾部，保留五个主机地址范围及序号，仅末描述符登记整链所有者；原生回收遍历十个节点，均只释放一次。另有 16 组准入执行覆盖连续、跳号、不同 flow、显式／默认 ring 深度回绕、自身、非 AWDL 和优先级不匹配。实际编译的 SCB 策略执行确认全局默认及协商上限未修改。队列输入、缓存头复制、加密依赖、DMA 寄存器及末端分配器仍为模拟，不代表真实空口或 PCIe 完成验收。证据为 `.private/bcm43752-awdl/r30-amsdu-native-formation.json` 和 `r30-fragment-admission-execution.json`。
+
+事件和状态以完整 little-endian ABI 结构编码并按字节复制，保留未对齐输出及保留字段，用于收敛代码空间。候选 SHA-256 `d76be6aa5118b2459eae65fcef51e546198abf41ae9a12e1c15f6e86c7c7d40f` 的代码为 54,140 字节，含对齐和 Flashpatch 表为 57,280/57,344 字节；固定地址、来源字节、未解析符号、重定位及空间检查通过。部署镜像哈希与服务启动见 `.private/bcm43752-awdl/deploy-r30-batch-aggregation.log`。r30 的真实传输与性能结论须以固定候选验收结果为准，不能沿用 r29 的结果。
+
+AWDL 调度候选保留协议 16×64 TU 日程，将每个槽展开为四个 16 TU 原生 MSCH 子槽；周期、信道、缺席及优先级不变。原生 BOTH_FIXED 准入按完整请求时长及切换预算寻找空档（A2 `0xf45fc`），细分减少 DW 相交时被舍弃的整槽范围。等价旋转允许相对实际安装 epoch 不超过 1 TU 的误差，与公共控制器容差一致；不以每次主机刷新重置比较原点，累积漂移超限或信道变化仍重新注册。发送继续受实际信道完成事件、对端窗口和排空余量限制。
+
+r31 调度候选 SHA-256 为 `71d3119947ef51b061ef66b3b5b99e6ef23b1673be82090094cd37b7f903f00b`，代码 54,192 字节，含对齐和 Flashpatch 表使用 57,328/57,344 字节，未扩大固定保留区。完整构建及来源／地址／空间检查通过，构建和暂存部署证据分别为 `.private/bcm43752-awdl/build-schedule-r31-compact.log`、`deploy-r31-schedule.log`。这些检查不证明性能收益，真实传输结论须绑定此镜像。
+
 依赖 Python 3.12+ 和提供 `gcc/nm/readelf/objcopy/objdump` 的 ARM bare-metal 工具链。本次验证为 `arm-none-eabi-gcc 16.2.0`。先检查磁盘空间；完整输出不到 2 MiB。
 
 ```sh

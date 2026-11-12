@@ -208,13 +208,19 @@ int awdl_schedule_install(struct awdl_session *s, const uint8_t *payload, unsign
         return error;
     const uint64_t period = (uint64_t)BCM_AWDL_PLAN_ENTRIES * BCM_AWDL_SLOT_TU * 1024;
     const uint64_t slot = BCM_AWDL_SLOT_TU * 1024u;
-    /* The controller advances its rolling sixteen-slot view every slot.
-     * An equivalent rotation must not unregister the current request. */
+    /* The public controller refreshes its rolling view every eight slots,
+     * with up to one TU of clock correction. Compare against the installed
+     * epoch, not the last command: small corrections must not repeatedly
+     * cancel a live request, and accumulated drift must still replace it.
+     * The peer window and three-TU transition guards remain authoritative. */
     if (s->msch && s->timing.planned) {
         uint64_t difference = next.epoch >= s->timing.epoch ?
             next.epoch - s->timing.epoch : s->timing.epoch - next.epoch;
-        if (!(difference % slot)) {
-            unsigned shift = (unsigned)((difference / slot) % BCM_AWDL_PLAN_ENTRIES);
+        /* Validated epochs leave a full period below UINT64_MAX. Bias
+         * by the tolerance so either side of a boundary shares one test. */
+        uint64_t biased = difference + 1024;
+        if (biased % slot <= 2048) {
+            unsigned shift = (unsigned)((biased / slot) % BCM_AWDL_PLAN_ENTRIES);
             if (next.epoch < s->timing.epoch)
                 shift = (BCM_AWDL_PLAN_ENTRIES - shift) % BCM_AWDL_PLAN_ENTRIES;
             unsigned same = 1;
@@ -225,25 +231,33 @@ int awdl_schedule_install(struct awdl_session *s, const uint8_t *payload, unsign
                 return 0;
         }
     }
+    /* Keep the protocol's 64-TU slots, but submit native 16-TU scheduling
+     * quanta, as the NAN data scheduler does. BOTH_FIXED admission needs
+     * the entire quantum plus retunes to fit around a higher-priority DW;
+     * a 16-TU DW crossing a 64-TU boundary must not discard two full AWs.
+     * Each protocol slot is repeated four times without adding airtime. */
+    const unsigned subdivisions = 4;
+    const unsigned count = BCM_AWDL_PLAN_ENTRIES * subdivisions;
+    const uint64_t quantum = slot / subdivisions;
     uint64_t start = next.epoch;
     unsigned rotation = 0;
     if (start < now) {
-        uint64_t slots = (now - start) / slot;
-        start += slots * slot;
+        uint64_t slots = (now - start) / quantum;
+        start += slots * quantum;
         if (start < now) {
-            if (start > UINT64_MAX - slot)
+            if (start > UINT64_MAX - quantum)
                 return -2;
-            start += slot;
+            start += quantum;
             ++slots;
         }
-        rotation = (unsigned)(slots % BCM_AWDL_PLAN_ENTRIES);
+        rotation = (unsigned)(slots % count);
     }
     /* The native API copies both parameter and channel arrays into its
      * request/entities before returning (0xf1448 and 0xf19ac). */
-    uint16_t channels[BCM_AWDL_PLAN_ENTRIES];
+    uint16_t channels[count];
     unsigned available = 0;
-    for (unsigned i = 0; i < BCM_AWDL_PLAN_ENTRIES; ++i) {
-        uint16_t channel = next.channels[(i + rotation) % BCM_AWDL_PLAN_ENTRIES];
+    for (unsigned i = 0; i < count; ++i) {
+        uint16_t channel = next.channels[((i + rotation) % count) / subdivisions];
         channels[i] = channel ? channel : 0xffffu;
         available |= channel;
     }
@@ -256,18 +270,18 @@ int awdl_schedule_install(struct awdl_session *s, const uint8_t *payload, unsign
         return 0;
     uint32_t params[12] = {0};
     /* A2 0xf227c accepts MERGE_CONT_SLOTS only when duration == interval.
-     * This is a sixteen-slot periodic map, not a single continuous request.
+     * This is a periodic map, not a single continuous request.
      * CHAN_CONTIGUOUS already groups repeated channel entries at 0xf1644. */
     params[0] = 5; /* Contiguous channel list, preemptable for NAN DW. */
     params[1] = 0; /* BOTH_FIXED: preserve the peer's actual slot boundaries. */
     params[2] = 3; /* Above NAN data (2), below native discovery DW (4). */
     params[3] = (uint32_t)start;
     params[4] = (uint32_t)(start >> 32);
-    params[5] = BCM_AWDL_SLOT_TU * 1024u;
+    params[5] = (uint32_t)quantum;
     params[6] = (uint32_t)period;
     error = ((int (*)(void *, const uint16_t *, unsigned, uintptr_t, void *,
                        const uint32_t *, void **))native_0xf6fe5)(
-        PTR(PTR(s->nan, 8), 0x574), channels, BCM_AWDL_PLAN_ENTRIES,
+        PTR(PTR(s->nan, 8), 0x574), channels, count,
         (uintptr_t)channel_event, s, params, &s->msch);
     /* Even an error may retain a handle: STOP owns its actual unregister. */
     if (error)

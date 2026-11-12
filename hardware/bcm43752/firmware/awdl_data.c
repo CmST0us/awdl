@@ -29,10 +29,19 @@ unsigned awdl_data_fragment_field(void *packet, unsigned offset)
     struct awdl_session *s = bss ? session(PTR(bss, 0)) : 0;
     if (s && s->bss == bss) {
         void **ids = *(void ***)0x1701d0;
-        while (packet && !(U32(packet, 0x10) & 0x200u))
+        while (packet) {
+            if (U32(packet, 0x10) & 0x200u) {
+                original = packet;
+                if (offset == 0x42)
+                    break; /* Flow belongs to the first host owner. */
+            }
+            /* A growing aggregate retains each original PCIe owner in
+             * PKTNEXT. Sequence admission compares against the last
+             * accepted owner, not the first MSDU of the aggregate. */
             packet = ids[U16(packet, 0x18)];
+        }
     }
-    return U16(packet ? packet : original, offset);
+    return U16(original, offset);
 }
 
 /* Tail hooks replace four LDRH instructions in 0x1f06b8. LR holds the
@@ -121,6 +130,16 @@ unsigned awdl_data_sendpkt(void *wlc, void *packet, void *wlcif)
      * 16-byte header. D11/SCB aggregation and native completion stay intact.
      * Detach PKTLINK before preparation can replace the head; otherwise
      * the original fragment retains a second MSDU link when it is freed. */
+    /* Keep the PCIe batch queued until every member has its own AWDL
+     * header. Native send_queue (0x1f7e6c) uses scheduler+0x58 as its
+     * reentrancy guard and records a pending pass at txq+0x14. Reuse that
+     * protocol instead of kicking DMA once per detached MSDU. If called
+     * during an existing drain, that owner keeps both the guard and the
+     * pending pass. Packet admission, backpressure and freeing remain in
+     * original_sendpkt; no packet pointers survive its return. */
+    uint8_t *draining = (uint8_t *)PTR(PTR(wlc, 0x44), 0) + 0x58;
+    unsigned was_draining = *draining;
+    *draining = 1;
     unsigned result = 0;
     while (packet) {
         void **ids = *(void ***)0x1701d0;
@@ -130,6 +149,9 @@ unsigned awdl_data_sendpkt(void *wlc, void *packet, void *wlcif)
         result |= original_sendpkt(wlc, packet, wlcif);
         packet = next;
     }
+    *draining = was_draining;
+    if (!was_draining)
+        ((void (*)(void *, void *))native_0x1f7e6d)(wlc, PTR(wlc, 0x370));
     return result;
 }
 

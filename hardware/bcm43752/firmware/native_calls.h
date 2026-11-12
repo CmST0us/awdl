@@ -19,6 +19,7 @@ extern unsigned char native_0x1bd385[];
 extern unsigned char native_0x186d3d[];
 extern unsigned char native_0x1ed659[];
 extern unsigned char native_0x1ed805[];
+extern unsigned char native_0x1f7e6d[];
 
 /* A2 fixed native entrypoints. Linker symbols retain Thumb bit and let
  * the compiler use BL instead of repeated absolute-address BLX sequences.
