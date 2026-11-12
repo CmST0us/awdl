@@ -6,6 +6,8 @@ Linux 无线服务组件。Wi-Fi Aware 与原生 AWDL / AirDrop 接入 Intel BE2
 
 MT7925 / Dragon Q8B 已完成 iPad Pro PIN 配对；正式模块通过缓存身份认证、安全 NDP、双向文件和服务重启后重连。CN / 5 GHz / 80 MHz 性能验收为单连接下载 46.52 MB/s、四连接下载 43.44 MB/s、上传 30.69 MB/s；单连接已超过 BE200 已有参考值，四连接与上传仍低于对应参考值。固定固件的 DCEA 信标规避与认证限制见 [MT7925 验证结论](hardware/mt7925/README.md)。
 
+BCM43752 原生 AirDrop 已通过 iPad Pro 的 1 GiB 随机文件双向传输、往返 SHA-256、取消与无重启重传。Linux → iPad 为 47.73／49.28 MB/s，iPad → Linux 为 59.95 MB/s，正向接近已有 BE200 参考结果；不同设备条件不构成严格性能对照。固件保留区维持 56 KiB，详见[验收记录](docs/acceptance.md#bcm43752-原生-airdrop-候选)。
+
 MT7925 原生 AirDrop 已通过同一 iPad Pro 的 1 GiB 随机文件双向传输和往返内容校验：发送 37.72 MB/s，接收 35.87 MB/s；取消后重传接收为 39.33 MB/s。数据使用 149 / VHT80 双流及原生 NAN_DATA `awdl0`，完整配置和验收边界见 [MT7925 AirDrop](docs/acceptance.md#mt7925-原生-airdrop)。
 
 `wirelessd` 管理无线设备与协议生命周期：Wi-Fi Aware 提供配对、服务注册和安全 NDP 会话，AWDL 提供发现、对端选择和原生数据链路。应用通过 D-Bus 使用对应接口。`fileserver` 是使用该接口的文件应用，可独立安装。一套服务管理一块网卡，业务数据走原生 NDI 与内核 IPv6。

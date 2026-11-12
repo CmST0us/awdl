@@ -12,11 +12,13 @@ static void copy(void *to, const void *from, unsigned bytes)
     ((void *(*)(void *, const void *, unsigned))native_0x151a21)(to, from, bytes);
 }
 
-static struct awdl_session *session(void *wlc)
+static __attribute__((noinline)) struct awdl_session *session(void *wlc)
 {
     void *wrapper = PTR(wlc, 0x520);
     return awdl_session_get(wrapper ? PTR(wrapper, 4) : 0);
 }
+
+unsigned awdl_data_headroom(void *wlc, void *scb);
 
 /* Native A-MSDU admission reads PCIe metadata from the packet head. Our
  * writable local header is not a TXFRAG; its original PCIe owner remains
@@ -26,8 +28,7 @@ unsigned awdl_data_fragment_field(void *packet, unsigned offset)
 {
     void *original = packet, *scb = PTR(packet, 0x2c);
     void *bss = scb ? PTR(scb, 0x0c) : 0;
-    struct awdl_session *s = bss ? session(PTR(bss, 0)) : 0;
-    if (s && s->bss == bss) {
+    if (bss && awdl_data_headroom(PTR(bss, 0), scb) == 104) {
         void **ids = *(void ***)0x1701d0;
         while (packet) {
             if (U32(packet, 0x10) & 0x200u) {
@@ -111,8 +112,6 @@ int awdl_data_dma(void *dma, void *packet, unsigned commit)
     return ((int (*)(void *, void *, unsigned))native_0x1ed805)(dma, packet, commit);
 }
 
-unsigned awdl_data_headroom(void *wlc, void *scb);
-
 /* Native preparation may replace a TXFRAG with a writable local header.
  * PKTNEXT then owns the old host fragment; PKTLINK must move to the new
  * head, never remain attached to that fragment. On allocation failure
@@ -186,24 +185,42 @@ unsigned awdl_data_headroom(void *wlc, void *scb)
     return s && scb && PTR(scb, 0x0c) == s->bss ? 104 : 96;
 }
 
+/* Native cache admission already resolved a non-null cache in r0 and
+ * keeps the packet in r7. The subsequent fast path pulls 14 Ethernet
+ * bytes before copying the cached header. Reject an oversized cache
+ * before that copy, including a long header cached by a local allocation
+ * followed by a short-buffer TXFRAG. Native cache matching remains intact.
+ * r1-r3 are overwritten by the displaced/following instructions. */
+NATIVE_ENTRY void awdl_data_cache_capacity_gate(void)
+{
+    __asm__ volatile(
+        "ldr r2,[r7,#8]\nldr r1,[r7,#4]\nsubs r2,r2,r1\n"
+        "ubfx r2,r2,#0,#21\nadds r2,#14\nldr r1,[r0]\ncmp r1,r2\n"
+        "bhi 1f\nldr r3,[sp,#32]\nldr r1,[r0,#8]\nb.w native_0x1f9c99\n"
+        "1: movs r0,#0\nb.w native_0x1f9d2d\n");
+}
+
 NATIVE_ENTRY void awdl_data_headroom_gate(void)
 {
     /* Replace CMP/BLS at 0x1f774e. Preserve the native caller's registers
-     * and compare its measured headroom against the owned BSS requirement. */
+     * and compare its measured headroom against the owned BSS requirement.
+     * Retain the native TXFRAG threshold; copy-on-write/refcount checks
+     * still execute at 0x1f7752 after this gate. */
     __asm__ volatile(
         "push {r0-r3,r12,lr}\n"
         "mov r0,r6\nmov r1,r10\nbl awdl_data_headroom\n"
+        "ldr r2,[sp,#8]\ntst r2,#0x200\nit ne\nmovne r0,#96\n"
         "ldr r1,[sp,#12]\ncmp r1,r0\n"
         "pop {r0-r3,r12,lr}\n"
-        "blo 1f\nldr pc,=0x1f7753\n"
-        "1: ldr pc,=0x1f775d\n");
+        "blo 1f\nb.w native_0x1f7753\n"
+        "1: b.w native_0x1f775d\n");
 }
 
 /* Checked caller: A2 RAM 0x1f78c2, in native packet preparation 0x1f7718.
  * It has already made the packet header writable, copied tags when a new
- * head was required, and ensured headroom. The owned AWDL BSS requires
- * 104 rather than 96 bytes so its longer header leaves the same room for
- * native encryption/802.11/D11 headers. */
+ * head was required, and ensured headroom. Owned local heads retain the
+ * 104-byte requirement; TXFRAGs use native short/split D11 headers and
+ * the cache admission gate rejects a saved header that cannot fit. */
 void awdl_data_encapsulate(void *wlc, void *osh, const uint8_t *ethernet, void *packet)
 {
     struct awdl_session *s = session(wlc);

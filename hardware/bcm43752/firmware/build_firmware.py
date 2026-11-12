@@ -96,6 +96,7 @@ RAM_KEY_HOOKS = (
     (0x1F0706, "awdl_data_next_flow", bytes.fromhex("b1f84230")),
     (0x1F071C, "awdl_data_first_sequence", bytes.fromhex("b6f85a30")),
     (0x1F0730, "awdl_data_next_sequence", bytes.fromhex("b1f85a30")),
+    (0x1F9C94, "awdl_data_cache_capacity_gate", bytes.fromhex("089b8168")),
     (0x1F774E, "awdl_data_headroom_gate", bytes.fromhex("5f2b04d9")),
     (0x1F8794, "nan_station_tx_gate", bytes.fromhex("736f052b")),
     (0x1880B0, "nan_station_rx_key", bytes.fromhex("b24b2de9f04f")),
@@ -411,6 +412,11 @@ SECTIONS {{
     # 0x1f80f4 still tests its packet-tag A-MSDU bit before rewriting QoS.
     # The following IT NE selects 0x28/0x88 for both MAC-header edits and
     # FrameLen. Preserve packet tags, cache, aggregation and DMA ownership.
+    # Batch key reuse previously jumped directly to cached-header copying,
+    # bypassing packet-specific cache admission. Keep the cached build path,
+    # but require the same native match/capacity check for every MSDU.
+    replace(0x1F8374, bytes.fromhex("b3b9"), bytes.fromhex("00bf"),
+            "validate cached header capacity for every batch member")
     replace(0x1F80A2, bytes.fromhex("12f0804f"), bytes.fromhex("4388db07"),
             "derive cached D11 header size from its physical short-header bit")
     replace(PATCH_BASE, bytes(len(payload)), payload, "NAN Thumb implementations and native command table")

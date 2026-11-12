@@ -906,9 +906,9 @@ NATIVE_ENTRY void nan_station_tx_gate(void)
         "ldr r3,[r6,#0x78]\ncmp r3,#11\nbne 1f\n"
         "push.w {r0-r3,r12,lr}\nmov r0,r5\nmov r1,r6\nmov r2,r4\n"
         "bl nan_station_tx_owner\nmov r7,r0\npop.w {r0-r3,r12,lr}\n"
-        "cmp r7,#0\nbeq 2f\nldr pc,=0x1f8813\n"
-        "2: ldr pc,=0x1f87a3\n"
-        "1: ldr r3,[r6,#0x74]\ncmp r3,#5\nldr pc,=0x1f8799\n");
+        "cmp r7,#0\nbeq 2f\nb.w native_0x1f8813\n"
+        "2: b.w native_0x1f87a3\n"
+        "1: ldr r3,[r6,#0x74]\ncmp r3,#5\nb.w native_0x1f8799\n");
 }
 
 void *nan_station_rx_lookup(void **wlc, const uint8_t *sender, void **bss)

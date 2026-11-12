@@ -110,6 +110,12 @@ static void aggregation(void *wlc, void *scb)
     const uint8_t *fifo = (const uint8_t *)0x14b1be;
     for (unsigned tid = 0; tid < 8; ++tid) {
         unsigned bytes = U16(wlc, (fifo[tid] + 0x8c) * 2) * 512u;
+        /* Owned open AWDL: after its 16-byte encapsulation, the stock
+         * 102-byte TXFRAG headroom leaves 86. The aggregate outer Ethernet
+         * header (14), maximum MAC extension (22), short D11 (40), and
+         * native TSO prefix (4) need at most 80 more bytes. Member padding
+         * is checked separately and does not move the first head. */
+        U16(cubby, 0x270 + tid * 28) = 86;
         U32(cubby, 0x274 + tid * 28) = count;
         U32(cubby, 0x278 + tid * 28) = bytes < 7935 ? bytes : 7935;
     }
@@ -308,7 +314,7 @@ static unsigned group_ring(struct awdl_session *s)
 NATIVE_ENTRY static void original_group_state(void *, unsigned, unsigned)
 {
     __asm__ volatile("push {r0,r1,r4,lr}\nldr r4,=0x1285cc\nldr r4,[r4]\n"
-                     "ldr pc,=0x128595");
+                     "b.w native_0x128595");
 }
 
 void awdl_group_ring_state(void *manager, unsigned ring, unsigned state)

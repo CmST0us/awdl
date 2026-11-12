@@ -33,7 +33,7 @@ NATIVE_ENTRY void awdl_nan_channel_close(void)
     __asm__ volatile(
         "ldr.w r0,[r7,#0x678]\n"
         "push {r4,lr}\nbl awdl_nan_channel\npop {r4,lr}\n"
-        "ldr pc,=0x2272b\n");
+        "b.w native_0x2272b\n");
 }
 
 /* A2 HRT removes the timeout and clears its callback before invoking it

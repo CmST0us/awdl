@@ -22,6 +22,10 @@ extern unsigned char native_0x1ed805[];
 extern unsigned char native_0x1f7e6d[];
 
 extern unsigned char native_0x1f7719[];
+extern unsigned char native_0x1f9c99[];
+extern unsigned char native_0x1f9d2d[];
+extern unsigned char native_0x1f7753[];
+extern unsigned char native_0x1f775d[];
 extern unsigned char native_0x1f276d[];
 extern unsigned char native_0x1f26f3[];
 extern unsigned char native_0x1869f1[];
@@ -300,3 +304,11 @@ extern unsigned char native_0xda9ed[];
 #endif
 
 extern unsigned char native_0x229e1[];
+
+/* Direct Thumb continuations preserve registers and APSR. */
+extern unsigned char native_0x11b289[];
+extern unsigned char native_0x128595[];
+extern unsigned char native_0x2272b[];
+extern unsigned char native_0x1f8813[];
+extern unsigned char native_0x1f87a3[];
+extern unsigned char native_0x1f8799[];

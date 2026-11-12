@@ -38,10 +38,11 @@ void nan_dam_transition_reset(void *dam)
     t->state = t->usage = 0;
 }
 
+/* All callers copy complete, disjoint native shadow objects/maps; lengths
+ * are multiples of four. Share the native copy routine with AWDL. */
 static void copy_words(void *dest, const void *source, unsigned bytes)
 {
-    for (unsigned i = 0; i < bytes; i += 4)
-        U32(dest, i) = U32(source, i);
+    ((void *(*)(void *, const void *, unsigned))native_0x151a21)(dest, source, bytes);
 }
 
 static int grid_matches(void *grid, unsigned slots)

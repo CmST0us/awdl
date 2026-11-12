@@ -25,7 +25,7 @@ NATIVE_ENTRY static void original_action_header(
     /* A2 ROM 0x11b284 begins with this four-byte, position-independent
      * push. Restore it and continue before mov r6,r3; stack arguments
      * remain at their native offsets. */
-    __asm__ volatile("push.w {r4-r11,lr}\nldr pc,=0x11b289\n");
+    __asm__ volatile("push.w {r4-r11,lr}\nb.w native_0x11b289\n");
 }
 
 void awdl_action_header(void *wlc, void *scb, const uint8_t *header,
