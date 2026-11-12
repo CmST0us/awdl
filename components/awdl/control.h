@@ -32,6 +32,14 @@ void control_absence(struct Control *, uint8_t source, int64_t begin_us,
                      int64_t end_us, int64_t period_us);
 /* Local VHT capability word; use its MPDU/A-MPDU receive limits. */
 void control_rx_aggregation(struct Control *, uint32_t vht_capability);
+/* Backend-owned receive residency outside the peer's usable slots.
+ * Set only after installing that residency; zero retains peer-only RX.
+ * This changes receive announcements, never the emitted peer TX windows
+ * or peer channel plan. Local absences still exclude receive slots.
+ * Receive announcements use 16 x 16 TU; conflicting repetitions of the
+ * installed 16 x 64 TU plan are unavailable, not an invented residence.
+ */
+void control_idle_receive_channel(struct Control *, uint8_t channel);
 /* Completed hardware channel-switch duration, in microseconds. */
 void control_switch_delay(struct Control *, uint64_t elapsed_us);
 /* received_us is the reception time, independent of delayed event handling.

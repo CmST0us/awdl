@@ -13,6 +13,9 @@ struct awdl_timing {
     uint16_t primary, secondary, active;
     uint32_t drain_us;
     unsigned planned, on_channel;
+    /* Recomputed from native residency, peer window and public plan before
+     * admission; zero means no verified residency. Never extends ownership. */
+    uint64_t channel_close;
 };
 
 /* Inputs contain the payload after the common ABI header. Channel legality
@@ -23,11 +26,10 @@ int awdl_timing_plan(struct awdl_timing *, const uint8_t *, unsigned);
 int awdl_timing_window(struct awdl_timing *, const uint8_t *, unsigned);
 void awdl_timing_channel(struct awdl_timing *, uint16_t channel, int opened);
 void awdl_timing_close(struct awdl_timing *);
-/* Returns the currently scheduled chanspec, zero for an unavailable slot.
- * next_us receives the next slot boundary, zero on missing/overflowed plan.
- */
-uint16_t awdl_timing_slot(const struct awdl_timing *, uint64_t now,
-                         uint64_t *next_us);
+/* Clip a native residency end at the first different public channel.
+ * Missing plans, pre-epoch time and expired residency cannot admit TX. */
+uint64_t awdl_timing_deadline(const struct awdl_timing *, uint64_t now,
+                              uint64_t end);
 /* Admit only after a native channel-open event, in the negotiated peer
  * window, with enough time to drain before a different channel/unavailable
  * slot. This never fabricates an MSCH event or advances a radio clock.

@@ -23,9 +23,10 @@ pub struct Control {
     announced: Vec<MacAddr>,
     local_he: Option<[u8; 21]>,
     absences: Vec<(u8, i64, i64, i64)>,
-    advertised_sequence: Option<[u8; 16]>,
+    advertised_sequence: Option<Vec<u8>>,
     switch_us: u64,
     rx_aggregation: u32,
+    idle_receive_channel: u8,
 }
 #[derive(Default, Clone)]
 struct PeerCaps {
@@ -142,6 +143,7 @@ impl Control {
                                     peer,
                                     clock,
                                     self.channels,
+                                    self.idle_receive_channel,
                                     &self.absences,
                                     self.switch_us,
                                     self.tx_drain_us,
@@ -389,6 +391,7 @@ pub unsafe extern "C" fn control_new(
         advertised_sequence: None,
         switch_us: 0,
         rx_aggregation: 1 | (3 << 23),
+        idle_receive_channel: 0,
         local_he: if he.is_null() {
             None
         } else {
@@ -427,6 +430,11 @@ pub unsafe extern "C" fn control_absence(
     if end > begin && period > end - begin {
         p.absences.push((source, begin, end, period));
     }
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn control_idle_receive_channel(p: *mut Control, channel: u8) {
+    let p = unsafe { &mut *p };
+    p.idle_receive_channel = channel;
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn control_rx_aggregation(p: *mut Control, vht_capability: u32) {
@@ -589,10 +597,11 @@ fn advertise_follow(
     peer: &owly_awdl::peer::Peer,
     clock: &owly_awdl::sync::Clock,
     channels: [u8; 2],
+    idle_receive_channel: u8,
     absences: &[(u8, i64, i64, i64)],
     switch_us: u64,
     tx_drain_us: u64,
-    advertised: &mut Option<[u8; 16]>,
+    advertised: &mut Option<Vec<u8>>,
     now: Time,
 ) {
     use owly_awdl::{
@@ -612,34 +621,87 @@ fn advertise_follow(
     };
     let mut sequence = Sequence {
         encoding: Encoding::OpClass,
-        slots: sequence
-            .channels()
-            .map(|c| [if channels.contains(&c) { c } else { 0 }, 0x80]),
+        slots: sequence.channels().map(|c| {
+            [
+                if c != 0 && channels.contains(&c) {
+                    c
+                } else {
+                    idle_receive_channel
+                },
+                0x80,
+            ]
+        }),
     };
-    let mut advertised_channels = sequence.channels();
-    reserve_switches(&mut advertised_channels, switch_us, tx_drain_us);
-    let slot = clock.slot(now);
-    let base = now.0 as i64 + clock.next_slot_us(now) as i64 - 65536;
-    for offset in 0..16 {
-        let start = base + offset as i64 * 65536 + 3072;
-        let end = base + (offset + 1) as i64 * 65536 - 3072;
+    let mut receive = sequence.channels();
+    reserve_switches(&mut receive, switch_us, tx_drain_us);
+    // A 64-TU exclusion can erase every shared slot of a sleeping peer.
+    // Keep the standard sixteen sequence entries, at 16-TU resolution.
+    // Intersect all four repetitions of the installed 1024-TU plan.
+    // Both sequence copies then fit the native per-TLV length limits.
+    let fine = idle_receive_channel != 0;
+    let (mut advertised_channels, slot, slot_us, next_us) = if fine {
+        let channels = (0..16)
+            .map(|i| {
+                let channel = receive[i / 4];
+                if (1..4).all(|quarter| receive[i / 4 + quarter * 4] == channel) {
+                    channel
+                } else {
+                    0
+                }
+            })
+            .collect::<Vec<_>>();
+        (
+            channels,
+            clock.current_aw(now) as usize % 16,
+            16384i64,
+            (clock.next_slot_us(now) - 1) % 16384 + 1,
+        )
+    } else {
+        (
+            receive.to_vec(),
+            clock.slot(now),
+            65536i64,
+            clock.next_slot_us(now),
+        )
+    };
+    let base = now.0 as i64 + next_us as i64 - slot_us;
+    let count = advertised_channels.len();
+    for offset in 0..count {
+        let start = base + offset as i64 * slot_us + 3072;
+        let end = base + (offset + 1) as i64 * slot_us - 3072;
         if absences.iter().any(|&(_, begins, ends, period)| {
+            // Project every absence onto the shorter repeating map. Its
+            // phases recur at gcd(map period, absence period), including
+            // a 512-TU NAN DW in a 256-TU announcement. This intersection
+            // may hide usable time, but never promises a conflicting turn.
+            let period = if fine {
+                let mut repeat = count as i64 * slot_us;
+                let mut remainder = period;
+                while remainder != 0 {
+                    (repeat, remainder) = (remainder, repeat % remainder);
+                }
+                repeat
+            } else {
+                period
+            };
             let phase = (start - begins).rem_euclid(period);
             phase < ends - begins || period - phase < end - start
         }) {
-            advertised_channels[(slot + offset) % 16] = 0;
+            advertised_channels[(slot + offset) % count] = 0;
         }
     }
-    sequence.slots = advertised_channels.map(|c| [c, 0x80]);
-    if *advertised != Some(advertised_channels) {
+    if !fine {
+        sequence.slots = std::array::from_fn(|i| [advertised_channels[i], 0x80]);
+    }
+    if advertised.as_ref() != Some(&advertised_channels) {
         println!(
             "{}",
             serde_json::json!({"event":"local-schedule", "elapsed_us":now.0,
-                "channels":advertised_channels, "slot_us":65536,
-                "epoch_us":base - slot as i64 * 65536,
+                "channels":advertised_channels, "slot_us":slot_us,
+                "epoch_us":base - slot as i64 * slot_us,
                 "periodic_absences":absences, "switch_us":switch_us})
         );
-        *advertised = Some(advertised_channels);
+        *advertised = Some(advertised_channels.clone());
     }
     let own = tlv::Own {
         addr: node.config().addr,
@@ -647,7 +709,11 @@ fn advertise_follow(
         devclass: 1,
         channel: advertised_channels[slot],
         master_channel: Channel(channels[0]),
-        next_tu: clock.next_slot_tu(now),
+        next_tu: if fine {
+            (clock.next_slot_tu(now) - 1) % 16 + 1
+        } else {
+            clock.next_slot_tu(now)
+        },
         aw_counter: clock.current_aw(now),
         psf_interval_tu: 110,
         sequence: &sequence,
@@ -664,12 +730,33 @@ fn advertise_follow(
         if at + 3 + len > frame.len() {
             return;
         }
+        let begin = updated.len();
         match frame[at] {
             4 => tlv::put_sync_params(&mut updated, &own),
             5 => tlv::put_election_v1(&mut updated, &own),
             18 => tlv::put_channel_sequence(&mut updated, &own),
             24 => tlv::put_election_v2(&mut updated, &own),
             _ => updated.extend_from_slice(&frame[at..at + 3 + len]),
+        }
+        if fine && matches!(frame[at], 4 | 18) {
+            // Retain the common encoder's fixed fields and TLV identity.
+            // The two sequence copies must use the same count and step.
+            let value = begin + 3;
+            if frame[at] == 4 {
+                updated[value + 15..value + 17].copy_from_slice(&own.next_tu.to_le_bytes());
+                updated[value + 17..value + 21].fill(0); // no AW extension
+                updated[value + 27] = 1; // presence mode: one 16-TU AW
+                updated.truncate(value + 33);
+            } else {
+                updated.truncate(value);
+            }
+            updated.extend_from_slice(&[15, 3, 0, 0, 0xff, 0xff]);
+            for &channel in &advertised_channels {
+                updated.extend_from_slice(&[channel, 0x80]);
+            }
+            updated.resize(updated.len() + if frame[at] == 4 { 2 } else { 3 }, 0);
+            let length = (updated.len() - value) as u16;
+            updated[begin + 1..value].copy_from_slice(&length.to_le_bytes());
         }
         at += 3 + len;
     }

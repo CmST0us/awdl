@@ -146,8 +146,15 @@ static int emit(void *context, uint32_t kind, const uint8_t *data, size_t length
             error = -EINVAL;
         else {
             error = absolute(c, (int64_t)read_le64(data), &epoch);
-            if (!error)
-                error = bcm_awdl_plan(c->session, epoch, data + 8, data[24], data[25]);
+            if (!error) {
+                /* Keep native RX resident while the peer sleeps. Preserve
+                 * the original peer plan below: follow_window must never
+                 * admit TX merely because our own receiver is available. */
+                uint8_t receive[18];
+                for (unsigned i = 0; i < sizeof(receive); ++i)
+                    receive[i] = data[8 + i] ? data[8 + i] : c->primary;
+                error = bcm_awdl_plan(c->session, epoch, receive, receive[16], receive[17]);
+            }
             if (!error) {
                 c->epoch = epoch;
                 memcpy(c->channels, data + 8, 16);
@@ -191,6 +198,8 @@ int bcm_awdl_controller_open(struct bcm_awdl_controller *c, struct bcm_awdl_sess
     uint8_t channels[16];
     memset(channels, primary, sizeof(channels));
     int error = bcm_awdl_plan(session, c->origin, channels, primary, primary);
+    if (!error)
+        control_idle_receive_channel(c->control, primary);
     if (error)
         c->error = error;
     return error;

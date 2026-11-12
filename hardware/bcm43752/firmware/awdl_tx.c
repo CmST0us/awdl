@@ -2,6 +2,7 @@
 #include "awdl_tx.h"
 #include "awdl_event.h"
 #include "awdl_native.h"
+#include "awdl_schedule.h"
 #include "awdl_frame.h"
 #include "nan_data.h"
 
@@ -153,10 +154,10 @@ void awdl_tx_kick(struct awdl_session *s)
         s->error = error;
         return;
     }
-    uint16_t planned = awdl_timing_slot(&s->timing, now, &end);
+    end = awdl_schedule_deadline(s, now);
     /* Discovery actions do not require an established peer window, but
      * they still obey the installed plan and pre-switch drain interval. */
-    if (!planned || planned != s->timing.active || !end || end <= now ||
+    if (end <= now ||
         end - now <= s->timing.drain_us)
         return;
     unsigned active = s->timing.active;

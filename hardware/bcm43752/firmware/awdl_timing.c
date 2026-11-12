@@ -19,7 +19,7 @@ static uint64_t read64(const uint8_t *p)
 static int channel_valid(const struct awdl_timing *t, uint16_t channel)
 {
     return !channel || channel == t->primary ||
-        (t->secondary && channel == t->secondary);
+        channel == t->secondary;
 }
 
 int awdl_timing_plan(struct awdl_timing *t, const uint8_t *p, unsigned length)
@@ -73,38 +73,32 @@ void awdl_timing_close(struct awdl_timing *t)
     t->planned = 0;
 }
 
-uint16_t awdl_timing_slot(const struct awdl_timing *t, uint64_t now,
-                         uint64_t *next_us)
+uint64_t awdl_timing_deadline(const struct awdl_timing *t, uint64_t now,
+                              uint64_t end)
 {
-    *next_us = 0;
-    if (!t->planned)
+    if (!t->planned || now < t->epoch || now >= end)
         return 0;
-    if (now < t->epoch) {
-        *next_us = t->epoch;
-        return 0;
+    /* The power-of-two plan period divides 2^32; its phase needs only
+     * low clock bits after the full-width pre-epoch check above. */
+    uint32_t elapsed = (uint32_t)now - (uint32_t)t->epoch;
+    unsigned index = (unsigned)(elapsed / SLOT_US);
+    unsigned step = SLOT_US - (elapsed & (SLOT_US - 1));
+    /* A full cycle proves all future slots equal. Check the distance to
+     * end before advancing, so even UINT64_MAX cannot wrap the boundary. */
+    for (unsigned i = 0; i < BCM_AWDL_PLAN_ENTRIES; ++i) {
+        if (t->channels[index & (BCM_AWDL_PLAN_ENTRIES - 1)] != t->active)
+            return now;
+        if (end - now <= step)
+            break;
+        now += step;
+        step = SLOT_US;
+        ++index;
     }
-    uint64_t elapsed = now - t->epoch;
-    uint64_t remaining = SLOT_US - (elapsed & (SLOT_US - 1));
-    if (now > UINT64_MAX - remaining)
-        return 0;
-    *next_us = now + remaining;
-    return t->channels[(elapsed / SLOT_US) & (BCM_AWDL_PLAN_ENTRIES - 1)];
+    return end;
 }
 
 int awdl_timing_can_send(const struct awdl_timing *t, uint64_t now)
 {
-    if (!t->on_channel || now < t->open || now >= t->close ||
-        t->close - now <= t->drain_us)
-        return 0;
-    uint64_t boundary;
-    uint16_t channel = awdl_timing_slot(t, now, &boundary);
-    if (!channel || channel != t->active)
-        return 0;
-    /* START requires drain_us < SLOT_US. Only the immediate next slot can
-     * therefore enter this drain interval. An equal next slot extends the
-     * opportunity by a full slot; the peer-window bound was checked above.
-     * Keep awdl_timing_slot's overflow check for that next boundary. */
-    if (boundary - now > t->drain_us)
-        return 1;
-    return awdl_timing_slot(t, boundary, &boundary) == channel;
+    return t->on_channel && now >= t->open && now < t->channel_close &&
+        t->channel_close - now > t->drain_us;
 }
