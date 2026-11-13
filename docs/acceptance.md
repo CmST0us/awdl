@@ -305,6 +305,8 @@ potential 选择执行实际 A2 NA 编码、解析、时间位图、操作类转
 
 私有索引 `.private/new-radio/performance-peer-r3-identity.json` 绑定本批产物、固定配置、成功／失败结果、内容校验、运行／停止快照和服务日志。离线索引继续独立绑定 46 个源码输入及 25 份执行报告。设备保留本批固件和已恢复运行的服务，原固件、程序、配置、配对记录及共享文件均保留。
 
+BCM43752 原生 NAN 证据保留最终整套验收的成功与失败结果、双端日志、内容校验、运行／停止快照，以及首次配对和文档引用的离线证据。早期 UI 轮次保留结果、测试日志和完整导出附件，删除重复的 xcresult 包及未被证据索引引用的整机日志；最终 `peer-r3` 轮次保持完整。私有保留与校验清单为 `.private/nan-evidence-retention.json`，其他网卡证据不在此清理范围。
+
 ### 离线固件验证
 
 11 个 hostap 硬件模块使用 C17、`-Wall -Wextra -Werror` 编译通过，静态库 SHA-256 为 `d1a4f45909bf4f1d16544c512fb31b5d4a01a9efec303b4de241350775f5c14e`；977 个公共源码及硬件模块输入与板端摘要一致。14 个公共补丁及 RTL／BCM 驱动注册补丁重放通过，同一 wpa_supplicant 已链接 `bcm_nan`、`rtl_nan`、`nl80211`，`-h` 确认注册。暂存程序与产物一致，wpa_supplicant SHA-256 为 `c0b0de9ad4de152266538b3d1066b7b541bff23ee8b20665cb79860bdf521635`。公共 Rust `wirelessd` 与 `fileserver` 后续已完成板端 Release 构建，见下述运行接入；完整功能验收尚未完成。上述构建证据不能替代实机命令和空口结果。
